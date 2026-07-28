@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="section-title">
+  <div>
+    <h2>Market dashboard</h2>
+    <p class="muted">As of {{ summary.as_of }} · {{ summary.total }} scored instruments</p>
+  </div>
+</div>
+
+{% if user.is_authenticated %}
+<div class="pipeline-bar">
+  <p class="muted" style="margin:0; flex:1 1 220px;">
+    Auto-appends at <strong>10:05</strong> &amp; <strong>14:05</strong> (Asia/Dhaka) on trading days.
+    Use Fetch anytime for present/live data.
+  </p>
+  <form method="post" action="{% url 'run_pipeline' %}" style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+    {% csrf_token %}
+    <button class="btn btn-small btn-gold" name="mode" value="fetch" type="submit">Fetch live + analyze</button>
+    <button class="btn btn-small btn-ghost" name="mode" value="analyze" type="submit">Re-analyze only</button>
+  </form>
+</div>
+{% else %}
+<p class="muted">Log in to fetch live data. Daily append also runs automatically at 10:05 &amp; 14:05.</p>
+{% endif %}
+
+<div class="grid-4">
+  <div class="stat"><div class="label">Buy signals</div><div class="value">{{ summary.buy }}</div></div>
+  <div class="stat"><div class="label">Sell signals</div><div class="value">{{ summary.sell }}</div></div>
+  <div class="stat"><div class="label">Safe buys</div><div class="value">{{ summary.safe_buys }}</div></div>
+  <div class="stat"><div class="label">Watch</div><div class="value">{{ summary.watch }}</div></div>
+</div>
+
+{% if close_learn %}
+<section class="panel learn-panel" style="margin-top:1.2rem;">
+  <h3>Next-day close learner</h3>
+  <p class="muted" style="margin-top:0;">Predicts tomorrow’s <strong>close</strong> after each session · scored vs naive baseline (close unchanged)</p>
+  <div class="grid-4 learn-stats">
+    <div class="stat">
+      <div class="label">Skill vs naive</div>
+      <div class="value {% if close_learn.skill.skill_vs_naive and close_learn.skill.skill_vs_naive > 0 %}up{% elif close_learn.skill.skill_vs_naive and close_learn.skill.skill_vs_naive < 0 %}down{% endif %}">
+        {% if close_learn.skill.skill_pct != None %}{{ close_learn.skill.skill_pct|floatformat:1 }}%{% elif close_learn.skill.skill_vs_naive != None %}{{ close_learn.skill.skill_vs_naive|floatformat:3 }}{% else %}—{% endif %}
+      </div>
+      <div class="muted tiny">1 − model/baseline return MAE</div>
+    </div>
+    <div class="stat">
+      <div class="label">Beats naive</div>
+      <div class="value">{% if close_learn.skill.beats_naive_pct != None %}{% widthratio close_learn.skill.beats_naive_pct 1 100 %}%{% else %}—{% endif %}</div>
+      <div class="muted tiny">share of settles with smaller error</div>
+    </div>
+    <div class="stat">
+      <div class="label">Direction hit</div>
+      <div class="value">{% if close_learn.skill.direction_hit_rate != None %}{% widthratio close_learn.skill.direction_hit_rate 1 100 %}%{% else %}{% widthratio close_learn.direction_hit_rate 1 100 %}%{% endif %}</div>
+      <div class="muted tiny">up/down correct</div>
+    </div>
+    <div class="stat">
+      <div class="label">MAPE (model / naive)</div>
+      <div class="value" style="font-size:1.35rem;">
+        {% if close_learn.skill.model_mape != None %}{{ close_learn.skill.model_mape|floatformat:2 }}{% else %}{{ close_learn.mape|floatformat:2 }}{% endif %}
+        <span class="muted" style="font-size:0.85rem;"> / {% if close_learn.skill.baseline_mape != None %}{{ close_learn.skill.baseline_mape|floatformat:2 }}{% else %}—{% endif %}%</span>
+      </div>
+      <div class="muted tiny">settled {{ close_learn.settled_count }} · stock biases {{ close_learn.stock_bias_active }}</div>
+    </div>
+  </div>
+  <p class="muted" style="margin:0.75rem 0 0;">
+    Global bias {{ close_learn.return_bias }} · liquid universe {{ close_learn.liquid_universe }} ·
+    pending forecasts {{ close_learn.pending_forecasts }} · features: index / sector / breadth
+  </p>
+</section>
+{% endif %}
+
+<div class="grid-2" style="margin-top:1.2rem;">
+  <section class="panel">
+    <h3>Potential shares</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Code</th><th>Action</th><th>Score</th><th>Mature</th><th>Peak</th><th>Prob</th></tr>
+        </thead>
+        <tbody>
+          {% for r in potentials %}
+          <tr>
+            <td><a href="{% url 'stock_detail' r.stock.exchange r.stock.trading_code %}">{{ r.stock.trading_code }}</a> <span class="muted">{{ r.stock.exchange }}</span></td>
+            <td><span class="badge badge-{{ r.action|lower }}">{{ r.action }}</span>{% if r.is_safe_buy %} <span class="badge badge-safe">SAFE</span>{% endif %}</td>
+            <td>{{ r.score|floatformat:0 }}</td>
+            <td>{% if r.maturity_days_est %}~{{ r.maturity_days_est }}d{% else %}—{% endif %}</td>
+            <td>{% if r.peak_days_est %}~{{ r.peak_days_est }}d{% else %}—{% endif %}</td>
+            <td>{% if r.probability %}{% widthratio r.probability 1 100 %}%{% else %}—{% endif %}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="6" class="muted">No analysis yet. Run the pipeline.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="stack">
+    <div class="panel">
+      <h3>Buying looks comparatively safer</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Code</th><th>Score</th><th>Risk</th><th>Expected %</th><th>Peak price</th></tr></thead>
+          <tbody>
+            {% for r in safes %}
+            <tr>
+              <td><a href="{% url 'stock_detail' r.stock.exchange r.stock.trading_code %}">{{ r.stock.trading_code }}</a></td>
+              <td>{{ r.score|floatformat:0 }}</td>
+              <td>{{ r.risk_level }}</td>
+              <td>{% if r.expected_return_pct %}{{ r.expected_return_pct|floatformat:1 }}%{% else %}—{% endif %}</td>
+              <td>{% if r.expected_peak_price %}{{ r.expected_peak_price|floatformat:2 }}{% else %}—{% endif %}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="muted">None flagged as safer buys today.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>You may sell / reduce</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Code</th><th>Score</th><th>Rationale</th></tr></thead>
+          <tbody>
+            {% for r in sells %}
+            <tr>
+              <td><a href="{% url 'stock_detail' r.stock.exchange r.stock.trading_code %}">{{ r.stock.trading_code }}</a></td>
+              <td>{{ r.score|floatformat:0 }}</td>
+              <td class="muted">{{ r.rationale|truncatechars:80 }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="3" class="muted">No strong sell candidates.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="grid-2" style="margin-top:1.2rem;">
+  <section class="panel">
+    <h3>Backtests (1y)</h3>
+    {% for b in backtests %}
+      <p><strong>{{ b.name }}</strong> — {{ b.total_trades }} trades, win {% widthratio b.win_rate 1 100 %}%, avg {{ b.avg_return_pct|floatformat:2 }}%
+      {% if b.avg_days_to_peak %} · peak ~{{ b.avg_days_to_peak|floatformat:0 }}d{% endif %}</p>
+    {% empty %}
+      <p class="muted">Run analysis to generate backtests.</p>
+    {% endfor %}
+  </section>
+  <section class="panel">
+    <h3>Recent alerts</h3>
+    {% for a in alerts %}
+      <p><strong>{{ a.title }}</strong><br><span class="muted">{{ a.message|truncatechars:100 }}</span></p>
+    {% empty %}
+      <p class="muted">No alerts yet.</p>
+    {% endfor %}
+  </section>
+</div>
+
+<div class="disclaimer">
+  Maturity / peak day estimates come from historical analogues in the last ~1 year. Markets change — treat every signal as a probability, not a promise.
+</div>
+{% endblock %}

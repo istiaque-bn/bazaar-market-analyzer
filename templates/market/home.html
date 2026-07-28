@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Home{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>Bazaar</h1>
+  <p>Automated DSE &amp; CSE analysis from one year of history — screens, patterns, maturity estimates, and alerts in one place.</p>
+  <div class="hero-actions">
+    <a class="btn" href="{% url 'dashboard' %}">Open dashboard</a>
+    <a class="btn btn-ghost" href="{% url 'signup' %}">Create account</a>
+  </div>
+</section>
+<section class="grid-3" style="margin-top:1rem;">
+  <div class="panel">
+    <h3>Screen</h3>
+    <p class="muted">Ranks potential shares with buy / sell / watch scores from technical + pattern rules.</p>
+  </div>
+  <div class="panel">
+    <h3>Estimate</h3>
+    <p class="muted">Uses past analogues to estimate days to maturity (~+5%) and local peak — with hit rates, not guarantees.</p>
+  </div>
+  <div class="panel">
+    <h3>Notify</h3>
+    <p class="muted">Telegram, email, and in-app digests after each analysis run.</p>
+  </div>
+</section>
+{% endblock %}

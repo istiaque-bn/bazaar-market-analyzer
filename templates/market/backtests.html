@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Backtests{% endblock %}
+{% block content %}
+<div class="section-title"><h2>Backtests</h2></div>
+<div class="stack">
+  {% for b in runs %}
+  <article class="panel">
+    <h3>{{ b.name }}</h3>
+    <p class="muted">{{ b.strategy }} · {{ b.start_date }} → {{ b.end_date }} {% if b.exchange %}· {{ b.exchange }}{% endif %}</p>
+    <div class="grid-4">
+      <div class="stat"><div class="label">Trades</div><div class="value">{{ b.total_trades }}</div></div>
+      <div class="stat"><div class="label">Win rate</div><div class="value">{% widthratio b.win_rate 1 100 %}%</div></div>
+      <div class="stat"><div class="label">Avg return</div><div class="value">{{ b.avg_return_pct|floatformat:2 }}%</div></div>
+      <div class="stat"><div class="label">Avg peak days</div><div class="value">{% if b.avg_days_to_peak %}{{ b.avg_days_to_peak|floatformat:0 }}{% else %}—{% endif %}</div></div>
+    </div>
+    {% if b.avg_days_to_target %}<p class="muted">Avg days to +5% target: {{ b.avg_days_to_target|floatformat:1 }}</p>{% endif %}
+    {% if b.max_drawdown_pct %}<p class="muted">Worst trade drawdown in window: {{ b.max_drawdown_pct|floatformat:1 }}%</p>{% endif %}
+  </article>
+  {% empty %}
+  <p class="muted">No backtests yet. Run the analysis pipeline.</p>
+  {% endfor %}
+</div>
+{% endblock %}

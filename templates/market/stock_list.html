@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Stocks{% endblock %}
+{% block content %}
+<div class="section-title"><h2>All stocks</h2></div>
+<form class="filters" method="get">
+  <select name="exchange">
+    <option value="">All exchanges</option>
+    <option value="DSE" {% if exchange == "DSE" %}selected{% endif %}>DSE</option>
+    <option value="CSE" {% if exchange == "CSE" %}selected{% endif %}>CSE</option>
+  </select>
+  <select name="action">
+    <option value="">All actions</option>
+    <option value="BUY" {% if action == "BUY" %}selected{% endif %}>BUY</option>
+    <option value="SELL" {% if action == "SELL" %}selected{% endif %}>SELL</option>
+    <option value="WATCH" {% if action == "WATCH" %}selected{% endif %}>WATCH</option>
+    <option value="HOLD" {% if action == "HOLD" %}selected{% endif %}>HOLD</option>
+  </select>
+  <input type="search" name="q" value="{{ q }}" placeholder="Search code or name">
+  <button class="btn btn-small" type="submit">Filter</button>
+</form>
+<div class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Code</th><th>Company</th><th>Price</th><th>Action</th><th>Score</th><th>Mature</th><th>Peak</th><th>ML</th></tr>
+      </thead>
+      <tbody>
+        {% for stock, analysis in rows %}
+        <tr>
+          <td><a href="{% url 'stock_detail' stock.exchange stock.trading_code %}">{{ stock.trading_code }}</a> <span class="muted">{{ stock.exchange }}</span></td>
+          <td>{{ stock.company_name|default:"—" }}</td>
+          <td>{% if stock.last_price %}{{ stock.last_price|floatformat:2 }}{% else %}—{% endif %}</td>
+          <td>{% if analysis %}<span class="badge badge-{{ analysis.action|lower }}">{{ analysis.action }}</span>{% else %}—{% endif %}</td>
+          <td>{% if analysis %}{{ analysis.score|floatformat:0 }}{% else %}—{% endif %}</td>
+          <td>{% if analysis and analysis.maturity_days_est %}~{{ analysis.maturity_days_est }}d{% else %}—{% endif %}</td>
+          <td>{% if analysis and analysis.peak_days_est %}~{{ analysis.peak_days_est }}d{% else %}—{% endif %}</td>
+          <td>{% if analysis and analysis.ml_score %}{{ analysis.ml_score|floatformat:0 }}{% else %}—{% endif %}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8" class="muted">No stocks loaded.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

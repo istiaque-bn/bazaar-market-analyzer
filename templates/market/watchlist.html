@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Watchlist{% endblock %}
+{% block content %}
+<div class="section-title"><h2>Your watchlist</h2></div>
+<div class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Code</th><th>Action</th><th>Score</th><th>Mature</th><th>Peak</th><th>Note</th></tr></thead>
+      <tbody>
+        {% for stock, analysis in rows %}
+        <tr>
+          <td><a href="{% url 'stock_detail' stock.exchange stock.trading_code %}">{{ stock.trading_code }}</a> {{ stock.exchange }}</td>
+          <td>{% if analysis %}<span class="badge badge-{{ analysis.action|lower }}">{{ analysis.action }}</span>{% else %}—{% endif %}</td>
+          <td>{% if analysis %}{{ analysis.score|floatformat:0 }}{% else %}—{% endif %}</td>
+          <td>{% if analysis and analysis.maturity_days_est %}~{{ analysis.maturity_days_est }}d{% else %}—{% endif %}</td>
+          <td>{% if analysis and analysis.peak_days_est %}~{{ analysis.peak_days_est }}d{% else %}—{% endif %}</td>
+          <td class="muted">{% if analysis %}{{ analysis.rationale|truncatechars:70 }}{% endif %}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6" class="muted">Watchlist empty — open a stock and add it.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Bazaar{% endblock %} · DSE & CSE Analysis</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/bazaar.css">
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <div class="bg-atmosphere" aria-hidden="true"></div>
+
+  <div class="top-chrome">
+    <div class="market-ticker ticker-dse" aria-label="DSE running prices">
+      <div class="ticker-rail">
+        <div class="ticker-label ticker-sync" id="tickerLiveBadgeDse" title="DSE live sync">AUTO</div>
+        <div class="ticker-label ticker-ex-badge" title="Dhaka Stock Exchange">DSE</div>
+      </div>
+      <div class="ticker-viewport">
+        <div class="ticker-track" id="marketTickerTrackDse">
+          {% if ticker_snap_dse %}
+            <span class="ticker-item ticker-index">
+              <strong>DSE</strong>
+              {% if ticker_snap_dse.index_value %}<span>{{ ticker_snap_dse.index_value|floatformat:2 }}</span>{% endif %}
+              {% if ticker_snap_dse.index_change_pct != None %}
+                <span class="{% if ticker_snap_dse.index_change_pct >= 0 %}up{% else %}down{% endif %}">
+                  {% if ticker_snap_dse.index_change_pct >= 0 %}+{% endif %}{{ ticker_snap_dse.index_change_pct|floatformat:2 }}%
+                </span>
+              {% endif %}
+            </span>
+          {% endif %}
+          {% for q in ticker_quotes_dse %}
+            <a class="ticker-item" href="{% url 'stock_detail' q.exchange q.trading_code %}">
+              <strong>{{ q.trading_code }}</strong>
+              <span>{{ q.last_price|floatformat:2 }}</span>
+              {% if q.last_change_pct != None %}
+                <span class="{% if q.last_change_pct >= 0 %}up{% else %}down{% endif %}">
+                  {% if q.last_change_pct >= 0 %}+{% endif %}{{ q.last_change_pct|floatformat:2 }}%
+                </span>
+              {% endif %}
+            </a>
+          {% empty %}
+            <span class="ticker-item">DSE quotes loading…</span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <div class="market-ticker ticker-cse" aria-label="CSE running prices">
+      <div class="ticker-rail">
+        <div class="ticker-label ticker-sync ticker-sync-cse" id="tickerLiveBadgeCse" title="CSE live sync">AUTO</div>
+        <div class="ticker-label ticker-ex-badge ticker-ex-badge-cse" title="Chittagong Stock Exchange">CSE</div>
+      </div>
+      <div class="ticker-viewport">
+        <div class="ticker-track" id="marketTickerTrackCse">
+          {% if ticker_snap_cse %}
+            <span class="ticker-item ticker-index">
+              <strong>CSE</strong>
+              {% if ticker_snap_cse.index_value %}<span>{{ ticker_snap_cse.index_value|floatformat:2 }}</span>{% endif %}
+              {% if ticker_snap_cse.index_change_pct != None %}
+                <span class="{% if ticker_snap_cse.index_change_pct >= 0 %}up{% else %}down{% endif %}">
+                  {% if ticker_snap_cse.index_change_pct >= 0 %}+{% endif %}{{ ticker_snap_cse.index_change_pct|floatformat:2 }}%
+                </span>
+              {% endif %}
+            </span>
+          {% endif %}
+          {% for q in ticker_quotes_cse %}
+            <a class="ticker-item" href="{% url 'stock_detail' q.exchange q.trading_code %}">
+              <strong>{{ q.trading_code }}</strong>
+              <span>{{ q.last_price|floatformat:2 }}</span>
+              {% if q.last_change_pct != None %}
+                <span class="{% if q.last_change_pct >= 0 %}up{% else %}down{% endif %}">
+                  {% if q.last_change_pct >= 0 %}+{% endif %}{{ q.last_change_pct|floatformat:2 }}%
+                </span>
+              {% endif %}
+            </a>
+          {% empty %}
+            <span class="ticker-item">CSE quotes loading…</span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <header class="site-header">
+      <div class="brand-block">
+        <a class="brand" href="{% url 'home' %}">
+          <span class="brand-mark">বা</span>
+          <span class="brand-text">Bazaar</span>
+        </a>
+        <div class="market-status" id="marketStatus" aria-live="polite">
+          <div class="local-clock" title="Project timezone: {{ project_timezone }}">
+            <span class="local-clock-tz">{{ project_timezone }}</span>
+            <span class="local-clock-time" id="localClockTime">{{ local_now_display }}</span>
+          </div>
+          <div class="market-status-chip {% if market_hours.dse.is_open %}is-open{% else %}is-closed{% endif %}" data-ex="DSE">
+            <span class="ms-ex">DSE</span>
+            <span class="ms-state">{{ market_hours.dse.status }}</span>
+            <span class="ms-next">{% if market_hours.dse.is_open %}closes{% else %}opens{% endif %} {{ market_hours.dse.next_when }}</span>
+          </div>
+          <div class="market-status-chip {% if market_hours.cse.is_open %}is-open{% else %}is-closed{% endif %}" data-ex="CSE">
+            <span class="ms-ex">CSE</span>
+            <span class="ms-state">{{ market_hours.cse.status }}</span>
+            <span class="ms-next">{% if market_hours.cse.is_open %}closes{% else %}opens{% endif %} {{ market_hours.cse.next_when }}</span>
+          </div>
+        </div>
+      </div>
+      <nav class="nav">
+        <a href="{% url 'dashboard' %}">Dashboard</a>
+        <a href="{% url 'stock_list' %}">Stocks</a>
+        <a href="{% url 'backtests' %}">Backtests</a>
+        <a href="{% url 'alerts' %}">Alerts</a>
+        {% if user.is_authenticated %}
+          <a href="{% url 'watchlist' %}">Watchlist</a>
+          <a href="{% url 'profile' %}">Profile</a>
+          <form class="inline" method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit" class="linkish">Logout</button></form>
+        {% else %}
+          <a href="{% url 'login' %}">Login</a>
+          <a class="btn btn-small" href="{% url 'signup' %}">Sign up</a>
+        {% endif %}
+      </nav>
+    </header>
+  </div>
+
+  {% if messages %}
+  <div class="flash-wrap">
+    {% for message in messages %}
+      <div class="flash">{{ message }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <p><strong>Bazaar</strong> analyses DSE &amp; CSE using ~1 year of price history. Signals are probabilistic estimates — not financial advice.</p>
+  </footer>
+  <script src="/static/js/ticker.js" defer></script>
+  {% block extra_js %}{% endblock %}
+</body>
+</html>

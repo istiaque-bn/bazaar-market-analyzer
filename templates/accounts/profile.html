@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Profile{% endblock %}
+{% block content %}
+<section class="panel" style="max-width:520px;">
+  <h2>Notification settings</h2>
+  <form method="post" class="form">
+    {% csrf_token %}
+    <label>Email
+      <input type="email" name="email" value="{{ user.email }}">
+    </label>
+    <label>Telegram chat ID
+      <input type="text" name="telegram_chat_id" value="{{ profile.telegram_chat_id }}">
+    </label>
+    <label>Min score for alerts
+      <input type="number" step="1" name="min_score_alert" value="{{ profile.min_score_alert }}">
+    </label>
+    <label>Preferred exchanges
+      <input type="text" name="preferred_exchanges" value="{{ profile.preferred_exchanges }}">
+    </label>
+    <label><input type="checkbox" name="email_alerts" {% if profile.email_alerts %}checked{% endif %}> Email alerts</label>
+    <label><input type="checkbox" name="telegram_alerts" {% if profile.telegram_alerts %}checked{% endif %}> Telegram alerts</label>
+    <button class="btn" type="submit">Save</button>
+  </form>
+  <p class="muted">Also set <code>TELEGRAM_BOT_TOKEN</code> and <code>TELEGRAM_CHAT_ID</code> in <code>.env</code> for global digests.</p>
+</section>
+{% endblock %}

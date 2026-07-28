@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Alerts{% endblock %}
+{% block content %}
+<div class="section-title"><h2>Alerts & digests</h2></div>
+<div class="stack">
+  {% for a in alerts %}
+  <article class="panel">
+    <h3>{{ a.title }}</h3>
+    <p class="muted">{{ a.created_at }} · {{ a.channel }}</p>
+    <pre style="white-space:pre-wrap;font-family:inherit;margin:0;">{{ a.message }}</pre>
+  </article>
+  {% empty %}
+  <p class="muted">No alerts yet.</p>
+  {% endfor %}
+</div>
+{% endblock %}
