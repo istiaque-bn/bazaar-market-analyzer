@@ -6,6 +6,7 @@ from django.contrib.auth.models import User
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 
+from accounts.forms import ProfileForm
 from accounts.models import UserProfile
 
 
@@ -32,18 +33,21 @@ def signup(request):
 def profile(request):
     profile_obj, _ = UserProfile.objects.get_or_create(user=request.user)
     if request.method == "POST":
-        try:
-            min_score_alert = float(request.POST.get("min_score_alert") or 40)
-        except ValueError:
-            messages.error(request, "Min score alert must be a number.")
+        form = ProfileForm(request.POST)
+        if not form.is_valid():
+            for field_errors in form.errors.values():
+                for error in field_errors:
+                    messages.error(request, error)
             return render(request, "accounts/profile.html", {"profile": profile_obj})
-        profile_obj.telegram_chat_id = request.POST.get("telegram_chat_id", "").strip()
-        profile_obj.email_alerts = request.POST.get("email_alerts") == "on"
-        profile_obj.telegram_alerts = request.POST.get("telegram_alerts") == "on"
-        profile_obj.min_score_alert = min_score_alert
-        profile_obj.preferred_exchanges = request.POST.get("preferred_exchanges") or "DSE,CSE"
+        data = form.cleaned_data
+        profile_obj.telegram_chat_id = data["telegram_chat_id"]
+        profile_obj.email_alerts = data["email_alerts"]
+        profile_obj.telegram_alerts = data["telegram_alerts"]
+        profile_obj.min_score_alert = data["min_score_alert"]
+        profile_obj.preferred_exchanges = data["preferred_exchanges"]
         profile_obj.save()
-        request.user.email = request.POST.get("email", request.user.email)
-        request.user.save(update_fields=["email"])
+        if "email" in request.POST:
+            request.user.email = data["email"]
+            request.user.save(update_fields=["email"])
         return redirect("profile")
     return render(request, "accounts/profile.html", {"profile": profile_obj})

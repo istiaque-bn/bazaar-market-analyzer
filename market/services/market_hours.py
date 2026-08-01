@@ -25,15 +25,28 @@ def _is_trading_day(dt) -> bool:
     return dt.weekday() in TRADING_WEEKDAYS
 
 
+def _closure_reason(d: date) -> str | None:
+    """Weekend or named holiday closing the whole day, or None if `d` is a
+    regular trading day. Date-only (no time-of-day component), so a
+    holiday is recognized from the first second of the day, not just
+    around session hours."""
+    from .trading_calendar import closure_reason
+
+    return closure_reason(d)
+
+
 def _at_on_date(d: date, t: dtime):
     return timezone.make_aware(datetime.combine(d, t))
 
 
 def _next_trading_date(from_date: date) -> date:
     d = from_date
-    for _ in range(8):
+    # 15 days is generous headroom over the longest known closure cluster
+    # (a 7-day Eid break butted up against a weekend) so a multi-day
+    # holiday can't exhaust the loop before finding the next open day.
+    for _ in range(15):
         d = d + timedelta(days=1)
-        if d.weekday() in TRADING_WEEKDAYS:
+        if d.weekday() in TRADING_WEEKDAYS and _closure_reason(d) is None:
             return d
     return from_date + timedelta(days=2)
 
@@ -61,7 +74,8 @@ def session_status(exchange: str = "DSE", now=None) -> dict:
     today = now.date()
     open_today = _at_on_date(today, SESSION_OPEN)
     close_today = _at_on_date(today, SESSION_CLOSE)
-    trading_today = today.weekday() in TRADING_WEEKDAYS
+    closure = _closure_reason(today)
+    trading_today = closure is None
 
     if trading_today and open_today <= now < close_today:
         is_open = True
@@ -70,7 +84,7 @@ def session_status(exchange: str = "DSE", now=None) -> dict:
         label = "Open"
     else:
         is_open = False
-        label = "Closed"
+        label = f"Closed — {closure}" if closure else "Closed"
         next_event = "opens"
         if trading_today and now < open_today:
             # Early morning on a trading day → opens later TODAY (not tomorrow)

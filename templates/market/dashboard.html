@@ -5,10 +5,14 @@
   <div>
     <h2>Market dashboard</h2>
     <p class="muted">As of {{ summary.as_of }} · {{ summary.total }} scored instruments</p>
+    <p class="muted">
+      Data last updated at
+      {% if data_last_updated %}{{ data_last_updated|date:"d M Y, h:i A" }}{% else %}—{% endif %}
+    </p>
   </div>
 </div>
 
-{% if user.is_authenticated %}
+{% if user.is_staff %}
 <div class="pipeline-bar">
   <p class="muted" style="margin:0; flex:1 1 220px;">
     Auto-appends at <strong>10:05</strong> &amp; <strong>14:05</strong> (Asia/Dhaka) on trading days.
@@ -21,14 +25,25 @@
   </form>
 </div>
 {% else %}
-<p class="muted">Log in to fetch live data. Daily append also runs automatically at 10:05 &amp; 14:05.</p>
+<p class="muted">Daily append runs automatically at 10:05 &amp; 14:05. Fetch/analysis controls are staff-only.</p>
 {% endif %}
 
 <div class="grid-4">
   <div class="stat"><div class="label">Buy signals</div><div class="value">{{ summary.buy }}</div></div>
   <div class="stat"><div class="label">Sell signals</div><div class="value">{{ summary.sell }}</div></div>
-  <div class="stat"><div class="label">Safe buys</div><div class="value">{{ summary.safe_buys }}</div></div>
+  <div class="stat"><div class="label">Research candidates</div><div class="value">{{ summary.research_candidates }}</div></div>
   <div class="stat"><div class="label">Watch</div><div class="value">{{ summary.watch }}</div></div>
+</div>
+
+<div class="disclaimer">
+  <strong>Experimental research tool, not investment advice.</strong> Every score, forecast, and
+  "research candidate" flag below is a probabilistic estimate from historical analogues — not a
+  guarantee or a recommendation. The underlying model is under active development and its
+  real-world accuracy is not independently verified.
+  <br><br>
+  Model status:
+  {% if edge.has_edge %}<span class="badge badge-buy">Demonstrated edge</span>{% else %}<span class="badge badge-hold">No demonstrated predictive edge</span>{% endif %}
+  <span class="muted">{{ edge.edge_reason }}</span>
 </div>
 
 {% if close_learn %}
@@ -81,7 +96,7 @@
           {% for r in potentials %}
           <tr>
             <td><a href="{% url 'stock_detail' r.stock.exchange r.stock.trading_code %}">{{ r.stock.trading_code }}</a> <span class="muted">{{ r.stock.exchange }}</span></td>
-            <td><span class="badge badge-{{ r.action|lower }}">{{ r.action }}</span>{% if r.is_safe_buy %} <span class="badge badge-safe">SAFE</span>{% endif %}</td>
+            <td><span class="badge badge-{{ r.action|lower }}">{{ r.action }}</span>{% if r.is_safe_buy %}{% if edge.has_edge %} <span class="badge badge-safe" title="Experimental research candidate — not a safety guarantee">RESEARCH</span>{% else %} <span class="badge badge-hold" title="No learned model currently demonstrates a positive, adequately-sampled edge.">NO EDGE</span>{% endif %}{% endif %}</td>
             <td>{{ r.score|floatformat:0 }}</td>
             <td>{% if r.maturity_days_est %}~{{ r.maturity_days_est }}d{% else %}—{% endif %}</td>
             <td>{% if r.peak_days_est %}~{{ r.peak_days_est }}d{% else %}—{% endif %}</td>
@@ -97,7 +112,8 @@
 
   <section class="stack">
     <div class="panel">
-      <h3>Buying looks comparatively safer</h3>
+      <h3>Experimental research candidates</h3>
+      {% if not edge.has_edge %}<p class="muted">No demonstrated predictive edge right now — {{ edge.edge_reason }}</p>{% endif %}
       <div class="table-wrap">
         <table>
           <thead><tr><th>Code</th><th>Score</th><th>Risk</th><th>Expected %</th><th>Peak price</th></tr></thead>
@@ -111,7 +127,7 @@
               <td>{% if r.expected_peak_price %}{{ r.expected_peak_price|floatformat:2 }}{% else %}—{% endif %}</td>
             </tr>
             {% empty %}
-            <tr><td colspan="5" class="muted">None flagged as safer buys today.</td></tr>
+            <tr><td colspan="5" class="muted">No experimental research candidates flagged today.</td></tr>
             {% endfor %}
           </tbody>
         </table>

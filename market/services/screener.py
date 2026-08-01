@@ -50,7 +50,9 @@ def screen_summary() -> dict:
         "sell": qs.filter(action=SignalAction.SELL).count(),
         "hold": qs.filter(action=SignalAction.HOLD).count(),
         "watch": qs.filter(action=SignalAction.WATCH).count(),
-        "safe_buys": qs.filter(is_safe_buy=True).count(),
+        # Presentation-layer name only; the underlying model field/function
+        # (is_safe_buy / safe_buys()) is unchanged to avoid a migration.
+        "research_candidates": qs.filter(is_safe_buy=True).count(),
     }
 
 

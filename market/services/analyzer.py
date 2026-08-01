@@ -47,8 +47,12 @@ def fetch_all(
     return {"dse_live": dse_live, "cse_live": cse_live, "dse_hist": dse_hist, "cse_hist": cse_hist, "demo": demo}
 
 
-def analyze_stock(stock: Stock, use_ml: bool = True) -> AnalysisResult:
-    df = prices_to_df(stock.prices.all())
+def analyze_stock(stock: Stock, use_ml: bool = True, include_demo: bool = False) -> AnalysisResult:
+    """include_demo=False (default) excludes synthetic/demo/mirror-fallback
+    price rows — real analysis output must not be built on fabricated data
+    unless demo mode is explicitly selected."""
+    prices_qs = stock.prices.all() if include_demo else stock.prices.live()
+    df = prices_to_df(prices_qs)
     as_of = timezone.localdate()
     if not df.empty:
         as_of = df.iloc[-1]["date"].date() if hasattr(df.iloc[-1]["date"], "date") else df.iloc[-1]["date"]
@@ -96,7 +100,7 @@ def analyze_stock(stock: Stock, use_ml: bool = True) -> AnalysisResult:
     ml_score = None
     score = pred.score
     if use_ml and len(df) >= 80:
-        ml_prob = ml_probability(df)
+        ml_prob = ml_probability(df, exchange=stock.exchange)
         if ml_prob is not None:
             ml_score = round(ml_prob * 100, 2)
             score = blend_score(pred.score, ml_prob)
@@ -132,7 +136,7 @@ def analyze_stock(stock: Stock, use_ml: bool = True) -> AnalysisResult:
     return result
 
 
-def run_full_analysis(train_ml: bool = True) -> dict:
+def run_full_analysis(train_ml: bool = True, include_demo: bool = False) -> dict:
     if train_ml:
         ml_info = train_model()
     else:
@@ -142,7 +146,7 @@ def run_full_analysis(train_ml: bool = True) -> dict:
     errors = 0
     for stock in Stock.objects.filter(is_active=True):
         try:
-            analyze_stock(stock, use_ml=True)
+            analyze_stock(stock, use_ml=True, include_demo=include_demo)
             analyzed += 1
         except Exception as exc:
             logger.exception("Analyze failed for %s: %s", stock, exc)

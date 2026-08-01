@@ -1,11 +1,11 @@
 """
-Automatic live market sync for the ticker.
+Live market sync — invoked by the market.tasks.sync_live_market Celery
+task (see config/celery.py's beat_schedule), not a background thread.
 
-Runs a background loop while Django is up (no Redis required) and also
-refreshes on-demand when /ticker.json is polled and data is stale.
-
-Uses a process-wide write lock so SQLite is not hit by pipeline + autosync
-at the same time ("database is locked").
+Uses a process-local threading lock plus a cross-process Redis lock
+(market.services.locking) so SQLite is never hit by two writers — worker
+threads or separate Celery worker processes — at the same time
+("database is locked").
 """
 from __future__ import annotations
 
@@ -34,12 +34,26 @@ _state = {
     "running": False,
     "source": None,
 }
-_thread_started = False
 
 
 def _state_file() -> Path:
     path = Path(settings.CACHE_DIR) / "autosync_state.txt"
     return path
+
+
+def get_last_success_at():
+    """Datetime of the last successful live sync, or None if never synced.
+
+    Falls back to the on-disk state file for the period right after a
+    process restart, before this worker's in-memory _state is repopulated.
+    """
+    if _state["last_success"]:
+        return _state["last_success"]
+    try:
+        text = _state_file().read_text(encoding="utf-8").strip()
+        return datetime.fromisoformat(text)
+    except (OSError, ValueError):
+        return None
 
 
 def get_sync_status() -> dict:
@@ -56,9 +70,15 @@ def get_sync_status() -> dict:
 
 
 def is_market_hours(now=None) -> bool:
-    """DSE/CSE regular session: Sun–Thu, ~10:00–14:45 Asia/Dhaka."""
+    """DSE/CSE regular session: Sun–Thu, ~10:00–14:45 Asia/Dhaka, excluding
+    weekends and holidays (market.services.trading_calendar) — a holiday is
+    closed for its entire calendar day, not just around session hours."""
     now = now or timezone.localtime()
     if now.weekday() not in (6, 0, 1, 2, 3):
+        return False
+    from market.services.trading_calendar import closure_reason
+
+    if closure_reason(now.date()) is not None:
         return False
     t = now.time()
     start = datetime.strptime("09:55", "%H:%M").time()
@@ -74,18 +94,36 @@ def sync_interval_seconds() -> int:
 
 @contextmanager
 def exclusive_db_write(blocking: bool = True, timeout: float = 120.0):
-    """Serialize SQLite writers across threads."""
+    """Serialize SQLite writers across threads AND processes.
+
+    The threading.Lock alone only protects this one process; with Celery,
+    market-writing jobs can run as separate worker processes (or several
+    worker machines), so this also takes a Redis-backed distributed lock
+    keyed the same way across all of them. Both must be held together.
+    """
     if blocking:
         acquired = db_write_lock.acquire(timeout=timeout)
     else:
         acquired = db_write_lock.acquire(blocking=False)
     if not acquired:
         raise TimeoutError("Could not acquire database write lock")
-    close_old_connections()
     try:
-        yield
+        from market.services.locking import LockBusy, distributed_lock
+
+        try:
+            with distributed_lock(
+                "market-write",
+                timeout=timeout + 30,
+                blocking_timeout=timeout if blocking else 0,
+            ):
+                close_old_connections()
+                try:
+                    yield
+                finally:
+                    close_old_connections()
+        except LockBusy as exc:
+            raise TimeoutError(str(exc)) from exc
     finally:
-        close_old_connections()
         db_write_lock.release()
 
 
@@ -187,7 +225,19 @@ def _run_live_sync_unlocked() -> dict:
 
 
 def maybe_sync(force: bool = False) -> dict:
-    """Sync if stale based on market/off-hours interval."""
+    """Sync if stale based on market/off-hours interval.
+
+    Called by the market.tasks.sync_live_market Celery task, scheduled to
+    tick every ~60s (config/celery.py beat_schedule) — this staleness
+    check is what keeps the *effective* cadence at AUTO_SYNC_INTERVAL_*
+    without needing separate beat entries for market/off hours. `_state`
+    is per-worker-process memory, so after a worker restart or across
+    multiple workers this may sync a bit more often than the configured
+    interval; exclusive_db_write's cross-process lock (inside
+    run_live_sync) still prevents any actual concurrent write.
+    """
+    if not getattr(settings, "AUTO_MARKET_SYNC", True) and not force:
+        return {"ok": False, "skipped": "disabled"}
     interval = sync_interval_seconds()
     last = _state["last_success"] or _state["last_attempt"]
     if not force and last is not None:
@@ -195,40 +245,3 @@ def maybe_sync(force: bool = False) -> dict:
         if age < interval:
             return {"ok": True, "skipped": "fresh", "age_seconds": age, **get_sync_status()}
     return run_live_sync(force=force)
-
-
-def _loop():
-    time.sleep(8)
-    while True:
-        try:
-            if getattr(settings, "AUTO_MARKET_SYNC", True):
-                maybe_sync(force=False)
-        except Exception as exc:
-            logger.warning("Autosync loop error: %s", exc)
-        finally:
-            close_old_connections()
-        time.sleep(max(15, sync_interval_seconds() // 2))
-
-
-def start_autosync_thread():
-    global _thread_started
-    if _thread_started:
-        return
-    if not getattr(settings, "AUTO_MARKET_SYNC", True):
-        return
-    import os
-    import sys
-
-    is_runserver = any("runserver" in str(a) for a in sys.argv)
-    if is_runserver and os.environ.get("RUN_MAIN") != "true":
-        return
-
-    configure_sqlite()
-    t = threading.Thread(target=_loop, name="bazaar-market-autosync", daemon=True)
-    t.start()
-    _thread_started = True
-    logger.info(
-        "Bazaar autosync started (market=%ss off=%ss)",
-        getattr(settings, "AUTO_SYNC_INTERVAL_MARKET", 60),
-        getattr(settings, "AUTO_SYNC_INTERVAL_OFF", 900),
-    )

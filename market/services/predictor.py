@@ -15,6 +15,7 @@ import pandas as pd
 from market.models import SignalAction
 from market.services.indicators import compute_indicators
 from market.services.patterns import detect_patterns
+from market.services.price_format import round_to_tick
 
 
 @dataclass
@@ -109,16 +110,36 @@ def _score_from_row(row: pd.Series, patterns: list[dict], group: str) -> tuple[f
     return float(np.clip(score, -100, 100)), reasons
 
 
+MIN_SAMPLES_FOR_RANGE = 10  # below this, a percentile range/downside figure is not statistically supportable
+
+
 def estimate_maturity_and_peak(df: pd.DataFrame, target_pct: float = 0.05) -> dict:
     """
     Walk history: after bullish-ish conditions (RSI<40 or MACD cross up),
     measure days until +target_pct and days to local peak within 40 sessions.
+
+    avg_return is the mean of each episode's *best* return within the
+    window (peak_ret) — an inherently optimistic, upside-only figure. To
+    avoid presenting that as if it were a single confident forecast,
+    also track each episode's *worst* return within the same window
+    (trough_ret) as a downside scenario, plus the 25th/75th percentile of
+    peak returns as a range — both only reported once there are enough
+    samples to be statistically meaningful (MIN_SAMPLES_FOR_RANGE).
     """
     data = compute_indicators(df)
     if len(data) < 80:
-        return {"maturity_days": None, "peak_days": None, "hit_rate": None, "avg_return": None, "samples": 0}
+        return {
+            "maturity_days": None,
+            "peak_days": None,
+            "hit_rate": None,
+            "avg_return": None,
+            "samples": 0,
+            "return_p25": None,
+            "return_p75": None,
+            "downside_return": None,
+        }
 
-    maturities, peaks, returns, hits = [], [], [], 0
+    maturities, peaks, returns, troughs, hits = [], [], [], [], 0
     for i in range(40, len(data) - 40):
         row = data.iloc[i]
         rsi = row.get("rsi_14")
@@ -146,22 +167,39 @@ def estimate_maturity_and_peak(df: pd.DataFrame, target_pct: float = 0.05) -> di
         peak_idx = int(future["close"].values.argmax())
         peak_days = peak_idx + 1
         peak_ret = (float(future["close"].iloc[peak_idx]) / entry - 1) * 100
+        trough_ret = (float(future["close"].min()) / entry - 1) * 100
         if matured:
             maturities.append(matured)
             hits += 1
         peaks.append(peak_days)
         returns.append(peak_ret)
+        troughs.append(trough_ret)
 
     samples = len(returns)
     if samples == 0:
-        return {"maturity_days": None, "peak_days": None, "hit_rate": None, "avg_return": None, "samples": 0}
+        return {
+            "maturity_days": None,
+            "peak_days": None,
+            "hit_rate": None,
+            "avg_return": None,
+            "samples": 0,
+            "return_p25": None,
+            "return_p75": None,
+            "downside_return": None,
+        }
 
+    has_range = samples >= MIN_SAMPLES_FOR_RANGE
     return {
         "maturity_days": int(round(float(np.median(maturities)))) if maturities else None,
         "peak_days": int(round(float(np.median(peaks)))),
         "hit_rate": hits / samples,
         "avg_return": float(np.mean(returns)),
         "samples": samples,
+        "return_p25": float(np.percentile(returns, 25)) if has_range else None,
+        "return_p75": float(np.percentile(returns, 75)) if has_range else None,
+        # Mean worst-point-in-window return across episodes — a typical
+        # downside scenario, not a worst-case guarantee.
+        "downside_return": float(np.mean(troughs)) if has_range else None,
     }
 
 
@@ -174,6 +212,14 @@ def action_from_score(score: float) -> str:
         return SignalAction.WATCH
     return SignalAction.HOLD
 
+
+RESEARCH_DISCLAIMER = (
+    "Experimental research output, not investment advice. Scores, forecasts, and "
+    "“research candidate” flags are probabilistic estimates from historical "
+    "analogues over a limited lookback window — they are not guarantees, "
+    "recommendations, or verified trading signals. The underlying model is under "
+    "active development and its accuracy is not independently verified."
+)
 
 CONFIDENCE_SCALE = [
     {"key": "very_high", "label": "Very high", "min": 0.80, "max": 1.0, "hint": "Strong sample support; near-term horizon"},
@@ -240,6 +286,8 @@ def predict_price_at_date(df: pd.DataFrame, target_date) -> dict:
             "predicted_price": round(close, 2),
             "price_low": round(close, 2),
             "price_high": round(close, 2),
+            "price_downside": None,
+            "downside_note": "Selected date is recorded history, not a forecast — no downside scenario applies.",
             "expected_return_pct": round((close / last_close - 1) * 100, 2) if last_close else None,
             "confidence": conf,
             "confidence_label": band["label"],
@@ -291,6 +339,8 @@ def predict_price_at_date(df: pd.DataFrame, target_date) -> dict:
         med = (1 + mu) ** horizon - 1
         p25 = med - 0.675 * sigma * np.sqrt(horizon)
         p75 = med + 0.675 * sigma * np.sqrt(horizon)
+        # 10th percentile (one-sided ~90%) normal approx — the downside scenario
+        p10 = med - 1.2816 * sigma * np.sqrt(horizon)
         samples = len(rets.tail(60))
         method = "drift"
     else:
@@ -298,8 +348,12 @@ def predict_price_at_date(df: pd.DataFrame, target_date) -> dict:
         med = float(np.median(arr))
         p25 = float(np.percentile(arr, 25))
         p75 = float(np.percentile(arr, 75))
+        p10 = float(np.percentile(arr, 10))
         samples = len(arr)
         method = "analogues"
+
+    has_downside = samples >= MIN_SAMPLES_FOR_RANGE
+    downside_gap = max(0.0, p25 - p10)  # distance from p25 down to p10, preserved through any re-centering below
 
     learn_note = ""
     # Next-day close: apply learned bias / ML blend from the after-close learn loop
@@ -323,6 +377,7 @@ def predict_price_at_date(df: pd.DataFrame, target_date) -> dict:
     predicted = last_close * (1 + med)
     low = last_close * (1 + p25)
     high = last_close * (1 + p75)
+    downside_price = last_close * (1 + p25 - downside_gap) if has_downside else None
 
     # Confidence: more samples & shorter horizon → higher; high dispersion → lower
     sample_factor = min(1.0, samples / 40)
@@ -348,9 +403,15 @@ def predict_price_at_date(df: pd.DataFrame, target_date) -> dict:
         "last_date": last_date.strftime("%Y-%m-%d"),
         "last_close": round(last_close, 2),
         "horizon_trading_days": horizon,
-        "predicted_price": round(predicted, 2),
-        "price_low": round(min(low, high), 2),
-        "price_high": round(max(low, high), 2),
+        "predicted_price": round_to_tick(predicted),
+        "price_low": round_to_tick(min(low, high)),
+        "price_high": round_to_tick(max(low, high)),
+        "price_downside": round_to_tick(downside_price),
+        "downside_note": (
+            "10th-percentile downside scenario from historical analogues — a typical bad outcome, not a worst case."
+            if has_downside
+            else "Not enough historical analogues for a statistically supportable downside scenario."
+        ),
         "expected_return_pct": round(med * 100, 2),
         "confidence": round(confidence, 3),
         "confidence_label": band["label"],
@@ -420,6 +481,11 @@ def predict_stock(df: pd.DataFrame, group: str = "A", pe_ratio: float | None = N
         )
     if est["peak_days"]:
         rationale_parts.append(f"Median days to local peak after setup: ~{est['peak_days']}.")
+    if est["return_p25"] is not None and est["return_p75"] is not None:
+        rationale_parts.append(
+            f"Peak-return range across those episodes: {est['return_p25']:.1f}% to {est['return_p75']:.1f}% "
+            f"(typical downside within the same window: {est['downside_return']:.1f}%)."
+        )
 
     features = {
         "rsi_14": None if pd.isna(row.get("rsi_14")) else float(row["rsi_14"]),
@@ -432,6 +498,9 @@ def predict_stock(df: pd.DataFrame, group: str = "A", pe_ratio: float | None = N
         "pe_ratio": pe_ratio,
         "history_samples": est["samples"],
         "hit_rate": est["hit_rate"],
+        "peak_return_p25": est["return_p25"],
+        "peak_return_p75": est["return_p75"],
+        "downside_return_pct": est["downside_return"],
     }
 
     return Prediction(

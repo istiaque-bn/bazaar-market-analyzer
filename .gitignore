@@ -21,3 +21,12 @@ build/
 .vscode/
 data/cache/
 *.pkl
+backups/
+.claude/settings.local.json
+celerybeat-schedule
+celerybeat.pid
+*.pid
+
+# Stray nested repo (github.com/istiaque-bn/Trial) accidentally cloned
+# into this working tree — unrelated to this project, never part of it.
+/Trial/

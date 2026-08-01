@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Data quality{% endblock %}
+{% block content %}
+<div class="section-title">
+  <div>
+    <h2>Data quality</h2>
+    <p class="muted">Generated {{ report.generated_at|date:"d M Y, h:i A" }} · staff-only</p>
+  </div>
+</div>
+
+<div class="grid-4">
+  <div class="stat"><div class="label">Total price rows</div><div class="value">{{ report.total_rows }}</div></div>
+  <div class="stat"><div class="label">Synthetic / demo rows</div><div class="value">{{ report.synthetic_rows }}</div></div>
+  <div class="stat"><div class="label">Unknown provenance</div><div class="value">{{ report.unknown_provenance_rows }}</div></div>
+  <div class="stat"><div class="label">Flagged rows</div><div class="value">{{ report.flagged_rows }}</div></div>
+</div>
+
+<div class="disclaimer">
+  "Unknown provenance" rows predate Phase 6 — provenance was never tracked before, and there is no
+  reliable way to reconstruct it after the fact, so they are labeled unknown rather than guessed as
+  live. They are still included in live analysis/training/backtests (excluding them all would make
+  the product unusable); only rows explicitly tagged synthetic/demo/mirror-fallback are excluded by
+  default. "Flagged" rows have a detected data-quality issue (impossible OHLC, abnormal jump,
+  stale-quote run, or a gap before them) — flags are informational and never delete a row.
+</div>
+
+<div class="grid-2" style="margin-top:1.2rem;">
+  <section class="panel">
+    <h3>Freshness by exchange</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Exchange</th><th>Latest price date</th><th>Last successful batch</th><th>Source</th></tr></thead>
+        <tbody>
+          {% for ex, f in report.freshness.items %}
+          <tr>
+            <td>{{ ex }}</td>
+            <td>{{ f.latest_price_date|default:"—" }}</td>
+            <td>{% if f.last_successful_batch_at %}{{ f.last_successful_batch_at|slice:":16"|cut:"T" }}{% else %}—{% endif %}</td>
+            <td>{{ f.last_successful_batch_source|default:"—" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h3>Rows by source</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Source</th><th>Rows</th></tr></thead>
+        <tbody>
+          {% for source, n in report.by_source.items %}
+          <tr><td>{{ source }}</td><td>{{ n }}</td></tr>
+          {% empty %}
+          <tr><td colspan="2" class="muted">No data yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<div class="grid-2" style="margin-top:1.2rem;">
+  <section class="panel">
+    <h3>Flagged-row breakdown</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Flag</th><th>Occurrences</th></tr></thead>
+        <tbody>
+          {% for flag, n in report.flag_counts.items %}
+          <tr><td>{{ flag }}</td><td>{{ n }}</td></tr>
+          {% empty %}
+          <tr><td colspan="2" class="muted">No flags recorded — run the quality scan (<code>manage.py data_quality_scan</code>).</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h3>Recent import batches</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Source</th><th>Ex</th><th>Started</th><th>Rows</th><th>Stocks</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for b in report.recent_batches %}
+          <tr>
+            <td>{{ b.source }}</td>
+            <td>{{ b.exchange|default:"—" }}</td>
+            <td>{{ b.started_at|date:"d M, H:i" }}</td>
+            <td>{{ b.row_count }}</td>
+            <td>{{ b.stock_count }}</td>
+            <td>
+              {% if b.error %}<span class="badge badge-sell" title="{{ b.error }}">ERROR</span>
+              {% elif b.finished_at %}<span class="badge badge-safe">OK</span>
+              {% else %}<span class="badge badge-watch">RUNNING</span>{% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="6" class="muted">No import batches recorded yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endblock %}

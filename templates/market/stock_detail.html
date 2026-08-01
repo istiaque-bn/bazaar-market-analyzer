@@ -47,14 +47,16 @@
       </div>
       <div class="date-predict-result" id="predictResult" hidden>
         <div class="date-predict-price">
-          <span class="label">Probable price</span>
+          <span class="label">Central estimate</span>
           <strong id="predictPriceVal">—</strong>
         </div>
         <div class="date-predict-meta">
           <span>Range: <strong id="predictRange">—</strong></span>
+          <span>Downside scenario: <strong id="predictDownside">—</strong></span>
           <span>Expected move: <strong id="predictMove">—</strong></span>
           <span>Horizon: <strong id="predictHorizon">—</strong></span>
         </div>
+        <p class="muted date-predict-note" id="predictDownsideNote"></p>
         <div class="date-predict-conf">
           <div class="date-predict-conf-head">
             <span>Confidence</span>
@@ -88,33 +90,47 @@
   <section class="stack">
     <div class="panel">
       <h3>Predictive estimate</h3>
-      {% if analysis %}
-        <p>{% if analysis.is_safe_buy %}<span class="badge badge-safe">Buying looks comparatively safer</span>{% endif %}</p>
+      <p class="muted" style="margin-top:-0.4rem;">Experimental research output — probabilistic estimate, not investment advice.</p>
+      {% if not analysis %}
+        <p class="muted">Empty — no analysis on record yet for this stock. Run the pipeline or check back after the next scheduled analysis.</p>
+      {% else %}
+        <p>
+          {% if status and status.freshness.is_stale %}<span class="badge badge-watch" title="{{ status.freshness.note }}">Stale data</span>{% endif %}
+          {% if analysis.is_safe_buy %}
+            {% if status and status.has_edge %}
+              <span class="badge badge-safe" title="Experimental research candidate — not a safety guarantee">Experimental research candidate</span>
+            {% else %}
+              <span class="badge badge-hold" title="{{ status.edge_reason|default:'No learned model currently demonstrates a positive, adequately-sampled edge.' }}">No demonstrated predictive edge</span>
+            {% endif %}
+          {% endif %}
+        </p>
         <p><strong>Mature in ~{{ analysis.maturity_days_est|default:"—" }} days</strong> (historically to ~+5%)</p>
         <p><strong>Peak in ~{{ analysis.peak_days_est|default:"—" }} days</strong> (median local peak window)</p>
         <p>
-          <strong>Expected peak price within next {% if analysis.peak_days_est %}{{ analysis.peak_days_est }}{% else %}—{% endif %} days:</strong>
-          {% if analysis.expected_peak_price %}
-            {{ analysis.expected_peak_price|floatformat:2 }}
-          {% else %}
-            —
-          {% endif %}
+          <strong>Central estimate — peak price within next {% if analysis.peak_days_est %}{{ analysis.peak_days_est }}{% else %}—{% endif %} days:</strong>
+          {% if analysis.expected_peak_price %}{{ analysis.expected_peak_price|floatformat:2 }}{% else %}—{% endif %}
         </p>
-        <p>Expected peak return: {% if analysis.expected_return_pct %}{{ analysis.expected_return_pct|floatformat:1 }}%{% else %}—{% endif %}</p>
+        <p>Central estimate — peak return: {% if analysis.expected_return_pct %}{{ analysis.expected_return_pct|floatformat:1 }}%{% else %}—{% endif %}</p>
+        {% if analysis.features.peak_return_p25 != None and analysis.features.peak_return_p75 != None %}
+          <p>Range across historical analogues: <strong>{{ analysis.features.peak_return_p25|floatformat:1 }}% to {{ analysis.features.peak_return_p75|floatformat:1 }}%</strong></p>
+          <p>Downside scenario (typical, not worst-case): <strong>{{ analysis.features.downside_return_pct|floatformat:1 }}%</strong></p>
+        {% else %}
+          <p class="muted">Not enough historical analogues yet for a statistically supportable range/downside scenario.</p>
+        {% endif %}
         <p>Hit probability: {% if analysis.probability %}{% widthratio analysis.probability 1 100 %}%{% else %}—{% endif %}</p>
         <p>Confidence: {% widthratio analysis.confidence 1 100 %}% · Risk: {{ analysis.risk_level }}</p>
         {% if analysis.ml_score %}<p>ML up-move score: {{ analysis.ml_score|floatformat:0 }}/100</p>{% endif %}
         <p class="muted">{{ analysis.rationale }}</p>
-      {% else %}
-        <p class="muted">No analysis yet.</p>
       {% endif %}
     </div>
     <div class="panel">
       <h3>Next-day close (learn loop)</h3>
-      {% if next_close_forecast %}
+      {% if not next_close_forecast %}
+        <p class="muted">Empty — no next-day close forecast yet. Runs automatically at 14:45 Dhaka after close.</p>
+      {% else %}
         <p>
           <strong>Target {{ next_close_forecast.target_date|date:"Y-m-d" }}:</strong>
-          predicted {{ next_close_forecast.predicted_close|floatformat:2 }}
+          predicted {{ next_close_forecast_price|floatformat:2 }}
           {% if next_close_forecast.actual_close %}
             · actual {{ next_close_forecast.actual_close|floatformat:2 }}
             · error {% if next_close_forecast.pct_error %}{{ next_close_forecast.pct_error|floatformat:2 }}%{% else %}—{% endif %}
@@ -126,21 +142,25 @@
         {% if next_close_forecast.features.stock_bias %}
           <p class="muted">Stock bias {{ next_close_forecast.features.stock_bias }} · global {{ next_close_forecast.features.global_bias }}</p>
         {% endif %}
-      {% else %}
-        <p class="muted">No next-day close forecast yet. Runs automatically at 14:45 Dhaka after close.</p>
       {% endif %}
-      {% if close_learn and close_learn.skill %}
+      {% if status %}
         <p style="margin-top:0.55rem;">
-          Skill vs naive:
-          <strong class="{% if close_learn.skill.skill_vs_naive > 0 %}up{% elif close_learn.skill.skill_vs_naive < 0 %}down{% endif %}">
-            {% if close_learn.skill.skill_vs_naive != None %}{{ close_learn.skill.skill_vs_naive|floatformat:3 }}{% else %}—{% endif %}
-          </strong>
-          · beats naive {% if close_learn.skill.beats_naive_pct != None %}{% widthratio close_learn.skill.beats_naive_pct 1 100 %}%{% else %}—{% endif %}
+          {% if status.next_close_model.has_edge %}
+            Skill vs naive:
+            <strong class="{% if status.next_close_model.skill_vs_naive > 0 %}up{% elif status.next_close_model.skill_vs_naive < 0 %}down{% endif %}">
+              {{ status.next_close_model.skill_vs_naive|floatformat:3 }}
+            </strong>
+            · beats naive {% if status.next_close_model.beats_naive_pct != None %}{% widthratio status.next_close_model.beats_naive_pct 1 100 %}%{% else %}—{% endif %}
+          {% else %}
+            <span class="badge badge-hold" title="Scored vs. a naive baseline (tomorrow's close = today's close) on {{ status.next_close_model.n }} settled forecasts.">No demonstrated predictive edge</span>
+          {% endif %}
         </p>
         <p class="muted">
-          Return MAE model {{ close_learn.skill.model_mae_return }} / naive {{ close_learn.skill.baseline_mae_return }} ·
-          MAPE {{ close_learn.skill.model_mape }} / {{ close_learn.skill.baseline_mape }}% ·
-          stock biases {{ close_learn.stock_bias_active }}
+          Direction accuracy {% if status.next_close_model.direction_hit_rate != None %}{% widthratio status.next_close_model.direction_hit_rate 1 100 %}%{% else %}—{% endif %} ·
+          MAPE {% if status.next_close_model.model_mape != None %}{{ status.next_close_model.model_mape|floatformat:2 }}{% else %}—{% endif %} /
+          baseline {% if status.next_close_model.baseline_mape != None %}{{ status.next_close_model.baseline_mape|floatformat:2 }}{% else %}—{% endif %}% ·
+          settled {{ status.next_close_model.n }}
+          {% if close_learn %} · stock biases {{ close_learn.stock_bias_active }}{% endif %}
         </p>
       {% endif %}
     </div>
@@ -151,7 +171,39 @@
         <p>SMA20: {{ tech.sma_20|floatformat:2 }} · SMA50: {{ tech.sma_50|floatformat:2 }}</p>
         <p>Support: {{ tech.support|floatformat:2 }} · Resistance: {{ tech.resistance|floatformat:2 }}</p>
       {% else %}
-        <p class="muted">No technical snapshot.</p>
+        <p class="muted">Empty — no technical snapshot on record.</p>
+      {% endif %}
+    </div>
+    <div class="panel">
+      <h3>Model status &amp; signal quality</h3>
+      {% if not status %}
+        <p class="muted">Model status unavailable right now — could not be computed for this request.</p>
+      {% else %}
+        <p>
+          {% if status.has_edge %}<span class="badge badge-buy">Demonstrated edge</span>{% else %}<span class="badge badge-hold">No demonstrated predictive edge</span>{% endif %}
+        </p>
+        <p class="muted">{{ status.edge_reason }}</p>
+
+        <p style="margin-top:0.6rem;"><strong>Up/down classifier</strong> — {{ status.ml_model.status|default:"none" }}{% if status.ml_model.exchange_scope %} ({{ status.ml_model.exchange_scope }}){% endif %}</p>
+        {% if status.ml_model.deployed %}
+          <p class="muted">
+            Data cutoff {{ status.ml_model.data_cutoff|default:"—" }} · trained on {{ status.ml_model.train_rows }} rows ·
+            skill {{ status.ml_model.skill_vs_naive|floatformat:3 }} vs. {{ status.ml_model.baseline }} ·
+            direction accuracy {% if status.ml_model.direction_hit_rate != None %}{% widthratio status.ml_model.direction_hit_rate 1 100 %}%{% else %}—{% endif %}
+            {% if status.ml_model.last_evaluation_period %} · last evaluated {{ status.ml_model.last_evaluation_period.start }} → {{ status.ml_model.last_evaluation_period.end }}{% endif %}
+          </p>
+        {% else %}
+          <p class="muted">Not deployed for confident output{% if status.ml_model.train_rows %} (last attempt: {{ status.ml_model.train_rows }} rows, skill {{ status.ml_model.skill_vs_naive|default:"—" }}){% endif %}.</p>
+        {% endif %}
+
+        <p style="margin-top:0.6rem;" class="muted">{{ status.freshness.note }}</p>
+        <p class="muted">Liquidity: {{ status.liquidity.note }}</p>
+        <p class="muted">Invalidation: {{ status.invalidation }}</p>
+        <p class="muted">
+          Technical inputs: {{ status.signal_composition.technical_inputs|join:", " }}.
+          {% if status.signal_composition.fundamental_inputs %}Fundamental inputs: {{ status.signal_composition.fundamental_inputs|join:", " }}.{% else %}No fundamental inputs used.{% endif %}
+        </p>
+        <p class="muted">{{ status.signal_composition.note }}</p>
       {% endif %}
     </div>
   </section>
@@ -188,6 +240,12 @@
       </thead>
       <tbody>
         {% for row in history_rows %}
+        {% if row.closed_reason %}
+        <tr class="history-closed-row">
+          <td>{{ row.date|date:"Y-m-d" }}</td>
+          <td colspan="7" class="muted">Market closed — {{ row.closed_reason }}</td>
+        </tr>
+        {% else %}
         <tr>
           <td>{{ row.date|date:"Y-m-d" }}</td>
           <td>{{ row.open|floatformat:2 }}</td>
@@ -202,6 +260,7 @@
           </td>
           <td>{{ row.volume|default:0 }}</td>
         </tr>
+        {% endif %}
         {% empty %}
         <tr><td colspan="8" class="muted">No price history for this range.</td></tr>
         {% endfor %}
@@ -241,14 +300,21 @@
   </div>
 </section>
 
-<div class="disclaimer">These estimates are derived from past 1-year analogues. They are not guarantees of future price.</div>
+<div class="disclaimer">
+  <strong>Experimental research tool, not investment advice.</strong> These estimates are derived
+  from past 1-year analogues and an actively-developed statistical model with unverified real-world
+  accuracy. They are not guarantees of future price, safety, or performance.
+</div>
 {% endblock %}
 
 {% block extra_js %}
+{{ chart_data|json_script:"chart-data" }}
+{{ history_chart_data|json_script:"history-chart-data" }}
+{{ overview_ranges|json_script:"overview-ranges-data" }}
 <script>
-const chartData = {{ chart_json|safe }};
-const historyData = {{ history_chart_json|safe }};
-const overviewRanges = {{ overview_ranges_json|safe }};
+const chartData = JSON.parse(document.getElementById('chart-data').textContent);
+const historyData = JSON.parse(document.getElementById('history-chart-data').textContent);
+const overviewRanges = JSON.parse(document.getElementById('overview-ranges-data').textContent);
 const initialOverviewRange = "{{ overview_range|escapejs }}";
 
 function sliceOverviewData(days) {
@@ -384,6 +450,9 @@ function drawOverviewChart(data) {
       document.getElementById('predictPriceVal').textContent = Number(data.predicted_price).toFixed(2);
       document.getElementById('predictRange').textContent =
         `${Number(data.price_low).toFixed(2)} – ${Number(data.price_high).toFixed(2)}`;
+      document.getElementById('predictDownside').textContent =
+        data.price_downside == null ? 'n/a' : Number(data.price_downside).toFixed(2);
+      document.getElementById('predictDownsideNote').textContent = data.downside_note || '';
       const move = data.expected_return_pct;
       document.getElementById('predictMove').textContent =
         move == null ? '—' : `${move > 0 ? '+' : ''}${Number(move).toFixed(1)}%`;

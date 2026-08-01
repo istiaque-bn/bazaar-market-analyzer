@@ -23,6 +23,59 @@ class SignalAction(models.TextChoices):
     WATCH = "WATCH", "Watch"
 
 
+class DataSource(models.TextChoices):
+    """Where a PriceHistory row actually came from. UNKNOWN is the default
+    for every pre-Phase-6 row — provenance was never tracked before, and
+    there is no reliable way to reconstruct it after the fact (see the
+    Phase 6 report), so legacy rows are honestly labeled unknown rather
+    than guessed as live."""
+
+    UNKNOWN = "unknown", "Unknown (legacy / unspecified)"
+    DSE_LIVE = "dse_live", "DSE live quote"
+    DSE_HISTORY = "dse_history", "DSE historical archive/bdshare"
+    CSE_LIVE = "cse_live", "CSE live quote"
+    CSE_HISTORY = "cse_history", "CSE historical bulk download"
+    CSE_MIRROR_FALLBACK = "cse_mirror_fallback", "CSE mirrored from DSE (not real CSE data)"
+    SYNTHETIC_DEMO = "synthetic_demo", "Synthetic demo seed data"
+    SYNTHETIC_FALLBACK = "synthetic_fallback", "Synthetic fallback for a real code (fetch unavailable)"
+
+
+SYNTHETIC_SOURCES = {
+    DataSource.CSE_MIRROR_FALLBACK,
+    DataSource.SYNTHETIC_DEMO,
+    DataSource.SYNTHETIC_FALLBACK,
+}
+
+
+class AdjustmentStatus(models.TextChoices):
+    UNKNOWN = "unknown", "Unknown"
+    RAW = "raw", "Raw / as-received (no corporate-action adjustment applied)"
+    ADJUSTED = "adjusted", "Adjusted for corporate actions"
+
+
+class ImportBatch(models.Model):
+    """One row per fetch/seed operation. Groups the PriceHistory rows it
+    wrote and keeps bounded, secret-free metadata for troubleshooting —
+    never raw auth headers/cookies/tokens, and never an unbounded raw
+    response body."""
+
+    source = models.CharField(max_length=32, choices=DataSource.choices, default=DataSource.UNKNOWN, db_index=True)
+    exchange = models.CharField(max_length=3, choices=Exchange.choices, blank=True)
+    started_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    row_count = models.IntegerField(default=0)
+    stock_count = models.IntegerField(default=0)
+    request_meta = models.JSONField(default=dict, blank=True, help_text="URL/sub-source/status/counts/timing only — never headers, cookies or tokens")
+    error = models.TextField(blank=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+
+    def __str__(self):
+        return f"{self.source} batch #{self.id} ({self.row_count} rows)"
+
+
 class Stock(models.Model):
     exchange = models.CharField(max_length=3, choices=Exchange.choices, default=Exchange.DSE)
     trading_code = models.CharField(max_length=32, db_index=True)
@@ -50,6 +103,24 @@ class Stock(models.Model):
         return f"{self.exchange}-{self.trading_code}".lower()
 
 
+class PriceHistoryQuerySet(models.QuerySet):
+    def live(self):
+        """Excludes synthetic/demo/mirror-fallback rows — the default for
+        analysis, training and backtests. Legacy rows with unknown
+        provenance are NOT excluded here: treating the entire pre-Phase-6
+        dataset as suspect would make the product unusable, and "unknown"
+        is not evidence of being fake. See the Phase 6 report for the
+        honest count of unknown-provenance rows still in this queryset."""
+        return self.exclude(is_synthetic=True)
+
+    def demo_only(self):
+        return self.filter(is_synthetic=True)
+
+
+class PriceHistoryManager(models.Manager.from_queryset(PriceHistoryQuerySet)):
+    pass
+
+
 class PriceHistory(models.Model):
     stock = models.ForeignKey(Stock, on_delete=models.CASCADE, related_name="prices")
     date = models.DateField(db_index=True)
@@ -59,6 +130,16 @@ class PriceHistory(models.Model):
     close = models.FloatField()
     volume = models.BigIntegerField(default=0)
     value = models.FloatField(default=0)
+
+    # --- Phase 6: provenance & quality -----------------------------------
+    source = models.CharField(max_length=32, choices=DataSource.choices, default=DataSource.UNKNOWN, db_index=True)
+    is_synthetic = models.BooleanField(default=False, db_index=True, help_text="True for demo-seeded/mirror-fallback data — excluded from live analysis by default")
+    fetched_at = models.DateTimeField(null=True, blank=True, help_text="When this row was actually written by a fetch/seed; null for legacy rows where this was never recorded")
+    adjustment_status = models.CharField(max_length=16, choices=AdjustmentStatus.choices, default=AdjustmentStatus.UNKNOWN)
+    import_batch = models.ForeignKey(ImportBatch, null=True, blank=True, on_delete=models.SET_NULL, related_name="price_rows")
+    quality_flags = models.JSONField(default=list, blank=True, help_text="Detected issues: impossible OHLC, abnormal jump, stale-quote run, missing-session gap, etc.")
+
+    objects = PriceHistoryManager()
 
     class Meta:
         unique_together = ("stock", "date")
@@ -70,6 +151,34 @@ class PriceHistory(models.Model):
 
     def __str__(self):
         return f"{self.stock.trading_code} {self.date} {self.close}"
+
+
+class PriceHistoryRevision(models.Model):
+    """Audit trail: a snapshot of a PriceHistory row's prior values,
+    written whenever a write path is about to materially change an
+    existing row (e.g. a later fetch overwrites an earlier one for the
+    same stock/date) — so that overwrite is never a silent loss of
+    evidence. price_history uses SET_NULL (not CASCADE) so this survives
+    even if the row it describes is ever deleted."""
+
+    price_history = models.ForeignKey(PriceHistory, null=True, blank=True, on_delete=models.SET_NULL, related_name="revisions")
+    stock = models.ForeignKey(Stock, on_delete=models.CASCADE, related_name="price_revisions")
+    date = models.DateField(db_index=True)
+    previous_open = models.FloatField(null=True, blank=True)
+    previous_high = models.FloatField(null=True, blank=True)
+    previous_low = models.FloatField(null=True, blank=True)
+    previous_close = models.FloatField(null=True, blank=True)
+    previous_volume = models.BigIntegerField(null=True, blank=True)
+    previous_source = models.CharField(max_length=32, blank=True)
+    new_source = models.CharField(max_length=32, blank=True)
+    reason = models.CharField(max_length=64, blank=True)
+    recorded_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-recorded_at"]
+
+    def __str__(self):
+        return f"{self.stock.trading_code} {self.date} revision @ {self.recorded_at:%Y-%m-%d %H:%M}"
 
 
 class TechnicalSnapshot(models.Model):
@@ -154,14 +263,49 @@ class BacktestRun(models.Model):
     name = models.CharField(max_length=128)
     strategy = models.CharField(max_length=64)
     exchange = models.CharField(max_length=3, choices=Exchange.choices, blank=True)
+    # start_date/end_date are the REQUESTED window, strictly enforced (no
+    # signal/execution outside it). data_start_date/data_end_date are the
+    # actual first/last dates among observations truly used, which can be
+    # narrower than requested if a stock's history doesn't reach that far —
+    # never wider.
     start_date = models.DateField()
     end_date = models.DateField()
+    data_start_date = models.DateField(null=True, blank=True)
+    data_end_date = models.DateField(null=True, blank=True)
+
+    engine_version = models.CharField(
+        max_length=8,
+        default="v1",
+        help_text="v1 = pre-Phase-5 single-stock engine (legacy rows, kept for history). v2 = portfolio engine with costs/liquidity/benchmarks.",
+    )
+
     total_trades = models.IntegerField(default=0)
     win_rate = models.FloatField(default=0)
     avg_return_pct = models.FloatField(default=0)
+    avg_win_pct = models.FloatField(null=True, blank=True)
+    avg_loss_pct = models.FloatField(null=True, blank=True)
     avg_days_to_peak = models.FloatField(null=True, blank=True)
     avg_days_to_target = models.FloatField(null=True, blank=True)
     max_drawdown_pct = models.FloatField(null=True, blank=True)
+
+    initial_cash = models.FloatField(null=True, blank=True)
+    final_cash = models.FloatField(null=True, blank=True)
+    final_equity = models.FloatField(null=True, blank=True)
+    total_return_pct = models.FloatField(null=True, blank=True)
+    annualized_return_pct = models.FloatField(null=True, blank=True)
+    sharpe_ratio = models.FloatField(null=True, blank=True)
+    sortino_ratio = models.FloatField(null=True, blank=True)
+    profit_factor = models.FloatField(null=True, blank=True)
+    turnover_pct = models.FloatField(null=True, blank=True)
+    total_costs = models.FloatField(null=True, blank=True)
+    avg_exposure_pct = models.FloatField(null=True, blank=True)
+
+    benchmark_buy_hold_return_pct = models.FloatField(null=True, blank=True)
+    benchmark_index_return_pct = models.FloatField(null=True, blank=True)
+
+    cost_config = models.JSONField(default=dict, blank=True)
+    breakdown = models.JSONField(default=dict, blank=True, help_text="Results by year / exchange / sector, with min-sample warnings")
+    warnings = models.JSONField(default=list, blank=True, help_text="Suspended securities, corporate-action exclusions, rejected/sized-down trades, etc.")
     summary = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -191,6 +335,24 @@ class MarketSnapshot(models.Model):
 
     def __str__(self):
         return f"{self.exchange} {self.as_of}"
+
+
+class MarketHoliday(models.Model):
+    """A day both DSE and CSE were closed for a reason other than the
+    regular Sun-Thu trading week (national holidays, Eid, etc.). There's no
+    official machine-readable DSE/CSE holiday calendar to sync from, so this
+    is maintained by hand (via /admin) — see market/services/trading_calendar.py,
+    which is the only reader of this table."""
+
+    date = models.DateField(unique=True)
+    name = models.CharField(max_length=200)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date"]
+
+    def __str__(self):
+        return f"{self.date} - {self.name}"
 
 
 class Watchlist(models.Model):
@@ -257,3 +419,97 @@ class CloseLearnState(models.Model):
 
     def __str__(self):
         return f"CloseLearn[{self.key}] bias={self.return_bias:.4f} n={self.settled_count}"
+
+
+class MLModelStatus(models.TextChoices):
+    ACTIVE = "active", "Active"
+    EXPERIMENTAL = "experimental", "Experimental"
+    INACTIVE = "inactive", "Inactive"
+
+
+class MLModelVersion(models.Model):
+    """One row per training run of a given model family. Only a training
+    run whose walk-forward out-of-sample skill vs. its naive baseline is
+    positive may be flagged is_active — inference code must refuse to use
+    experimental/inactive models for confident (score-shifting) output."""
+
+    model_name = models.CharField(max_length=64, db_index=True, help_text="e.g. forward_return_rf, next_close_rf")
+    version = models.CharField(max_length=32, help_text="Timestamp-based, e.g. 20260729-101530")
+    exchange_scope = models.CharField(max_length=16, default="combined", help_text="DSE / CSE / combined")
+    status = models.CharField(max_length=16, choices=MLModelStatus.choices, default=MLModelStatus.EXPERIMENTAL)
+    is_active = models.BooleanField(default=False, db_index=True)
+    data_cutoff = models.DateField(help_text="Latest price bar date included in training data")
+    feature_schema = models.JSONField(default=list, blank=True)
+    train_rows = models.IntegerField(default=0)
+    fold_metadata = models.JSONField(default=list, blank=True, help_text="Per-fold dates, sample counts, class balance")
+    metrics = models.JSONField(default=dict, blank=True, help_text="Aggregated walk-forward metrics incl. baseline comparisons")
+    file_path = models.CharField(max_length=255, blank=True)
+    backup_path = models.CharField(max_length=255, blank=True)
+    notes = models.TextField(blank=True)
+    trained_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-trained_at"]
+
+    def __str__(self):
+        return f"{self.model_name}[{self.exchange_scope}] {self.version} ({self.status})"
+
+
+class TaskStatus(models.TextChoices):
+    STARTED = "started", "Started"
+    SUCCESS = "success", "Success"
+    FAILURE = "failure", "Failure"
+
+
+class TaskRun(models.Model):
+    """One row per background-task execution attempt — gives an
+    inspectable, persistent success/failure record independent of the
+    Celery result backend (which is opaque Redis state)."""
+
+    task_name = models.CharField(max_length=128, db_index=True)
+    status = models.CharField(max_length=16, choices=TaskStatus.choices, default=TaskStatus.STARTED)
+    started_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    detail = models.JSONField(default=dict, blank=True)
+    error = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+
+    def __str__(self):
+        return f"{self.task_name} [{self.status}] {self.started_at:%Y-%m-%d %H:%M}"
+
+
+class AdminAuditAction(models.TextChoices):
+    PIPELINE_TRIGGERED = "pipeline_triggered", "Pipeline triggered"
+    MODEL_ACTIVATED = "model_activated", "Model activated"
+    MODEL_DEACTIVATED = "model_deactivated", "Model deactivated"
+
+
+class AdminAuditLog(models.Model):
+    """Who did what, staff-side, for actions with real operational
+    consequence (enqueuing a fetch/retrain job that hits external
+    upstreams and rewrites data, or manually flipping which trained
+    model version is live). Append-only by convention — see
+    AdminAuditLogAdmin, which denies delete/change permission entirely.
+
+    `username_snapshot` is captured at write time (not just the `user`
+    FK) so the record stays legible even if the account is later
+    deleted — `user` uses SET_NULL, not CASCADE, for the same reason:
+    the audit trail must outlive the account it describes.
+    """
+
+    user = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="admin_audit_logs"
+    )
+    username_snapshot = models.CharField(max_length=150, blank=True)
+    action = models.CharField(max_length=32, choices=AdminAuditAction.choices, db_index=True)
+    detail = models.JSONField(default=dict, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.username_snapshot or 'system'} {self.action} @ {self.created_at:%Y-%m-%d %H:%M}"

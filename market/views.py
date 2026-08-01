@@ -1,3 +1,4 @@
+from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
 from django.db.models import Q
 from django.http import JsonResponse
@@ -5,12 +6,13 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 from datetime import datetime
-import json
 
 from market.models import AnalysisResult, BacktestRun, MarketSnapshot, PatternHit, Stock, TechnicalSnapshot, Watchlist
+from market.services.autosync import get_last_success_at
 from market.services.indicators import prices_to_df
-from market.services.predictor import CONFIDENCE_SCALE, predict_price_at_date
+from market.services.predictor import CONFIDENCE_SCALE, RESEARCH_DISCLAIMER, predict_price_at_date
 from market.services.screener import potential_shares, safe_buys, screen_summary, sell_candidates, top_by_sector
+from market.services.signal_status import market_edge_status, signal_status
 from notifications.models import Alert
 
 
@@ -38,6 +40,10 @@ def dashboard(request):
         close_learn = learn_status()
     except Exception:
         close_learn = None
+    try:
+        edge = market_edge_status()
+    except Exception:
+        edge = {"has_edge": False, "edge_reason": "Model status unavailable."}
     return render(
         request,
         "market/dashboard.html",
@@ -51,6 +57,8 @@ def dashboard(request):
             "sectors": sectors,
             "alerts": alerts,
             "close_learn": close_learn,
+            "edge": edge,
+            "data_last_updated": get_last_success_at(),
         },
     )
 
@@ -103,8 +111,16 @@ OVERVIEW_RANGES = {
 
 
 def _history_rows_for_stock(stock, range_key: str = "30d"):
-    """Return day-by-day OHLC rows + chart payload for the selected lookback."""
+    """Return day-by-day OHLC rows + chart payload for the selected lookback.
+
+    Walks every calendar day in the range (not just days with a row) so that
+    weekends/holidays can be labeled instead of silently vanishing from the
+    table. A trading day with no row (a genuine data gap) is still skipped,
+    same as before — only recognized closures get a placeholder row.
+    """
     from datetime import timedelta
+
+    from market.services.trading_calendar import closure_reason
 
     meta = HISTORY_RANGES.get(range_key) or HISTORY_RANGES["30d"]
     range_key = range_key if range_key in HISTORY_RANGES else "30d"
@@ -113,39 +129,62 @@ def _history_rows_for_stock(stock, range_key: str = "30d"):
         return range_key, meta["label"], [], []
 
     start = latest - timedelta(days=meta["days"] - 1)
-    prices = list(stock.prices.filter(date__gte=start, date__lte=latest).order_by("date"))
+    prices_by_date = {
+        p.date: p for p in stock.prices.filter(date__gte=start, date__lte=latest).order_by("date")
+    }
     rows = []
     chart = []
     prev_close = None
-    for p in prices:
-        change = None
-        change_pct = None
-        if prev_close and prev_close > 0:
-            change = round(p.close - prev_close, 2)
-            change_pct = round((p.close / prev_close - 1) * 100, 2)
-        rows.append(
-            {
-                "date": p.date,
-                "open": p.open,
-                "high": p.high,
-                "low": p.low,
-                "close": p.close,
-                "volume": p.volume,
-                "change": change,
-                "change_pct": change_pct,
-            }
-        )
-        chart.append(
-            {
-                "date": p.date.isoformat(),
-                "open": round(float(p.open), 2),
-                "high": round(float(p.high), 2),
-                "low": round(float(p.low), 2),
-                "close": round(float(p.close), 2),
-                "volume": int(p.volume or 0),
-            }
-        )
-        prev_close = p.close
+    d = start
+    while d <= latest:
+        p = prices_by_date.get(d)
+        if p is not None:
+            change = None
+            change_pct = None
+            if prev_close and prev_close > 0:
+                change = round(p.close - prev_close, 2)
+                change_pct = round((p.close / prev_close - 1) * 100, 2)
+            rows.append(
+                {
+                    "date": p.date,
+                    "open": p.open,
+                    "high": p.high,
+                    "low": p.low,
+                    "close": p.close,
+                    "volume": p.volume,
+                    "change": change,
+                    "change_pct": change_pct,
+                    "closed_reason": None,
+                }
+            )
+            chart.append(
+                {
+                    "date": p.date.isoformat(),
+                    "open": round(float(p.open), 2),
+                    "high": round(float(p.high), 2),
+                    "low": round(float(p.low), 2),
+                    "close": round(float(p.close), 2),
+                    "volume": int(p.volume or 0),
+                }
+            )
+            prev_close = p.close
+        else:
+            reason = closure_reason(d)
+            if reason:
+                rows.append(
+                    {
+                        "date": d,
+                        "open": None,
+                        "high": None,
+                        "low": None,
+                        "close": None,
+                        "volume": None,
+                        "change": None,
+                        "change_pct": None,
+                        "closed_reason": reason,
+                    }
+                )
+        d += timedelta(days=1)
     # Table newest-first is easier to scan; charts keep chronological order
     table_rows = list(reversed(rows))
     return range_key, meta["label"], table_rows, chart
@@ -182,10 +221,16 @@ def stock_detail(request, exchange: str, code: str):
 
     from market.models import NextDayCloseForecast
     from market.services.close_learn import learn_status
+    from market.services.price_format import round_to_tick
 
     next_close_fc = (
         NextDayCloseForecast.objects.filter(stock=stock).order_by("-target_date", "-as_of").first()
     )
+    next_close_forecast_price = round_to_tick(next_close_fc.predicted_close) if next_close_fc else None
+    try:
+        status = signal_status(stock, analysis, tech)
+    except Exception:
+        status = None
     return render(
         request,
         "market/stock_detail.html",
@@ -194,21 +239,26 @@ def stock_detail(request, exchange: str, code: str):
             "analysis": analysis,
             "tech": tech,
             "patterns": patterns,
-            "chart_json": json.dumps(chart),
+            # Passed as plain Python objects, not json.dumps() strings — the
+            # template embeds them via the `json_script` filter (HTML/script-
+            # safe serialization) rather than `|safe`, so nothing here can
+            # break out of its <script> tag or inject markup.
+            "chart_data": chart,
+            "history_chart_data": history_chart,
             "overview_ranges": OVERVIEW_RANGES,
-            "overview_ranges_json": json.dumps(OVERVIEW_RANGES),
             "overview_range": overview_range,
             "overview_range_label": OVERVIEW_RANGES[overview_range]["label"],
             "history_ranges": HISTORY_RANGES,
             "history_range": range_key,
             "history_range_label": range_label,
             "history_rows": history_rows,
-            "history_chart_json": json.dumps(history_chart),
             "history_count": len(history_rows),
             "in_watchlist": in_watchlist,
             "confidence_scale": CONFIDENCE_SCALE,
             "next_close_forecast": next_close_fc,
+            "next_close_forecast_price": next_close_forecast_price,
             "close_learn": learn_status(),
+            "status": status,
         },
     )
 
@@ -226,6 +276,7 @@ def predict_price_view(request, exchange: str, code: str):
 
     df = prices_to_df(stock.prices.all())
     result = predict_price_at_date(df, target)
+    result.setdefault("disclaimer", RESEARCH_DISCLAIMER)
     status = 200 if result.get("ok") else 400
     return JsonResponse(result, status=status)
 
@@ -276,45 +327,64 @@ def alerts_view(request):
     return render(request, "market/alerts.html", {"alerts": alerts})
 
 
-@login_required
+@staff_member_required
+def data_quality_view(request):
+    """Staff-only data-quality report: provenance breakdown, freshness per
+    exchange, flagged-row counts, and recent import batch health."""
+    from market.services.data_quality import provenance_report
+
+    return render(request, "market/data_quality.html", {"report": provenance_report()})
+
+
+@staff_member_required
+def ops_report_view(request):
+    """Staff-only operational readiness report (Phase 9): task health,
+    prediction volume, rejected-row/freshness summary, model drift, and
+    any currently-firing alert-threshold breaches."""
+    from market.services.ops_alerts import evaluate_alerts
+    from market.services.ops_metrics import ops_summary
+
+    summary = ops_summary()
+    alerts = evaluate_alerts(summary)
+    critical_count = sum(1 for a in alerts if a["severity"] == "critical")
+    return render(
+        request,
+        "market/ops_report.html",
+        {"summary": summary, "alerts": alerts, "critical_count": critical_count},
+    )
+
+
+@staff_member_required
 @require_POST
 def run_pipeline_view(request):
-    """Synchronous pipeline trigger for local demo (no Celery required)."""
+    """Enqueue a pipeline job — staff-only, POST + CSRF protected.
+
+    Fetch/analysis/training jobs hit external upstreams and can retrain
+    the ML model, so ordinary users must not be able to trigger them, and
+    web requests must not block on this work — it runs on a Celery
+    worker, not the request thread."""
+    from celery import chain
     from django.contrib import messages
-    from market.services.analyzer import fetch_all, run_full_analysis
-    from market.services.autosync import exclusive_db_write
+
+    from market.models import AdminAuditAction
+    from market.services.audit import record_admin_action
+    from market.tasks import fetch_all_market_data, run_full_analysis_task, seed_demo_and_analyze
 
     mode = request.POST.get("mode", "analyze")
     try:
-        # Wait for autosync to finish so SQLite does not raise "database is locked"
-        with exclusive_db_write(blocking=True, timeout=180):
-            if mode == "demo":
-                from market.services.dse_fetcher import seed_demo_universe
-
-                seed_demo_universe()
-                run_full_analysis(train_ml=True)
-            elif mode == "fetch":
-                # Live + historical OHLC for both exchanges, then analyze
-                result = fetch_all(use_demo_if_empty=False, include_history=True)
-                run_full_analysis(train_ml=True)
-                dse_h = result.get("dse_hist") or {}
-                cse_h = result.get("cse_hist") or {}
-                messages.success(
-                    request,
-                    "Live + history saved — "
-                    f"DSE {result.get('dse_live', {}).get('count', 0)} quotes, "
-                    f"{dse_h.get('bars_saved', 0)} history bars; "
-                    f"CSE {result.get('cse_live', {}).get('count', 0)} quotes, "
-                    f"{cse_h.get('bars_saved', 0)} history bars.",
-                )
-                return redirect("dashboard")
-            else:
-                run_full_analysis(train_ml=True)
-        messages.success(request, "Pipeline finished successfully.")
-    except TimeoutError:
-        messages.error(request, "Market sync is busy — wait a few seconds and try again.")
+        if mode == "demo":
+            seed_demo_and_analyze.delay()
+            messages.success(request, "Demo seed + analysis queued.")
+        elif mode == "fetch":
+            chain(fetch_all_market_data.s(include_history=True), run_full_analysis_task.si(train_ml=True)).delay()
+            messages.success(request, "Live + history fetch, then analysis, queued.")
+        else:
+            run_full_analysis_task.delay(train_ml=True)
+            messages.success(request, "Re-analysis queued.")
+        record_admin_action(request, AdminAuditAction.PIPELINE_TRIGGERED, {"mode": mode})
     except Exception as exc:
-        messages.error(request, f"Pipeline failed: {exc}")
+        messages.error(request, f"Could not queue pipeline job: {exc}")
+        record_admin_action(request, AdminAuditAction.PIPELINE_TRIGGERED, {"mode": mode, "error": str(exc)[:500]})
     return redirect("dashboard")
 
 
@@ -340,14 +410,43 @@ def health(request):
     return JsonResponse(payload)
 
 
-def ticker_json(request):
-    """Lightweight payload for the top market scroll bars; triggers auto-sync if stale."""
-    from market.services.autosync import get_sync_status, maybe_sync
-    from market.services.market_hours import both_exchanges_status
-    import threading
+def liveness_view(request):
+    """Is the process alive enough to route a request? Deliberately
+    touches no dependency (DB, broker, disk) — see
+    market/services/health.py's module docstring for why."""
+    return JsonResponse({"status": "alive"})
 
-    force = request.GET.get("refresh") in ("1", "true", "yes")
-    threading.Thread(target=maybe_sync, kwargs={"force": force}, daemon=True).start()
+
+def readiness_view(request):
+    """Can this process serve real traffic right now? 200 + "ready" only
+    if every essential dependency check passes; 503 + "not_ready"
+    otherwise, with per-check booleans only — no exception text or
+    connection details (those go to the structured log, staff-only)."""
+    from market.services.health import readiness_checks
+
+    checks = readiness_checks()
+    ready = all(checks.values())
+    return JsonResponse({"status": "ready" if ready else "not_ready", "checks": checks}, status=200 if ready else 503)
+
+
+def ticker_json(request):
+    """Lightweight, public, read-only payload for the top market scroll bars.
+
+    Serves cached/DB state only. It must never start a sync thread or force
+    a network refresh — that would let any anonymous visitor trigger a live
+    fetch on every page load. Freshness is handled solely by the server-side
+    autosync loop (market.services.autosync). Any `refresh`/similar query
+    param is intentionally ignored."""
+    from django.conf import settings
+
+    from market.services.autosync import get_sync_status
+    from market.services.market_hours import both_exchanges_status
+    from market.services.rate_limit import is_rate_limited
+
+    limit, period = getattr(settings, "TICKER_JSON_RATE_LIMIT", (60, 60))
+    client_ip = request.META.get("REMOTE_ADDR") or "unknown"
+    if is_rate_limited(f"ticker_json:{client_ip}", limit, period):
+        return JsonResponse({"detail": "Too many requests."}, status=429)
 
     def pack(qs):
         out = []

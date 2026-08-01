@@ -1,0 +1,34 @@
+[run]
+source =
+    accounts
+    api
+    market
+    notifications
+branch = True
+omit =
+    */migrations/*
+    */tests/*
+    */tests.py
+    manage.py
+    config/*
+    */admin.py
+    */apps.py
+    */management/commands/*
+
+[report]
+precision = 1
+show_missing = True
+skip_empty = True
+# Realistic initial gate for the whole project (currently ~52%), not the
+# 70% target — that 70% applies to critical business-logic modules
+# individually (indicators, models, predictor, screener, backtest, api),
+# which already meet or exceed it. See README's Testing section.
+fail_under = 45
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise NotImplementedError
+    if TYPE_CHECKING:
+
+[html]
+directory = htmlcov

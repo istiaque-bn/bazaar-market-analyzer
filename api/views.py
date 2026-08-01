@@ -5,6 +5,7 @@ from rest_framework import generics, permissions, status
 from rest_framework.authtoken.models import Token
 from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from api.serializers import (
@@ -15,11 +16,25 @@ from api.serializers import (
     StockSerializer,
     TechnicalSerializer,
 )
-from market.models import AnalysisResult, BacktestRun, PatternHit, Stock, TechnicalSnapshot
+from market.models import AnalysisResult, BacktestRun, Exchange, PatternHit, Stock, TechnicalSnapshot
 from market.services.indicators import prices_to_df
-from market.services.predictor import CONFIDENCE_SCALE, predict_price_at_date
+from market.services.predictor import CONFIDENCE_SCALE, RESEARCH_DISCLAIMER, predict_price_at_date
 from market.services.screener import potential_shares, safe_buys, screen_summary, sell_candidates
+from market.services.signal_status import close_learn_edge_status, ml_model_status
 from notifications.models import Alert
+
+
+def _signal_status_context() -> dict:
+    """Precompute ml/close model status once per request — shared via
+    serializer context so a list of N stocks doesn't run N ML-status
+    lookups + N next-close skill scans (see AnalysisSerializer.get_signal_status)."""
+    return {
+        "ml_status_by_exchange": {
+            Exchange.DSE: ml_model_status(Exchange.DSE),
+            Exchange.CSE: ml_model_status(Exchange.CSE),
+        },
+        "close_status": close_learn_edge_status(),
+    }
 
 
 class StockListAPI(generics.ListAPIView):
@@ -61,17 +76,22 @@ class AnalysisListAPI(generics.ListAPIView):
             qs = qs.filter(action=action.upper())
         return qs[:100]
 
+    def get_serializer_context(self):
+        return {**super().get_serializer_context(), **_signal_status_context()}
+
 
 class ScreenerAPI(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
+        ctx = _signal_status_context()
         return Response(
             {
+                "disclaimer": RESEARCH_DISCLAIMER,
                 "summary": screen_summary(),
-                "potential": AnalysisSerializer(potential_shares(20), many=True).data,
-                "safe_buys": AnalysisSerializer(safe_buys(10), many=True).data,
-                "sells": AnalysisSerializer(sell_candidates(10), many=True).data,
+                "potential": AnalysisSerializer(potential_shares(20), many=True, context=ctx).data,
+                "research_candidates": AnalysisSerializer(safe_buys(10), many=True, context=ctx).data,
+                "sells": AnalysisSerializer(sell_candidates(10), many=True, context=ctx).data,
             }
         )
 
@@ -88,6 +108,7 @@ class StockAnalysisAPI(APIView):
         patterns = PatternHit.objects.filter(stock=stock).order_by("-as_of")[:10]
         return Response(
             {
+                "disclaimer": RESEARCH_DISCLAIMER,
                 "stock": StockSerializer(stock).data,
                 "analysis": AnalysisSerializer(analysis).data if analysis else None,
                 "technicals": TechnicalSerializer(tech).data if tech else None,
@@ -98,6 +119,8 @@ class StockAnalysisAPI(APIView):
 
 class PredictPriceAPI(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "predict"
 
     def get(self, request, exchange, code):
         stock = Stock.objects.filter(exchange=exchange.upper(), trading_code=code.upper()).first()
@@ -113,6 +136,7 @@ class PredictPriceAPI(APIView):
         except ValueError:
             return Response({"ok": False, "error": "Invalid date. Use YYYY-MM-DD.", "confidence_scale": CONFIDENCE_SCALE}, status=400)
         result = predict_price_at_date(prices_to_df(stock.prices.all()), target)
+        result.setdefault("disclaimer", RESEARCH_DISCLAIMER)
         return Response(result, status=200 if result.get("ok") else 400)
 
 
@@ -132,6 +156,8 @@ class AlertListAPI(generics.ListAPIView):
 
 class RegisterAPI(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "register"
 
     def post(self, request):
         username = request.data.get("username")
@@ -144,13 +170,16 @@ class RegisterAPI(APIView):
         try:
             validate_password(password)
         except ValidationError as exc:
-            return Response({"detail": exc.messages}, status=400)
+            return Response({"password": exc.messages}, status=400)
         user = User.objects.create_user(username=username, password=password, email=email)
         token, _ = Token.objects.get_or_create(user=user)
         return Response({"token": token.key, "username": user.username}, status=status.HTTP_201_CREATED)
 
 
 class CustomAuthToken(ObtainAuthToken):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "login"
+
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
         token = Token.objects.get(key=response.data["token"])

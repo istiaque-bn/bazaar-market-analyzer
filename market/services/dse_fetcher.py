@@ -18,7 +18,14 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from market.models import Exchange, MarketSnapshot, PriceHistory, Stock, StockGroup
+from market.models import SYNTHETIC_SOURCES, DataSource, Exchange, MarketSnapshot, PriceHistory, Stock, StockGroup
+from market.services.data_quality import (
+    blocks_synthetic_overwrite,
+    create_import_batch,
+    finish_import_batch,
+    snapshot_revision_if_changed,
+    validate_ohlcv,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,17 +59,10 @@ def _session(verify: bool | str | None = None) -> requests.Session:
 
 
 def _get(url: str, timeout: int = 30):
-    """GET with SSL verify, then insecure fallback (common on local macOS Python)."""
-    headers = {"User-Agent": USER_AGENT}
-    try:
-        return _session().get(url, timeout=timeout)
-    except requests.exceptions.SSLError:
-        logger.warning("SSL verify failed for %s — retrying without verification", url)
-        # Prefer bare requests.get: Session+REQUESTS_CA_BUNDLE can still fail verify=False on some Pythons
-        import urllib3
-
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        return requests.get(url, headers=headers, timeout=timeout, verify=False)
+    """GET with certificate verification. Raises on SSL failure — callers
+    already catch broadly and log, so a bad cert fails the fetch instead of
+    silently retrying without verification."""
+    return _session().get(url, timeout=timeout)
 
 
 def _safe_float(val: Any, default: float | None = None) -> float | None:
@@ -84,7 +84,6 @@ def _safe_int(val: Any, default: int = 0) -> int:
 
 def fetch_dse_live_via_bdshare() -> pd.DataFrame | None:
     try:
-        _ensure_ssl_patch()
         from bdshare import get_current_trade_data
 
         df = get_current_trade_data()
@@ -163,33 +162,8 @@ def fetch_dse_live_via_scrape() -> pd.DataFrame | None:
         return None
 
 
-def _ensure_ssl_patch():
-    """Patch requests so bdshare works on machines with broken CA stores."""
-    import requests as _req
-    import urllib3
-
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    if getattr(_req.Session, "_bazaar_ssl_patch", False):
-        return
-    _orig = _req.Session.request
-
-    def _patched(self, method, url, **kwargs):
-        kwargs.setdefault("timeout", 45)
-        try:
-            return _orig(self, method, url, **kwargs)
-        except (_req.exceptions.SSLError, _req.exceptions.ConnectionError) as exc:
-            if "SSL" not in type(exc).__name__ and "SSL" not in str(exc):
-                raise
-            kwargs["verify"] = False
-            return _orig(self, method, url, **kwargs)
-
-    _req.Session.request = _patched
-    _req.Session._bazaar_ssl_patch = True
-
-
 def fetch_dse_history_via_bdshare(code: str, start: date, end: date) -> pd.DataFrame | None:
     try:
-        _ensure_ssl_patch()
         from bdshare import get_hist_data, get_basic_hist_data
 
         df = None
@@ -411,16 +385,35 @@ def generate_synthetic_history(code: str, days: int = 260, seed: int | None = No
 
 
 @transaction.atomic
-def upsert_live_quotes(df: pd.DataFrame, exchange: str = Exchange.DSE) -> int:
+def upsert_live_quotes(
+    df: pd.DataFrame,
+    exchange: str = Exchange.DSE,
+    source: str | None = None,
+    import_batch=None,
+) -> int:
     """
     Persist the latest successful live fetch into Stock + today's PriceHistory.
 
     - Always overwrites Stock.last_* with this fetch (last successful fetch wins).
     - Upserts PriceHistory for *today* only — past history is never deleted.
     - If today's bar already exists, keeps the earlier open and expands high/low.
+    - Tags every write with `source`/`fetched_at`/`import_batch`; snapshots
+      the prior values to PriceHistoryRevision before any material change.
+    - On a day the market is actually closed (weekend/holiday), Stock.last_*
+      is still refreshed (keeps the ticker showing the last known price) but
+      no PriceHistory row is written — DSE/CSE's "live quote" endpoint keeps
+      serving the last real close with no "market closed" signal, so writing
+      it under today's date would fabricate a duplicate bar for a day that
+      never traded (see market/services/trading_calendar.py).
     """
+    from market.services.trading_calendar import closure_reason
+
+    if source is None:
+        source = DataSource.DSE_LIVE if exchange == Exchange.DSE else DataSource.CSE_LIVE
     count = 0
     today = timezone.localdate()
+    now = timezone.now()
+    is_trading_day_today = closure_reason(today) is None
     for _, row in df.iterrows():
         code = str(row.get("trading_code", "")).strip().upper()
         if not code or code == "NAN":
@@ -446,48 +439,94 @@ def upsert_live_quotes(df: pd.DataFrame, exchange: str = Exchange.DSE) -> int:
         if ltp <= 0:
             count += 1
             continue
+        if not is_trading_day_today:
+            count += 1
+            continue
 
         existing = PriceHistory.objects.filter(stock=stock, date=today).first()
         if existing:
+            if blocks_synthetic_overwrite(existing, source):
+                logger.warning("Skipping synthetic overwrite of confirmed-real row %s/%s", stock.trading_code, today)
+                count += 1
+                continue
+            new_close = ltp
+            new_volume = volume
+            new_high = max(existing.high or ltp, high, ltp)
+            new_low = min(existing.low or ltp, low, ltp) if (existing.low or low) else ltp
+            snapshot_revision_if_changed(
+                existing,
+                {"open": existing.open, "high": new_high, "low": new_low, "close": new_close, "volume": new_volume},
+                new_source=source,
+                reason="live_quote_update",
+            )
             # Later fetch wins on close/LTP/volume; preserve session open; expand range
-            existing.close = ltp
-            existing.volume = volume
+            existing.close = new_close
+            existing.volume = new_volume
             existing.value = _safe_float(row.get("value"), existing.value) or existing.value
-            existing.high = max(existing.high or ltp, high, ltp)
-            existing.low = min(existing.low or ltp, low, ltp) if (existing.low or low) else ltp
+            existing.high = new_high
+            existing.low = new_low
             # Keep first open of the day unless it was missing/zero
             if not existing.open:
                 existing.open = open_px
+            existing.source = source
+            existing.is_synthetic = source in SYNTHETIC_SOURCES
+            existing.fetched_at = now
+            # We know this write is raw/unadjusted (no CA data source exists at all —
+            # see Phase 5), so a freshly-written row is never "unknown" adjustment.
+            existing.adjustment_status = "raw"
+            existing.import_batch = import_batch
+            existing.quality_flags = validate_ohlcv(existing.open, existing.high, existing.low, existing.close, existing.volume)
             existing.save()
         else:
+            open_v, high_v, low_v, close_v = open_px, max(high, ltp), min(low, ltp), ltp
             PriceHistory.objects.create(
                 stock=stock,
                 date=today,
-                open=open_px,
-                high=max(high, ltp),
-                low=min(low, ltp),
-                close=ltp,
+                open=open_v,
+                high=high_v,
+                low=low_v,
+                close=close_v,
                 volume=volume,
                 value=_safe_float(row.get("value"), 0) or 0,
+                source=source,
+                is_synthetic=source in SYNTHETIC_SOURCES,
+                fetched_at=now,
+                adjustment_status="raw",
+                import_batch=import_batch,
+                quality_flags=validate_ohlcv(open_v, high_v, low_v, close_v, volume),
             )
         count += 1
     return count
 
 
-def save_history(stock: Stock, df: pd.DataFrame, replace_all: bool = False) -> int:
+def save_history(
+    stock: Stock,
+    df: pd.DataFrame,
+    replace_all: bool = False,
+    source: str = DataSource.UNKNOWN,
+    import_batch=None,
+) -> int:
     """
     Persist ~1y OHLC. By default MERGES rows (upsert) so a later live fetch
     for *today* is not wiped when history is (re)loaded.
 
     If replace_all=True, deletes all bars for the stock first (rare/admin use).
+
+    Every write is tagged with `source`/`fetched_at`/`import_batch` and
+    validated (flags stored, never blocks the write). A synthetic `source`
+    is refused if it would overwrite a row that already has a confirmed
+    real source — see blocks_synthetic_overwrite().
     """
     if df is None or df.empty:
         return 0
     today = timezone.localdate()
+    now = timezone.now()
+    is_synthetic = source in SYNTHETIC_SOURCES
     if replace_all:
         PriceHistory.objects.filter(stock=stock).delete()
 
     saved = 0
+    skipped_protected = 0
     newest_close = None
     newest_volume = 0
     newest_date = None
@@ -505,22 +544,53 @@ def save_history(stock: Stock, df: pd.DataFrame, replace_all: bool = False) -> i
             "volume": volume,
             "value": float(row.get("value") or 0),
         }
+        existing_row = PriceHistory.objects.filter(stock=stock, date=d).first()
+        if blocks_synthetic_overwrite(existing_row, source):
+            skipped_protected += 1
+            continue
+
         # Do not clobber today's live bar with an older/stale archive close
         # if we already have a today row (live upsert wins for today).
-        if d == today and PriceHistory.objects.filter(stock=stock, date=today).exists():
+        if d == today and existing_row is not None:
             # Still refresh OHLC from history if history is for today and looks complete;
             # prefer max high / min low / history close only when no live preference —
             # keep existing close (live) but allow history to fill missing open/high/low.
-            existing = PriceHistory.objects.get(stock=stock, date=today)
-            existing.open = existing.open or defaults["open"]
-            existing.high = max(existing.high or 0, defaults["high"], existing.close or 0)
-            existing.low = min(
-                x for x in (existing.low, defaults["low"], existing.close) if x and x > 0
+            new_high = max(existing_row.high or 0, defaults["high"], existing_row.close or 0)
+            new_low = min(x for x in (existing_row.low, defaults["low"], existing_row.close) if x and x > 0)
+            new_open = existing_row.open or defaults["open"]
+            snapshot_revision_if_changed(
+                existing_row,
+                {"open": new_open, "high": new_high, "low": new_low, "close": existing_row.close, "volume": existing_row.volume},
+                new_source=source,
+                reason="history_merge_today",
             )
-            existing.save()
+            existing_row.open = new_open
+            existing_row.high = new_high
+            existing_row.low = new_low
+            existing_row.fetched_at = existing_row.fetched_at or now
+            existing_row.quality_flags = validate_ohlcv(existing_row.open, existing_row.high, existing_row.low, existing_row.close, existing_row.volume)
+            # Deliberately NOT re-tagging source/is_synthetic here: the row's
+            # authoritative close/volume still come from whatever wrote them
+            # (live), so its provenance stays attributed to that, not to
+            # this history merge which only fills in open/high/low bounds.
+            existing_row.save()
             saved += 1
         else:
-            PriceHistory.objects.update_or_create(stock=stock, date=d, defaults=defaults)
+            if existing_row is not None:
+                snapshot_revision_if_changed(existing_row, defaults, new_source=source, reason="history_upsert")
+            PriceHistory.objects.update_or_create(
+                stock=stock,
+                date=d,
+                defaults={
+                    **defaults,
+                    "source": source,
+                    "is_synthetic": is_synthetic,
+                    "fetched_at": now,
+                    "adjustment_status": "raw",
+                    "import_batch": import_batch,
+                    "quality_flags": validate_ohlcv(defaults["open"], defaults["high"], defaults["low"], defaults["close"], defaults["volume"]),
+                },
+            )
             saved += 1
         if newest_date is None or d >= newest_date:
             newest_date = d
@@ -537,50 +607,65 @@ def save_history(stock: Stock, df: pd.DataFrame, replace_all: bool = False) -> i
 
 
 def seed_demo_universe(days: int = 260) -> dict:
-    """Seed DSE+CSE demo stocks with 1y synthetic history."""
+    """Seed DSE+CSE demo stocks with 1y synthetic history. Always tagged
+    source=synthetic_demo/is_synthetic=True — excluded from live analysis,
+    training and backtests by default (PriceHistory.objects.live())."""
+    batch = create_import_batch(DataSource.SYNTHETIC_DEMO, days=days, symbols=len(DEMO_SYMBOLS))
     created = 0
-    for i, (code, name, sector, group) in enumerate(DEMO_SYMBOLS):
+    try:
+        for i, (code, name, sector, group) in enumerate(DEMO_SYMBOLS):
+            for exchange in (Exchange.DSE, Exchange.CSE):
+                stock, was_created = Stock.objects.update_or_create(
+                    exchange=exchange,
+                    trading_code=code if exchange == Exchange.DSE else f"{code}",
+                    defaults={
+                        "company_name": name,
+                        "sector": sector,
+                        "group": group if group in StockGroup.values else StockGroup.UNKNOWN,
+                        "is_active": True,
+                    },
+                )
+                df = generate_synthetic_history(f"{exchange}-{code}", days=days, seed=1000 + i * 10 + (0 if exchange == Exchange.DSE else 1))
+                save_history(stock, df, source=DataSource.SYNTHETIC_DEMO, import_batch=batch)
+                created += 1 if was_created else 0
+        # Market snapshots
         for exchange in (Exchange.DSE, Exchange.CSE):
-            stock, was_created = Stock.objects.update_or_create(
+            MarketSnapshot.objects.update_or_create(
                 exchange=exchange,
-                trading_code=code if exchange == Exchange.DSE else f"{code}",
+                as_of=timezone.localdate(),
                 defaults={
-                    "company_name": name,
-                    "sector": sector,
-                    "group": group if group in StockGroup.values else StockGroup.UNKNOWN,
-                    "is_active": True,
+                    "index_value": 6200 if exchange == Exchange.DSE else 18500,
+                    "index_change_pct": 0.35,
+                    "advancers": 120,
+                    "decliners": 95,
+                    "unchanged": 40,
+                    "notes": "Demo snapshot",
                 },
             )
-            df = generate_synthetic_history(f"{exchange}-{code}", days=days, seed=1000 + i * 10 + (0 if exchange == Exchange.DSE else 1))
-            save_history(stock, df)
-            created += 1 if was_created else 0
-    # Market snapshots
-    for exchange in (Exchange.DSE, Exchange.CSE):
-        MarketSnapshot.objects.update_or_create(
-            exchange=exchange,
-            as_of=timezone.localdate(),
-            defaults={
-                "index_value": 6200 if exchange == Exchange.DSE else 18500,
-                "index_change_pct": 0.35,
-                "advancers": 120,
-                "decliners": 95,
-                "unchanged": 40,
-                "notes": "Demo snapshot",
-            },
-        )
-    return {"stocks": Stock.objects.count(), "prices": PriceHistory.objects.count()}
+    except Exception as exc:
+        finish_import_batch(batch, error=str(exc))
+        raise
+    finish_import_batch(batch, row_count=PriceHistory.objects.filter(import_batch=batch).count(), stock_count=len(DEMO_SYMBOLS) * 2)
+    return {"stocks": Stock.objects.count(), "prices": PriceHistory.objects.count(), "import_batch_id": batch.id}
 
 
 def sync_dse_live() -> dict:
+    batch = create_import_batch(DataSource.DSE_LIVE, exchange=Exchange.DSE)
     df = fetch_dse_live_via_bdshare()
-    source = "bdshare"
+    sub_source = "bdshare"
     if df is None:
         df = fetch_dse_live_via_scrape()
-        source = "scrape"
+        sub_source = "scrape"
     if df is None:
+        finish_import_batch(batch, error="No live DSE data available", notes=f"tried={sub_source}")
         return {"ok": False, "source": None, "count": 0, "error": "No live DSE data available"}
-    count = upsert_live_quotes(df, Exchange.DSE)
-    return {"ok": True, "source": source, "count": count}
+    try:
+        count = upsert_live_quotes(df, Exchange.DSE, source=DataSource.DSE_LIVE, import_batch=batch)
+    except Exception as exc:
+        finish_import_batch(batch, error=str(exc), notes=f"sub_source={sub_source}")
+        raise
+    finish_import_batch(batch, row_count=count, notes=f"sub_source={sub_source}")
+    return {"ok": True, "source": sub_source, "count": count}
 
 
 def sync_dse_history(
@@ -606,40 +691,53 @@ def sync_dse_history(
     max_dates: list[date] = []
     errors: list[str] = []
     prefetched_map = {c.upper(): (df, src) for c, df, src in (_prefetched or [])}
-    for i, code in enumerate(codes, start=1):
-        stock, _ = Stock.objects.get_or_create(exchange=Exchange.DSE, trading_code=code.upper())
-        if code.upper() in prefetched_map:
-            df, source = prefetched_map[code.upper()]
-        else:
-            df, source = fetch_dse_history(code, start, end)
-        if df is None or df.empty:
-            if use_synthetic_fallback and not stock.prices.exists():
-                df = generate_synthetic_history(code, days=min(260, lookback))
-                save_history(stock, df)
-                fail += 1
-                errors.append(f"{code}: synthetic")
+    batch = create_import_batch(DataSource.DSE_HISTORY, exchange=Exchange.DSE, lookback_days=lookback, codes_requested=len(codes))
+    fallback_batch = None
+    try:
+        for i, code in enumerate(codes, start=1):
+            stock, _ = Stock.objects.get_or_create(exchange=Exchange.DSE, trading_code=code.upper())
+            if code.upper() in prefetched_map:
+                df, sub_source = prefetched_map[code.upper()]
             else:
-                skipped += 1
-                errors.append(f"{code}: no history")
-            continue
-        n = save_history(stock, df)
-        bars_saved += int(n or 0)
-        ok += 1
-        try:
-            min_dates.append(pd.to_datetime(df["date"]).min().date())
-            max_dates.append(pd.to_datetime(df["date"]).max().date())
-        except Exception:
-            pass
-        if i % 10 == 0 or i == len(codes):
-            logger.info(
-                "DSE history progress %s/%s (ok=%s skipped=%s source=%s bars+=%s)",
-                i,
-                len(codes),
-                ok,
-                skipped,
-                source,
-                bars_saved,
-            )
+                df, sub_source = fetch_dse_history(code, start, end)
+            if df is None or df.empty:
+                if use_synthetic_fallback and not stock.prices.exists():
+                    if fallback_batch is None:
+                        fallback_batch = create_import_batch(DataSource.SYNTHETIC_FALLBACK, exchange=Exchange.DSE, reason="real fetch unavailable")
+                    df = generate_synthetic_history(code, days=min(260, lookback))
+                    save_history(stock, df, source=DataSource.SYNTHETIC_FALLBACK, import_batch=fallback_batch)
+                    fail += 1
+                    errors.append(f"{code}: synthetic")
+                else:
+                    skipped += 1
+                    errors.append(f"{code}: no history")
+                continue
+            n = save_history(stock, df, source=DataSource.DSE_HISTORY, import_batch=batch)
+            bars_saved += int(n or 0)
+            ok += 1
+            try:
+                min_dates.append(pd.to_datetime(df["date"]).min().date())
+                max_dates.append(pd.to_datetime(df["date"]).max().date())
+            except Exception:
+                pass
+            if i % 10 == 0 or i == len(codes):
+                logger.info(
+                    "DSE history progress %s/%s (ok=%s skipped=%s source=%s bars+=%s)",
+                    i,
+                    len(codes),
+                    ok,
+                    skipped,
+                    sub_source,
+                    bars_saved,
+                )
+    except Exception as exc:
+        finish_import_batch(batch, row_count=bars_saved, stock_count=ok, error=str(exc))
+        if fallback_batch is not None:
+            finish_import_batch(fallback_batch, error=str(exc))
+        raise
+    finish_import_batch(batch, row_count=bars_saved, stock_count=ok)
+    if fallback_batch is not None:
+        finish_import_batch(fallback_batch, row_count=fail, stock_count=fail)
     return {
         "ok": ok,
         "failed_or_fallback": fail,

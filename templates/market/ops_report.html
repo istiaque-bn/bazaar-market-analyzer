@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Operational readiness{% endblock %}
+{% block content %}
+<div class="section-title">
+  <div>
+    <h2>Operational readiness</h2>
+    <p class="muted">Generated {{ summary.generated_at|date:"d M Y, h:i A" }} · staff-only</p>
+  </div>
+</div>
+
+<div class="grid-4">
+  <div class="stat"><div class="label">Alerts firing</div><div class="value">{{ alerts|length }}</div></div>
+  <div class="stat"><div class="label">Critical</div><div class="value">{{ critical_count }}</div></div>
+  <div class="stat"><div class="label">Latest prediction volume</div><div class="value">{{ summary.predictions.latest_count }}</div></div>
+  <div class="stat"><div class="label">Flagged price rows</div><div class="value">{{ summary.rejected_rows.flagged_rows }}</div></div>
+</div>
+
+<div class="disclaimer">
+  This page evaluates the Phase 9 alert thresholds (stale data, repeated fetch
+  failure, job overlap/stuck jobs, database problems, model degradation) live,
+  on every view — nothing here pushes to Telegram/email/a third-party monitor
+  on its own. See <code>docs/RUNBOOKS.md</code> for what to do about each
+  alert kind, and <code>python manage.py ops_alerts_scan</code> for the CLI
+  equivalent (usable from cron/CI with <code>--fail-on-critical</code>).
+</div>
+
+<section class="panel" style="margin-top:1.2rem;">
+  <h3>Firing alerts</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Severity</th><th>Key</th><th>Message</th></tr></thead>
+      <tbody>
+        {% for a in alerts %}
+        <tr>
+          <td><span class="badge {% if a.severity == 'critical' %}badge-sell{% else %}badge-watch{% endif %}">{{ a.severity|upper }}</span></td>
+          <td>{{ a.key }}</td>
+          <td>{{ a.message }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="3" class="muted">No alerts firing.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="grid-2" style="margin-top:1.2rem;">
+  <section class="panel">
+    <h3>Task health (last 7 days)</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Task</th><th>Runs</th><th>Failures</th><th>Avg duration</th><th>Latest</th></tr></thead>
+        <tbody>
+          {% for t in summary.tasks %}
+          <tr>
+            <td>{{ t.task_name }}</td>
+            <td>{{ t.runs }}</td>
+            <td>{{ t.failures }} {% if t.failure_rate %}({% widthratio t.failure_rate 1 100 %}%){% endif %}</td>
+            <td>{% if t.avg_duration_seconds != None %}{{ t.avg_duration_seconds|floatformat:1 }}s{% else %}—{% endif %}</td>
+            <td>
+              <span class="badge {% if t.latest_status == 'success' %}badge-buy{% elif t.latest_status == 'failure' %}badge-sell{% else %}badge-watch{% endif %}">{{ t.latest_status|upper }}</span>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5" class="muted">No task runs recorded in this window.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h3>Data freshness by exchange</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Exchange</th><th>Latest price date</th></tr></thead>
+        <tbody>
+          {% for ex, f in summary.rejected_rows.freshness.items %}
+          <tr><td>{{ ex }}</td><td>{{ f.latest_price_date|default:"—" }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <h3 style="margin-top:1rem;">Prediction volume trend</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>As of</th><th>Count</th></tr></thead>
+        <tbody>
+          {% for row in summary.predictions.trend %}
+          <tr><td>{{ row.as_of }}</td><td>{{ row.count }}</td></tr>
+          {% empty %}
+          <tr><td colspan="2" class="muted">No analysis rows yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<section class="panel" style="margin-top:1.2rem;">
+  <h3>Model evaluation &amp; drift</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model</th><th>Status</th><th>Skill vs. naive</th><th>Trained / settled on</th></tr></thead>
+      <tbody>
+        {% for ex, m in summary.models.forward_return_model.items %}
+        <tr>
+          <td>Forward-return classifier ({{ ex }})</td>
+          <td><span class="badge {% if m.deployed %}badge-buy{% else %}badge-hold{% endif %}">{{ m.status|upper|default:"NONE" }}</span></td>
+          <td>{% if m.skill_vs_naive != None %}{{ m.skill_vs_naive|floatformat:3 }}{% else %}—{% endif %}</td>
+          <td>{{ m.train_rows }} rows{% if m.data_cutoff %} · cutoff {{ m.data_cutoff }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+        <tr>
+          <td>Next-close learner</td>
+          <td><span class="badge {% if summary.models.next_close_model.has_edge %}badge-buy{% else %}badge-hold{% endif %}">{% if summary.models.next_close_model.has_edge %}EDGE{% else %}NO EDGE{% endif %}</span></td>
+          <td>{% if summary.models.next_close_model.skill_vs_naive != None %}{{ summary.models.next_close_model.skill_vs_naive|floatformat:3 }}{% else %}—{% endif %}</td>
+          <td>{{ summary.models.next_close_model.n }} settled forecasts</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="disclaimer">
+  Flagged price rows and freshness detail mirror the <a href="{% url 'data_quality' %}">Data QA</a> page —
+  this page adds task/job health, prediction volume, and model-drift alerting on top.
+</div>
+{% endblock %}

@@ -12,7 +12,8 @@ def market_nav(request):
             change = s.last_change_pct
             if change is None:
                 recent = list(
-                    PriceHistory.objects.filter(stock=s)
+                    PriceHistory.objects.live()
+                    .filter(stock=s)
                     .order_by("-date")
                     .values_list("close", flat=True)[:2]
                 )

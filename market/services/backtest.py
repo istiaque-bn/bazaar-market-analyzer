@@ -1,54 +1,28 @@
-"""Backtesting utilities for rule-based setups on 1y history."""
+"""Persistence wrapper around the Phase 5 portfolio backtest engine
+(market.services.backtest_engine). Every call creates a NEW BacktestRun
+row rather than overwriting a prior one by (name, strategy, exchange) —
+each run is an immutable historical record. Legacy rows created by the
+pre-Phase-5 engine are left untouched (engine_version="v1", the model
+field's default) and are never deleted by this module."""
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 
-import numpy as np
-import pandas as pd
 from django.utils import timezone
 
-from market.models import BacktestRun, Exchange, Stock
-from market.services.indicators import compute_indicators, prices_to_df
-from market.services.predictor import estimate_maturity_and_peak
+from market.models import BacktestRun
+from market.services.backtest_engine import (
+    CostConfig,
+    PortfolioBacktester,
+    PortfolioConfig,
+    TRADING_DAYS_PER_YEAR,
+    _breakdown_all,
+    _buy_and_hold_return_pct,
+    _compute_metrics,
+    _exchange_index_proxy_return_pct,
+)
 
-
-def _simulate_stock(df: pd.DataFrame, hold_days: int = 20, target: float = 0.05) -> list[dict]:
-    data = compute_indicators(df)
-    trades = []
-    i = 40
-    while i < len(data) - hold_days - 1:
-        row = data.iloc[i]
-        rsi = row.get("rsi_14")
-        macd_up = (
-            pd.notna(row.get("macd"))
-            and data.iloc[i - 1]["macd"] <= data.iloc[i - 1]["macd_signal"]
-            and row["macd"] > row["macd_signal"]
-        )
-        if not ((pd.notna(rsi) and rsi < 35) or macd_up):
-            i += 1
-            continue
-        entry = float(row["close"])
-        if entry <= 0:
-            i += 1
-            continue
-        window = data.iloc[i + 1 : i + hold_days + 1]
-        exit_price = float(window.iloc[-1]["close"])
-        # Optional early exit at target
-        for _, frow in window.iterrows():
-            if frow["close"] >= entry * (1 + target):
-                exit_price = float(frow["close"])
-                break
-        if exit_price <= 0:
-            i += hold_days
-            continue
-        ret = (exit_price / entry - 1) * 100
-        peak = float(window["close"].max())
-        peak_ret = (peak / entry - 1) * 100 if entry else 0
-        trough = float(window["close"].min())
-        dd = (trough / entry - 1) * 100 if entry else 0
-        trades.append({"return_pct": ret, "peak_return_pct": peak_ret, "drawdown_pct": dd})
-        i += hold_days  # non-overlapping
-    return trades
+ENGINE_VERSION = "v2"
 
 
 def run_backtest(
@@ -56,70 +30,106 @@ def run_backtest(
     strategy: str = "rsi_macd_v1",
     exchange: str | None = None,
     hold_days: int = 20,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    cost_config: CostConfig | None = None,
+    portfolio_config: PortfolioConfig | None = None,
+    include_demo: bool = False,
 ) -> BacktestRun:
-    qs = Stock.objects.filter(is_active=True)
-    if exchange:
-        qs = qs.filter(exchange=exchange)
+    """include_demo=False (default) excludes synthetic/demo/mirror-fallback
+    price rows from the tested universe — a real backtest must not be run
+    on fabricated data unless demo mode is explicitly selected."""
+    end_date = end_date or timezone.localdate()
+    start_date = start_date or (end_date - timedelta(days=365))
+    if start_date > end_date:
+        raise ValueError("start_date must be <= end_date")
 
-    all_trades: list[dict] = []
-    maturity_days: list[int] = []
-    peak_days: list[int] = []
+    cost_config = cost_config or CostConfig()
+    portfolio_config = portfolio_config or PortfolioConfig(hold_days=hold_days)
 
-    for stock in qs:
-        df = prices_to_df(stock.prices.all())
-        if len(df) < 100:
-            continue
-        all_trades.extend(_simulate_stock(df, hold_days=hold_days))
-        est = estimate_maturity_and_peak(df)
-        if est["maturity_days"]:
-            maturity_days.append(est["maturity_days"])
-        if est["peak_days"]:
-            peak_days.append(est["peak_days"])
+    engine = PortfolioBacktester(
+        exchange=exchange,
+        start_date=start_date,
+        end_date=end_date,
+        cost_config=cost_config,
+        portfolio_config=portfolio_config,
+        include_demo=include_demo,
+    )
+    result = engine.run()
 
-    if not all_trades:
-        end = timezone.localdate()
-        run, _ = BacktestRun.objects.update_or_create(
+    if not result.get("ok"):
+        run = BacktestRun.objects.create(
             name=name,
             strategy=strategy,
             exchange=exchange or "",
-            defaults={
-                "start_date": end - timedelta(days=365),
-                "end_date": end,
-                "total_trades": 0,
-                "win_rate": 0,
-                "avg_return_pct": 0,
-                "avg_days_to_target": None,
-                "avg_days_to_peak": None,
-                "max_drawdown_pct": None,
-                "summary": {"note": "No trades — need more price history."},
-            },
+            engine_version=ENGINE_VERSION,
+            start_date=start_date,
+            end_date=end_date,
+            initial_cash=portfolio_config.initial_cash,
+            cost_config=cost_config.as_dict(),
+            summary={"note": result.get("error", "No trades — insufficient data.")},
         )
         return run
 
-    returns = np.array([t["return_pct"] for t in all_trades])
-    wins = float((returns > 0).mean())
-    avg_ret = float(returns.mean())
-    max_dd = float(np.min([t["drawdown_pct"] for t in all_trades]))
-    end = timezone.localdate()
-    run, _ = BacktestRun.objects.update_or_create(
+    all_trades = result["trades"]
+    clean_trades = [t for t in all_trades if not t["corp_action_flagged"]]
+    excluded_trades = [t for t in all_trades if t["corp_action_flagged"]]
+
+    metrics = _compute_metrics(result["equity_curve"], clean_trades, portfolio_config.initial_cash)
+    breakdown = _breakdown_all(clean_trades)
+    buy_hold = _buy_and_hold_return_pct(result["universe"])
+    index_proxy = _exchange_index_proxy_return_pct(exchange, result["data_start_date"], result["data_end_date"])
+
+    warnings = list(result["warnings"])
+    if excluded_trades:
+        warnings.append(
+            f"{len(excluded_trades)} trade(s) excluded from headline metrics: entry or exit landed on a day "
+            f"with an implausible single-day return (>=25%), most likely an unadjusted split/rights issue — "
+            f"this database has no corporate-action/adjusted-close data source to confirm or correct it."
+        )
+    for k, v in result["rejections"].items():
+        if v:
+            warnings.append(f"{v} signal(s) rejected: {k.replace('_', ' ')}")
+
+    run = BacktestRun.objects.create(
         name=name,
         strategy=strategy,
         exchange=exchange or "",
-        defaults={
-            "start_date": end - timedelta(days=365),
-            "end_date": end,
-            "total_trades": len(all_trades),
-            "win_rate": round(wins, 4),
-            "avg_return_pct": round(avg_ret, 3),
-            "avg_days_to_target": float(np.mean(maturity_days)) if maturity_days else None,
-            "avg_days_to_peak": float(np.mean(peak_days)) if peak_days else None,
-            "max_drawdown_pct": round(max_dd, 3),
-            "summary": {
-                "hold_days": hold_days,
-                "median_return_pct": float(np.median(returns)),
-                "p75_return_pct": float(np.percentile(returns, 75)),
-                "stocks_tested": qs.count(),
-            },
+        engine_version=ENGINE_VERSION,
+        start_date=start_date,
+        end_date=end_date,
+        data_start_date=result["data_start_date"],
+        data_end_date=result["data_end_date"],
+        total_trades=metrics.get("total_trades", 0),
+        win_rate=metrics.get("win_rate", 0),
+        avg_return_pct=metrics.get("avg_return_pct", 0),
+        avg_win_pct=metrics.get("avg_win_pct"),
+        avg_loss_pct=metrics.get("avg_loss_pct"),
+        max_drawdown_pct=metrics.get("max_drawdown_pct"),
+        initial_cash=portfolio_config.initial_cash,
+        final_cash=round(result["final_cash"], 2),
+        final_equity=metrics.get("final_equity"),
+        total_return_pct=metrics.get("total_return_pct"),
+        annualized_return_pct=metrics.get("annualized_return_pct"),
+        sharpe_ratio=metrics.get("sharpe_ratio"),
+        sortino_ratio=metrics.get("sortino_ratio"),
+        profit_factor=metrics.get("profit_factor"),
+        turnover_pct=metrics.get("turnover_pct"),
+        total_costs=metrics.get("total_costs"),
+        avg_exposure_pct=metrics.get("avg_exposure_pct"),
+        benchmark_buy_hold_return_pct=buy_hold,
+        benchmark_index_return_pct=index_proxy,
+        cost_config=cost_config.as_dict(),
+        breakdown=breakdown,
+        warnings=warnings,
+        summary={
+            "hold_days": portfolio_config.hold_days,
+            "target_return_pct": portfolio_config.target_return_pct,
+            "position_size_pct": portfolio_config.position_size_pct,
+            "max_positions": portfolio_config.max_positions,
+            "stocks_tested": result["stocks_tested"],
+            "corporate_action_excluded_trades": len(excluded_trades),
+            "trading_days_per_year_assumed": TRADING_DAYS_PER_YEAR,
         },
     )
     return run
