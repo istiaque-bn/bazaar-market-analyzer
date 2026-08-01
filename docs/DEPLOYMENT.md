@@ -131,6 +131,46 @@ If Postgres cutover fails or surfaces a data problem:
    cheaper to diagnose-and-retry a cutover than to have deleted the
    evidence.
 
+## PostgreSQL — verified live (2026-08-01)
+
+Everything above was previously only structurally reviewed — `production.py`
+was never actually run against a real Postgres instance (Phase 10 flagged
+this explicitly). Closed that gap for real, against a disposable local
+PostgreSQL 16 instance:
+
+- `manage.py check --deploy` under `config.settings.production` with real
+  `POSTGRES_*` env vars: clean, `System check identified no issues`.
+- `manage.py migrate`: all 47 migrations across every app applied cleanly
+  to a fresh Postgres database — no SQLite-only assumption broke.
+- Full test suite run against real Postgres (not SQLite):
+  **418/419 pass.** The one failure
+  (`test_backup_restore.BackupBazaarCommandTests.test_writes_db_copy_checksums_and_manifest`)
+  is expected — it asserts a `source.sqlite3` file exists, which is
+  specific to `backup_bazaar`'s SQLite branch and doesn't apply when the
+  configured engine is Postgres; not a bug.
+- One test-environment-only finding: `market/services/daily_append.py`
+  calls `close_old_connections()` (correct and necessary in a real
+  long-running Celery worker against Postgres, to avoid stale-connection
+  errors) — but under Django's `TestCase` transactional test isolation,
+  this closes the connection the test's own wrapping transaction depends
+  on, surfacing as `OperationalError: the connection is closed` in
+  `test_task_idempotency.AppendDailyBarsIdempotencyTests.test_running_append_twice_does_not_duplicate_todays_bar`
+  specifically under Postgres (SQLite's connection handling doesn't
+  trigger it). This is a test-harness artifact, not a production bug — no
+  code fix applied; flagging here since it means that one specific test
+  doesn't currently prove its claim when run under Postgres.
+- **Real backup/restore drill, live** (closes the exact gap Phase 10
+  flagged as unverified — "no live Postgres instance exists here to prove
+  a real row-count-verified restore"): seeded representative data (20
+  `Stock`, 600 `PriceHistory`, 20 `AnalysisResult`, 21 `MarketHoliday`
+  rows), ran `manage.py backup_bazaar` (real `pg_dump`, custom format),
+  restored it with `pg_restore` into a separate disposable database, and
+  confirmed **exact row-count matches across every model** plus an
+  exact-value spot check on a real row. `manage.py verify_backup` also
+  passes its structural check now that `pg_restore` is actually on PATH.
+  The disposable restore-target database and seed data were dropped
+  afterward — this environment's real `db.sqlite3` was never touched.
+
 ## Redis / Celery
 
 `CELERY_BROKER_URL` must use `rediss://` (TLS) with authentication in
@@ -206,6 +246,64 @@ System check identified no issues (0 silenced).
 Run this as part of every deploy — a newly-introduced insecure setting
 will fail it (or fail the fail-fast `ImproperlyConfigured` checks in
 `production.py` first, before Django's own checks even run).
+
+## Render (recommended host, not Vercel)
+
+Vercel was evaluated and ruled out: it's a serverless-functions-only
+platform (no persistent processes), and this app needs three long-lived
+services — gunicorn (web), a Celery worker, and Celery beat (the 60s live
+market sync, scheduled daily append, ML training, close-learn settlement,
+and monthly holiday sync all depend on beat actually staying up). Vercel
+Cron is HTTP-triggered on a coarse schedule (daily on Hobby, 1-minute
+minimum on Pro) and would need every task rewritten as a standalone
+endpoint — a different, more limited architecture, not a deployment of
+this one.
+
+`render.yaml` at the repo root is a Render Blueprint that maps this app's
+existing shape directly onto Render's service types:
+
+| This app | Render resource |
+|---|---|
+| gunicorn web process | `bazaar-web` (`type: web`) |
+| `celery -A config worker` | `bazaar-celery-worker` (`type: worker`, with a persistent disk at `data/` for ML model `.pkl` files — see the file's comments for why only this one service needs it) |
+| `celery -A config beat` | `bazaar-celery-beat` (`type: worker`, no disk — beat only enqueues, never touches `data/cache/`) |
+| PostgreSQL | `bazaar-postgres` (managed database) |
+| Redis (Celery broker) | `bazaar-redis` (managed Key Value, private-network-only) |
+
+**Deploy steps:**
+
+1. Push `render.yaml` (already in this repo) to GitHub.
+2. In the Render dashboard: **New +** → **Blueprint** → connect the
+   `bazaar-market-analyzer` repo. Render reads `render.yaml` automatically.
+3. Generate one secret and reuse it for **all three** `SECRET_KEY`
+   prompts (`sync: false` on purpose — Render blueprints can't reliably
+   share one generated value across services, so this must be done by
+   hand; a mismatched key across processes breaks session/cookie
+   validity):
+   ```bash
+   python -c "import secrets; print(secrets.token_urlsafe(64))"
+   ```
+4. Leave `ALLOWED_HOSTS`/`CSRF_TRUSTED_ORIGINS` on `bazaar-web` as
+   anything for the first deploy — they can't be correct yet since the
+   hostname doesn't exist until after deploy.
+5. After the first deploy, note the assigned `*.onrender.com` URL (or
+   your custom domain), then in the `bazaar-web` service's environment
+   settings set:
+   - `ALLOWED_HOSTS=<your-hostname>`
+   - `CSRF_TRUSTED_ORIGINS=https://<your-hostname>`
+
+   and redeploy `bazaar-web`.
+6. Verify: `curl https://<your-hostname>/health/live` should return 200;
+   check the `bazaar-celery-worker` and `bazaar-celery-beat` service logs
+   for a clean startup (no `ImproperlyConfigured` errors — those mean an
+   env var is missing/wrong, not a Postgres/Redis problem).
+
+**Cost note:** background workers/beat have no free tier on Render, so
+this is at minimum three paid `starter`-plan services plus a Key Value
+instance; `bazaar-postgres` defaults to Render's free Postgres tier in
+`render.yaml`; it has retention limits — switch its `plan` before
+trusting it with real data. Check Render's current pricing before
+deploying; this file doesn't guess at exact dollar amounts.
 
 ## Dependency pinning & vulnerability scanning
 

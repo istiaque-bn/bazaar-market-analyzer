@@ -1,0 +1,205 @@
+# Render Blueprint — deploys Bazaar as three long-lived processes (web,
+# Celery worker, Celery beat) plus managed PostgreSQL and Redis, matching
+# the exact shape docs/DEPLOYMENT.md already documents (gunicorn + worker
+# + beat). This is deliberately NOT a fit for Vercel/serverless hosts —
+# see docs/DEPLOYMENT.md's "Render" section for why.
+#
+# Deploy: push this file to the repo, then in the Render dashboard choose
+# "New +" -> "Blueprint" and point it at this repo. Render will prompt for
+# every `sync: false` value below during that flow.
+#
+# IMPORTANT: SECRET_KEY is `sync: false` on all three services on purpose
+# — Render blueprints cannot share one generated value across services
+# reliably, so you must generate ONE value yourself and paste the SAME
+# string into all three SECRET_KEY prompts:
+#   python -c "import secrets; print(secrets.token_urlsafe(64))"
+# A mismatched SECRET_KEY across processes breaks session/cookie validity.
+#
+# ALLOWED_HOSTS / CSRF_TRUSTED_ORIGINS also need a real value, but the
+# hostname isn't known until after the web service's first deploy. Deploy
+# once, note the assigned *.onrender.com URL (or your custom domain), set
+# both env vars on bazaar-web in the dashboard, then redeploy.
+
+databases:
+  - name: bazaar-postgres
+    databaseName: bazaar
+    user: bazaar
+    plan: free # fine for evaluation; Render's free Postgres has retention
+    # limits — switch to a paid plan (e.g. basic-1gb) before relying on
+    # this for real data.
+
+services:
+  - type: keyvalue
+    name: bazaar-redis
+    plan: starter # Key Value has no free tier
+    ipAllowList: [] # empty = only reachable from other Render services in this project, not the public internet
+
+  - type: web
+    name: bazaar-web
+    runtime: python
+    plan: starter # free-tier web services spin down on idle, which would
+    # stall the market-hours-aware ticker/dashboard for the first visitor
+    # after a gap — starter avoids that.
+    buildCommand: "pip install -r requirements-lock.txt && python manage.py collectstatic --noinput"
+    preDeployCommand: "python manage.py migrate"
+    startCommand: "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 3"
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: SECRET_KEY
+        sync: false # see the note at the top of this file
+      - key: ALLOWED_HOSTS
+        sync: false # fill in after first deploy once you know the hostname
+      - key: CSRF_TRUSTED_ORIGINS
+        sync: false # e.g. https://bazaar-web.onrender.com
+      - key: TIME_ZONE
+        value: Asia/Dhaka
+      - key: SECURE_SSL_REDIRECT
+        value: "True"
+      - key: CORS_ALLOWED_ORIGINS
+        value: ""
+      - key: POSTGRES_DB
+        fromDatabase:
+          name: bazaar-postgres
+          property: database
+      - key: POSTGRES_USER
+        fromDatabase:
+          name: bazaar-postgres
+          property: user
+      - key: POSTGRES_PASSWORD
+        fromDatabase:
+          name: bazaar-postgres
+          property: password
+      - key: POSTGRES_HOST
+        fromDatabase:
+          name: bazaar-postgres
+          property: host
+      - key: POSTGRES_PORT
+        fromDatabase:
+          name: bazaar-postgres
+          property: port
+      - key: POSTGRES_SSLMODE
+        value: require
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: keyvalue
+          name: bazaar-redis
+          property: connectionString
+      - key: CELERY_BROKER_ALLOW_PLAINTEXT
+        value: "True" # Render's internal Key Value URL is private-network-only, not public — see docs/DEPLOYMENT.md
+      - key: DJANGO_LOG_LEVEL
+        value: INFO
+
+  - type: worker
+    name: bazaar-celery-worker
+    runtime: python
+    plan: starter # background workers have no free tier
+    buildCommand: "pip install -r requirements-lock.txt"
+    startCommand: "celery -A config worker --loglevel=info"
+    disk:
+      # ML model artifacts (data/cache/*.pkl) are only ever read/written
+      # by this worker process (web only reads precomputed DB rows), but
+      # they DO need to survive across redeploys/restarts of this one
+      # service — an ephemeral filesystem would silently lose a trained
+      # model on every deploy. Mounted at the app's own data/ dir so
+      # market/services/ml_model.py's existing CACHE_DIR path just works.
+      name: bazaar-worker-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: SECRET_KEY
+        sync: false # same value as bazaar-web — see the note at the top of this file
+      - key: ALLOWED_HOSTS
+        value: localhost # never serves HTTP; production.py just requires this to be non-empty
+      - key: CSRF_TRUSTED_ORIGINS
+        value: https://localhost
+      - key: TIME_ZONE
+        value: Asia/Dhaka
+      - key: SECURE_SSL_REDIRECT
+        value: "False" # no HTTP server in this process
+      - key: POSTGRES_DB
+        fromDatabase:
+          name: bazaar-postgres
+          property: database
+      - key: POSTGRES_USER
+        fromDatabase:
+          name: bazaar-postgres
+          property: user
+      - key: POSTGRES_PASSWORD
+        fromDatabase:
+          name: bazaar-postgres
+          property: password
+      - key: POSTGRES_HOST
+        fromDatabase:
+          name: bazaar-postgres
+          property: host
+      - key: POSTGRES_PORT
+        fromDatabase:
+          name: bazaar-postgres
+          property: port
+      - key: POSTGRES_SSLMODE
+        value: require
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: keyvalue
+          name: bazaar-redis
+          property: connectionString
+      - key: CELERY_BROKER_ALLOW_PLAINTEXT
+        value: "True"
+      - key: DJANGO_LOG_LEVEL
+        value: INFO
+
+  - type: worker
+    name: bazaar-celery-beat
+    runtime: python
+    plan: starter
+    buildCommand: "pip install -r requirements-lock.txt"
+    startCommand: "celery -A config beat --loglevel=info"
+    # No disk: beat only schedules tasks onto the broker, it never reads
+    # or writes data/cache/ itself.
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: SECRET_KEY
+        sync: false # same value as bazaar-web — see the note at the top of this file
+      - key: ALLOWED_HOSTS
+        value: localhost
+      - key: CSRF_TRUSTED_ORIGINS
+        value: https://localhost
+      - key: TIME_ZONE
+        value: Asia/Dhaka
+      - key: SECURE_SSL_REDIRECT
+        value: "False"
+      - key: POSTGRES_DB
+        fromDatabase:
+          name: bazaar-postgres
+          property: database
+      - key: POSTGRES_USER
+        fromDatabase:
+          name: bazaar-postgres
+          property: user
+      - key: POSTGRES_PASSWORD
+        fromDatabase:
+          name: bazaar-postgres
+          property: password
+      - key: POSTGRES_HOST
+        fromDatabase:
+          name: bazaar-postgres
+          property: host
+      - key: POSTGRES_PORT
+        fromDatabase:
+          name: bazaar-postgres
+          property: port
+      - key: POSTGRES_SSLMODE
+        value: require
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: keyvalue
+          name: bazaar-redis
+          property: connectionString
+      - key: CELERY_BROKER_ALLOW_PLAINTEXT
+        value: "True"
+      - key: DJANGO_LOG_LEVEL
+        value: INFO
