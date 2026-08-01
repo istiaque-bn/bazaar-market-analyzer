@@ -305,6 +305,81 @@ instance; `bazaar-postgres` defaults to Render's free Postgres tier in
 trusting it with real data. Check Render's current pricing before
 deploying; this file doesn't guess at exact dollar amounts.
 
+## Self-hosted on a laptop via Docker (sma.is)
+
+An alternative to Render: run the whole stack in Docker Compose on a
+personal machine, exposed publicly via a Cloudflare Tunnel (no router
+port-forwarding, works behind a dynamic home IP, TLS handled by
+Cloudflare's edge). Set up 2026-08-01 for domain `sma.is`.
+
+**Files:**
+
+| File | Purpose |
+|---|---|
+| `Dockerfile` | One image shared by web/worker/beat — `SERVICE_ROLE` env var picks the role. |
+| `docker-entrypoint.sh` | Waits for Postgres, then (web only) runs `migrate` + `collectstatic` before exec'ing the real command — worker/beat skip this to avoid three containers racing to migrate at once. |
+| `docker-compose.yml` | `db` (Postgres 16), `redis` (7), `web`, `celery-worker`, `celery-beat`, `cloudflared`. |
+| `.env.docker.example` | Template — copy to `.env.docker` (gitignored) and fill in. **Not** the same file as the repo's plain `.env`, which is for native (non-Docker) local dev and must not be touched by this setup. |
+| `scripts/update.sh` | `git pull` + rebuild + redeploy — the manual update path. |
+| `scripts/docker-autostart.sh` + `scripts/com.bazaar.docker-autostart.plist` | macOS `launchd` LaunchAgent — starts Docker Desktop and the compose stack automatically at login. |
+
+**Data persistence:** `./data` is bind-mounted into `web`/`celery-worker`
+at `/app/data`, so ML model artifacts (`data/cache/*.pkl`, only ever
+read/written by the worker — web only reads precomputed DB rows) and
+`data/backups/` survive container rebuilds. Postgres data lives in the
+named volume `postgres_data`, independent of the containers themselves.
+
+**One-time setup:**
+
+1. `cp .env.docker.example .env.docker` and fill in `SECRET_KEY`
+   (`python -c "import secrets; print(secrets.token_urlsafe(64))"`) and
+   `POSTGRES_PASSWORD` (any strong random string).
+2. **Cloudflare Tunnel** (needs your own Cloudflare account — sma.is's
+   nameservers must point at Cloudflare first):
+   - Cloudflare dashboard → **Zero Trust** → **Networks** → **Tunnels** →
+     **Create a tunnel** → choose **Docker** as the connector.
+   - Name it (e.g. `bazaar`), copy the token out of the sample
+     `docker run ... --token <TOKEN>` command it shows you.
+   - Paste that token into `.env.docker`'s `CLOUDFLARE_TUNNEL_TOKEN`.
+   - In the same tunnel's **Public Hostname** tab, add: hostname `sma.is`
+     (or `www.sma.is`), service type `HTTP`, URL `web:8000` (the Docker
+     Compose service name/port — cloudflared reaches it over the compose
+     network, not localhost).
+3. `docker compose --env-file .env.docker up -d --build` — first build
+   compiles some Python dependencies from source (this project targets a
+   very new Python version; not every package has a prebuilt wheel for it
+   yet), so it can take a while the first time.
+4. Verify: `curl -I https://sma.is/health/live/` should return `200`.
+5. **Auto-start on boot/login:**
+   ```bash
+   mkdir -p ~/Library/Logs/bazaar-docker
+   cp scripts/com.bazaar.docker-autostart.plist ~/Library/LaunchAgents/
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.bazaar.docker-autostart.plist
+   ```
+   This launches Docker Desktop and brings the compose stack up whenever
+   you log in — no need to run anything by hand after a reboot. Logs at
+   `~/Library/Logs/bazaar-docker/`.
+
+**Updating code** (deliberately manual, not automatic — the app's own
+data pipeline, live sync/daily append/ML training/holiday refresh, keeps
+running automatically via Celery beat regardless; only *code* changes
+require this step):
+
+```bash
+bash scripts/update.sh
+```
+
+Pulls `main`, rebuilds the image, and recreates the containers (migration
+and static collection happen automatically via `docker-entrypoint.sh` on
+`web`'s next startup).
+
+**Known tradeoffs of this approach vs. Render** (see the laptop-hosting
+discussion in chat history): the site's uptime is now this laptop's
+uptime — sleep, reboots, power loss, and home network outages all take
+it down; there's no managed backup/redundancy. `docker-autostart.sh`
+handles the login/reboot case, but the machine still needs to actually be
+powered on and connected to the internet for the site to be reachable.
+
 ## Dependency pinning & vulnerability scanning
 
 - `requirements.txt` — direct dependencies, exact-pinned.

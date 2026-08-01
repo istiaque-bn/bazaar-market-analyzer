@@ -163,6 +163,16 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
+# Nothing in this app ever reads a task's AsyncResult — every task's
+# outcome is tracked independently via market.models.TaskRun
+# (@record_task_run). Without this, every scheduled send from Celery
+# beat opens a Redis pub/sub "result consumer" connection it never
+# needed; that connection has proven unstable inside Docker specifically
+# (repeated "Connection to Redis lost" until beat's retry budget is
+# exhausted and it stops scheduling entirely). Doesn't affect
+# `.apply()`-based eager calls in tests (e.g. test_task_idempotency.py),
+# which return their result in-process regardless of this setting.
+CELERY_TASK_IGNORE_RESULT = True
 CELERY_TASK_ALWAYS_EAGER = os.getenv("CELERY_TASK_ALWAYS_EAGER", "False").lower() in ("1", "true", "yes")
 
 # Connection/worker hardening — sane defaults everywhere, overridable via
@@ -263,6 +273,13 @@ except Exception:
 # requests/urllib3 session is constructed, so it lives here, at settings
 # import time (about as early as it gets). No-ops safely if the
 # `truststore` package isn't installed.
+#
+# Only fixes this on macOS/Windows, though — their OS trust evaluation
+# does AIA-chasing (fetches a missing intermediate on the fly); a bare
+# Linux/OpenSSL trust store does not, so this same DSE/CSE cert-chain gap
+# reproduces inside Linux containers regardless of this setting. The
+# Docker image fixes it separately by vendoring the two specific missing
+# intermediates (see Dockerfile / docker/certs/).
 try:
     import truststore
 

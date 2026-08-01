@@ -1,0 +1,103 @@
+name: bazaar
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bazaar}
+      POSTGRES_USER: ${POSTGRES_USER:-bazaar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bazaar} -d ${POSTGRES_DB:-bazaar}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    restart: unless-stopped
+    environment: &django_env
+      SERVICE_ROLE: web
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-sma.is}
+      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-https://sma.is}
+      TIME_ZONE: Asia/Dhaka
+      SECURE_SSL_REDIRECT: "True" # cloudflared sets X-Forwarded-Proto: https; direct http://localhost:8000 will 301, use the tunnel/domain or curl -L
+      CORS_ALLOWED_ORIGINS: ""
+      POSTGRES_DB: ${POSTGRES_DB:-bazaar}
+      POSTGRES_USER: ${POSTGRES_USER:-bazaar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_SSLMODE: disable # traffic never leaves the docker-compose network
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_BROKER_ALLOW_PLAINTEXT: "True" # never leaves the docker-compose network
+      DJANGO_LOG_LEVEL: INFO
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:8001:8000" # local debugging only (8000 is taken by the native runserver dev instance); public access is via the sma.is tunnel below
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-worker:
+    build: .
+    restart: unless-stopped
+    command: ["celery", "-A", "config", "worker", "--loglevel=info"]
+    environment:
+      <<: *django_env
+      SERVICE_ROLE: worker
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-beat:
+    build: .
+    restart: unless-stopped
+    command: ["celery", "-A", "config", "beat", "--loglevel=info"]
+    environment:
+      <<: *django_env
+      SERVICE_ROLE: beat
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    # Quick Tunnel: no Cloudflare login/domain needed, assigns a random
+    # https://<words>.trycloudflare.com address on every start (check this
+    # container's logs for the current URL). Swap to the commented-out
+    # named-tunnel command below once a real domain is ready — that one
+    # gives a stable hostname instead.
+    command: ["tunnel", "--no-autoupdate", "--url", "http://web:8000"]
+    # command: ["tunnel", "run"]
+    # environment:
+    #   TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?CLOUDFLARE_TUNNEL_TOKEN must be set in .env}
+    depends_on:
+      - web
+
+volumes:
+  postgres_data:
