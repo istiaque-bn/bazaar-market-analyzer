@@ -355,6 +355,24 @@ def ops_report_view(request):
 
 
 @staff_member_required
+def ml_reliability_view(request):
+    """Staff-only ML Reliability Monitor dashboard: current status per
+    deployed model/exchange/horizon/window, skill vs. baseline,
+    calibration, drift warnings, economic diagnostics, recommendations,
+    and assessment history."""
+    from market.services.reliability_report import assessment_history, latest_assessments
+
+    groups = [
+        {
+            "latest": a,
+            "history": assessment_history(a.model_family, a.exchange, a.horizon_trading_days, a.window_label, limit=10)[1:],
+        }
+        for a in latest_assessments()
+    ]
+    return render(request, "market/ml_reliability.html", {"groups": groups})
+
+
+@staff_member_required
 @require_POST
 def run_pipeline_view(request):
     """Enqueue a pipeline job — staff-only, POST + CSRF protected.

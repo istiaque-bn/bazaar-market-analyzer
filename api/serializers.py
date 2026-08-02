@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from market.models import AnalysisResult, BacktestRun, PatternHit, Stock, TechnicalSnapshot
+from market.models import AnalysisResult, BacktestRun, PatternHit, ReliabilityAssessment, Stock, TechnicalSnapshot
 from notifications.models import Alert
 
 
@@ -91,6 +91,12 @@ class TechnicalSerializer(serializers.ModelSerializer):
 class BacktestSerializer(serializers.ModelSerializer):
     class Meta:
         model = BacktestRun
+        fields = "__all__"
+
+
+class ReliabilityAssessmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReliabilityAssessment
         fields = "__all__"
 
 

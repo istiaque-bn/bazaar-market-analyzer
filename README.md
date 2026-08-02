@@ -141,7 +141,10 @@ are mocked so tests never hit a live endpoint). The **critical business-logic
 modules already meet or exceed 70%**: indicators (100%), models incl.
 price-history (93.7%), predictor (80.1%), screener (91.8%), backtest (93.5%),
 api/serializers (100%), api/views (90.2%), `ml_model.py` (77.9%),
-`ml_training.py` (86.1%). Remaining low-coverage areas (`close_learn.py`'s
+`ml_training.py` (86.1%), and the ML Reliability Monitor's
+`reliability_report.py` (96.1%), `reliability_metrics.py` (93.6%),
+`reliability_settlement.py` (91.7%), `reliability_capture.py` (83.9%),
+`reliability_drift.py`/`reliability_recommend.py` (83.3%). Remaining low-coverage areas (`close_learn.py`'s
 older forecast/backfill code paths, `dse_fetcher.py`/`cse_fetcher.py`
 orchestration beyond parsing, `market/views.py` page views, `autosync.py`
 status helpers) are the roadmap for future passes — tracked, not silently
@@ -441,6 +444,81 @@ HTTP endpoints, a staff page, and CLI commands). Summary:
   survival across user deletion, backup/restore incl. deliberately
   corrupted/mismatched fixtures) plus follow-up coverage for
   `ops_metrics`/`ops_alerts`/the `/ops/` view.
+
+## ML Reliability Monitor
+
+Ops metrics (above) show whether the pipeline is *running*; this answers
+a different question — whether `forward_return_rf` and `next_close_rf`
+are still *statistically useful*, using only predictions that were
+recorded before their outcomes were known.
+
+**What "reliability" means here.** Every day, once that session's
+`AnalysisResult` (classifier) and `NextDayCloseForecast` (regressor) rows
+exist, an immutable `PredictionSnapshot` row is captured for each —
+predicted value, a rule-based baseline (`predictor.predict_stock`'s
+score sign / prior session's return), a naive baseline (majority class /
+zero return — the same baselines the training-time deployment gate
+itself uses), the exact model version, and a feature-schema hash. Once
+written, none of that is ever changed again. Later, once the real
+trading session it targets has a price bar, settlement fills in the
+actual outcome. A "reliability assessment" then evaluates a rolling
+window (30/90/180/365 settled predictions) of one model version's own
+snapshots — never mixing across a retrain — and reports a status:
+
+| Status | Meaning |
+|---|---|
+| `insufficient_data` | Fewer than 30 settled predictions in this window — no claim can be made yet. |
+| `healthy` | Positive skill vs. the naive baseline, ≥60 samples, no calibration/drift concerns. |
+| `watch` | Positive skill but a mitigating concern (small sample, calibration drift, prediction-distribution drift). |
+| `degraded` / `critical` | Skill vs. naive baseline is not positive. |
+
+None of these mean "safe" or "profitable" — see the economic
+diagnostics on every assessment (a simple long/flat sanity check at
+1x/1.5x/2x `BacktestRun`'s existing cost assumptions, not a portfolio
+backtest) before drawing that conclusion.
+
+**Metrics**: accuracy/balanced accuracy/precision/recall/F1/ROC
+AUC/Brier/log loss/calibration error + reliability buckets (classifier);
+MAE/RMSE/median absolute error/SMAPE/direction accuracy/bias/correlation
+(regressor); skill vs. both the rule-based and naive baseline for both.
+95% confidence intervals via a seeded i.i.d. bootstrap (documented
+limitation: prediction snapshots aren't fully independent, so this
+understates true uncertainty vs. a rigorous block bootstrap).
+
+**Drift**: reference = the older half of the current window, current =
+the newer half (this project doesn't persist raw training-time feature
+distributions, so drift *since training* can't be measured directly —
+only drift *since the model went live*). PSI/KS on the prediction
+distribution, class-balance/calibration/performance drift between
+halves, and a feature-schema diff against what the active
+`MLModelVersion` was actually trained on. Crossing a threshold never
+triggers an automatic retrain — only a recommendation.
+
+**Run it**: `python manage.py assess_ml_reliability` (`--model`,
+`--exchange`, `--window`, `--model-version`, `--json`, `--settle-only`,
+`--dry-run` — `--dry-run` makes the whole run read-only, nothing is
+captured/settled/persisted). Scheduled daily via the
+`assess-ml-reliability-1520` Celery beat entry (`config/celery.py`),
+after `train_ml_model`/`close_learn_settlement`/the digest so that
+day's prediction artifacts already exist to capture from. Staff
+dashboard: `/ml-reliability/`. Staff-only JSON: `/api/ml-reliability/`.
+
+**Investigating a non-healthy status**: see `docs/RUNBOOKS.md`'s
+"Incident: ML reliability degradation" — how to read the recommendations
+(each cites the exact metric that produced it), recalibrate, retrain,
+compare against baselines, and roll back, without ever automatically
+activating a new model (any retrained candidate still has to pass the
+existing walk-forward evaluation + deployment gate).
+
+**Tests**: `market/tests/test_reliability_*.py`,
+`test_assess_ml_reliability_command.py`, `test_ml_reliability_view.py`,
+`api/tests/test_ml_reliability_api.py` — capture immutability/dedup,
+correct trading-session settlement (holidays, missing prices, suspended
+volume, delisted stocks), idempotent settlement/assessment, no
+look-ahead, fixed-example metric correctness, single-class handling,
+calibration buckets, deterministic bootstrap CIs, drift vs. no-drift
+controls, model-version and exchange isolation, cross-exchange
+divergence flagging, Celery locking/retry, and staff permissions.
 
 ## Release readiness (Phase 10)
 

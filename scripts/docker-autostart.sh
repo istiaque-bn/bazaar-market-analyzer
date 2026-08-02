@@ -6,6 +6,10 @@
 # idempotent and no-ops on already-running, unchanged containers.
 set -uo pipefail
 
+# launchd's default PATH is just /usr/bin:/bin:/usr/sbin:/sbin — it doesn't
+# include /usr/local/bin, where Docker Desktop's `docker` CLI symlink lives.
+export PATH="/usr/local/bin:$PATH"
+
 PROJECT_DIR="/Users/istiaque/python/Trial"
 LOG_DIR="$HOME/Library/Logs/bazaar-docker"
 mkdir -p "$LOG_DIR"

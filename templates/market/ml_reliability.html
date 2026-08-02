@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}ML Reliability Monitor{% endblock %}
+{% block content %}
+<div class="section-title">
+  <div>
+    <h2>ML Reliability Monitor</h2>
+    <p class="muted">Statistical evaluation of settled predictions vs. rule-based and naive baselines — staff-only</p>
+  </div>
+</div>
+
+<div class="disclaimer">
+  Every status below reflects only what settled predictions have actually shown so far — "insufficient evidence" and
+  "no demonstrated edge" are real, common outcomes here, not errors. Nothing on this page is a claim that a model is
+  "safe" or "profitable" — see the economic diagnostics on each card for why. Run
+  <code>python manage.py assess_ml_reliability --json</code> for the full structured output, and
+  <code>docs/RUNBOOKS.md</code> for how to investigate and act on any non-healthy status.
+</div>
+
+{% for g in groups %}
+{% with a=g.latest %}
+<section class="panel" style="margin-top:1.2rem;">
+  <div class="section-title">
+    <div>
+      <h3>
+        {{ a.get_model_family_display }} · {{ a.exchange }} · horizon={{ a.horizon_trading_days }}d · window={{ a.window_label }}
+      </h3>
+      <p class="muted">
+        n={{ a.sample_count }}
+        {% if a.period_start %}· evaluated {{ a.period_start }} → {{ a.period_end }}{% endif %}
+        · version {{ a.model_version_tag|default:"—" }} · run {{ a.run_at|date:"d M Y, h:i A" }}
+      </p>
+    </div>
+    <span class="badge {% if a.status == 'healthy' %}badge-buy{% elif a.status == 'insufficient_data' %}badge-hold{% elif a.status == 'watch' %}badge-watch{% else %}badge-sell{% endif %}">
+      {{ a.status|upper }}
+    </span>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Reason</th></tr></thead>
+      <tbody>
+        {% for r in a.reasons %}<tr><td>{{ r }}</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% with cls=a.metrics.classification reg=a.metrics.regression %}
+  {% if cls %}
+  <div class="grid-4" style="margin-top:0.8rem;">
+    <div class="stat"><div class="label">Accuracy</div><div class="value">{{ cls.model.accuracy|default:"—" }}</div></div>
+    <div class="stat"><div class="label">Balanced accuracy</div><div class="value">{{ cls.model.balanced_accuracy|default:"—" }}</div></div>
+    <div class="stat"><div class="label">Skill vs. naive (majority class)</div><div class="value">{{ cls.skill_vs_baseline.naive_majority_class|default:"—" }}</div></div>
+    <div class="stat"><div class="label">Calibration error</div><div class="value">{{ cls.model.calibration_error|default:"—" }}</div></div>
+  </div>
+  <p class="muted">Skill vs. rule-based baseline: {{ cls.skill_vs_baseline.rule_based|default:"—" }} · ROC AUC: {{ cls.model.roc_auc|default:"—" }} · Brier: {{ cls.model.brier|default:"—" }} · Log loss: {{ cls.model.log_loss|default:"—" }}</p>
+  {% if a.confidence_intervals.accuracy %}
+  <p class="muted">Accuracy 95% bootstrap CI: [{{ a.confidence_intervals.accuracy.low|default:"—" }}, {{ a.confidence_intervals.accuracy.high|default:"—" }}] (n_boot={{ a.confidence_intervals.accuracy.n_boot }})</p>
+  {% endif %}
+  {% endif %}
+  {% if reg %}
+  <div class="grid-4" style="margin-top:0.8rem;">
+    <div class="stat"><div class="label">MAE (return)</div><div class="value">{{ reg.model.mae|default:"—" }}</div></div>
+    <div class="stat"><div class="label">Direction hit rate</div><div class="value">{{ reg.model.direction_hit_rate|default:"—" }}</div></div>
+    <div class="stat"><div class="label">Skill vs. naive (zero-return)</div><div class="value">{{ reg.skill_vs_baseline.naive_zero_return|default:"—" }}</div></div>
+    <div class="stat"><div class="label">Bias</div><div class="value">{{ reg.model.bias|default:"—" }}</div></div>
+  </div>
+  <p class="muted">Skill vs. persistence baseline: {{ reg.skill_vs_baseline.rule_based_persistence|default:"—" }} · RMSE: {{ reg.model.rmse|default:"—" }} · Correlation: {{ reg.model.correlation|default:"—" }}</p>
+  {% if a.confidence_intervals.mae %}
+  <p class="muted">MAE 95% bootstrap CI: [{{ a.confidence_intervals.mae.low|default:"—" }}, {{ a.confidence_intervals.mae.high|default:"—" }}] (n_boot={{ a.confidence_intervals.mae.n_boot }})</p>
+  {% endif %}
+  {% endif %}
+  {% endwith %}
+
+  {% with econ=a.metrics.economic %}
+  {% if econ.n %}
+  <h4 style="margin-top:1rem;">Economic diagnostics (simple long/flat sanity check — not a portfolio backtest)</h4>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Cost level</th><th>Net total return</th><th>Max drawdown</th><th>Est. total cost</th></tr></thead>
+      <tbody>
+        <tr><td>1x</td><td>{{ econ.at_1x_cost.net_total_return_pct }}%</td><td>{{ econ.at_1x_cost.max_drawdown_pct }}%</td><td>{{ econ.at_1x_cost.estimated_total_cost_pct }}%</td></tr>
+        <tr><td>1.5x</td><td>{{ econ.at_1_5x_cost.net_total_return_pct }}%</td><td>{{ econ.at_1_5x_cost.max_drawdown_pct }}%</td><td>{{ econ.at_1_5x_cost.estimated_total_cost_pct }}%</td></tr>
+        <tr><td>2x</td><td>{{ econ.at_2x_cost.net_total_return_pct }}%</td><td>{{ econ.at_2x_cost.max_drawdown_pct }}%</td><td>{{ econ.at_2x_cost.estimated_total_cost_pct }}%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="muted">Turnover: {{ econ.turnover }} · Buy-&-hold benchmark: {{ econ.benchmark_buy_hold_total_return_pct }}% · Benchmark-relative (1x): {{ econ.benchmark_relative_return_pct }}%</p>
+  <p class="muted">{{ econ.policy }}</p>
+  {% endif %}
+  {% endwith %}
+
+  {% if a.drift.flags %}
+  <h4 style="margin-top:1rem;">Drift warnings</h4>
+  <ul>
+    {% for f in a.drift.flags %}<li>{{ f }}</li>{% endfor %}
+  </ul>
+  {% elif a.drift.note %}
+  <p class="muted">{{ a.drift.note }}</p>
+  {% else %}
+  <p class="muted">No drift flagged (reference vs. current half of this window).</p>
+  {% endif %}
+
+  {% if a.recommendations %}
+  <h4 style="margin-top:1rem;">Recommendations</h4>
+  <ul>
+    {% for rec in a.recommendations %}
+    <li><strong>{{ rec.action }}</strong> — {{ rec.reason }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if g.history %}
+  <details style="margin-top:0.8rem;">
+    <summary class="muted">Previous assessments ({{ g.history|length }})</summary>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Run at</th><th>n</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for h in g.history %}
+          <tr><td>{{ h.run_at|date:"d M Y, h:i A" }}</td><td>{{ h.sample_count }}</td><td>{{ h.status|upper }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endif %}
+</section>
+{% endwith %}
+{% empty %}
+<div class="disclaimer">
+  No assessments have run yet. Run <code>python manage.py assess_ml_reliability</code>, or wait for the scheduled
+  Celery task (see <code>config/celery.py</code>'s <code>assess-ml-reliability-1520</code> entry).
+</div>
+{% endfor %}
+{% endblock %}

@@ -15,6 +15,7 @@ urlpatterns = [
     path("pipeline/", views.run_pipeline_view, name="run_pipeline"),
     path("data-quality/", views.data_quality_view, name="data_quality"),
     path("ops/", views.ops_report_view, name="ops_report"),
+    path("ml-reliability/", views.ml_reliability_view, name="ml_reliability"),
     path("health/", views.health, name="health"),
     path("health/live/", views.liveness_view, name="health_live"),
     path("health/ready/", views.readiness_view, name="health_ready"),

@@ -13,6 +13,7 @@ from api.serializers import (
     AnalysisSerializer,
     BacktestSerializer,
     PatternSerializer,
+    ReliabilityAssessmentSerializer,
     StockSerializer,
     TechnicalSerializer,
 )
@@ -152,6 +153,18 @@ class AlertListAPI(generics.ListAPIView):
 
     def get_queryset(self):
         return Alert.objects.filter(user=self.request.user)[:50]
+
+
+class MLReliabilityAPI(APIView):
+    """Staff-only read-only view of the latest ML Reliability Monitor
+    assessments — see market.services.reliability_report."""
+
+    permission_classes = [permissions.IsAdminUser]
+
+    def get(self, request):
+        from market.services.reliability_report import latest_assessments
+
+        return Response({"assessments": ReliabilityAssessmentSerializer(latest_assessments(), many=True).data})
 
 
 class RegisterAPI(APIView):

@@ -198,6 +198,27 @@ def sync_holiday_calendar_task():
 
 
 @shared_task(
+    name="market.tasks.assess_ml_reliability",
+    autoretry_for=_TRANSIENT_ERRORS,
+    retry_backoff=True,
+    retry_backoff_max=120,
+    max_retries=2,
+    time_limit=600,
+    soft_time_limit=540,
+)
+@record_task_run("market.tasks.assess_ml_reliability")
+def assess_ml_reliability():
+    """Capture today's predictions, settle due outcomes, and assess both
+    model families against rolling windows. Never activates/deactivates a
+    model itself — see market.services.reliability_recommend."""
+    from market.services.autosync import exclusive_db_write
+    from market.services.reliability_report import run_reliability_assessment
+
+    with exclusive_db_write(blocking=True, timeout=300):
+        return run_reliability_assessment()
+
+
+@shared_task(
     name="market.tasks.analyze_and_notify",
     time_limit=900,
     soft_time_limit=840,

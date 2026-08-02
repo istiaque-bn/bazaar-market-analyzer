@@ -172,6 +172,91 @@ skill vs. its naive baseline is not positive.
    to overwrite), then use the admin "Reactivate" action on the old
    version's row and "Deactivate" on the bad new one — both audited.
 
+## Incident: ML reliability degradation
+
+**Symptom**: `/ml-reliability/` (or `python manage.py assess_ml_reliability`)
+shows `watch`, `degraded`, or `critical` for some (model, exchange,
+horizon, window) group. This is a different, more detailed signal than
+the `/ops/` "Incident: model degradation" alert above — it's scoped to
+one specific model *version's own* settled predictions (never mixed
+across a retrain), covers both model families, and includes calibration
+and drift, not just skill-vs-naive.
+
+1. **Read the reasons and recommendations first** — every status carries
+   plain-language reasons, and every recommendation cites the exact
+   metric(s) that produced it (`market/services/reliability_recommend.py`).
+   Don't act before reading them; `insufficient_data` and `watch` are
+   often just "not enough evidence yet," not a real problem.
+2. **`insufficient_data`** (< 30 settled predictions in the window): no
+   action needed except waiting — settlement happens automatically as
+   sessions close (`assess-ml-reliability-1520` in `config/celery.py`,
+   or run `python manage.py assess_ml_reliability --settle-only`
+   manually to force a catch-up pass).
+3. **`watch` from high calibration error** (`recalibrate_probabilities`
+   recommendation, classifier only): the model's ranking may still be
+   useful even if its stated probabilities are off. Check the
+   `calibration_buckets` in the JSON output (`--json`) — if predicted
+   probability consistently over/under-states actual frequency in a
+   specific band, that's a real recalibration candidate (e.g. Platt
+   scaling / isotonic regression) for the next retrain, not an emergency.
+4. **`watch`/`degraded` from drift** (`retrain_using_newer_data` /
+   `inspect_specific_feature` recommendations): the drift comparison is
+   reference (older half of the window) vs. current (newer half) — check
+   `drift.performance_drift`, `drift.prediction_distribution`, and
+   `drift.feature_schema` in the JSON output for which signal actually
+   fired. A `feature_schema` diff (`missing_features`/
+   `newly_introduced_features`) means the live feature-building code
+   (`market/services/ml_model.py`/`close_learn.py`'s `FEATURE_COLS`) has
+   changed since this model version was trained — that's a code/deploy
+   mismatch to fix directly, not something a retrain alone resolves.
+5. **`degraded`/`critical`** (skill vs. naive baseline non-positive):
+   same immediate-mitigation path as "Incident: model degradation" above
+   — Django admin → `MLModelVersion` → "Deactivate selected model
+   version(s) (audited)". The reliability monitor itself never flips
+   `is_active` — every recommendation is a suggestion for a human, by
+   design (see the module docstring in `reliability_recommend.py`).
+6. **`separate_dse_cse_models` recommendation** (in
+   `cross_exchange_flags`, not on an individual assessment): DSE and CSE
+   skill have diverged by more than `ml_model._justify_combining`'s own
+   0.15 threshold for a *combined*-scope model. Consider retraining with
+   per-exchange scope, or check whether one exchange's underlying data
+   quality has degraded (`/data-quality/`).
+7. **Retrain, compare, roll back**: identical procedure to "Incident:
+   model degradation" step 3-4 above — `python manage.py
+   train_ml_models`, and any resulting candidate must still pass the
+   existing walk-forward evaluation + deployment gate before it can ever
+   become `is_active`. To compare a retrained candidate against what it's
+   replacing, or against a specific historical version, use
+   `python manage.py assess_ml_reliability --model-version <tag>` for
+   each version's own track record. Rollback uses the same
+   `MLModelVersion.backup_path`/admin-reactivate procedure described
+   above.
+
+**Limitations of these metrics — read before treating any status as
+authoritative**:
+- **Backtests and walk-forward evaluation describe the past.** A
+  `healthy` status means "no problem was found in this window's settled
+  history" — it is not a guarantee, prediction, or promise about future
+  sessions. Markets change regimes; skill that was positive can turn
+  negative with no code change at all.
+- **Confidence intervals are an i.i.d. bootstrap**, not a time-series-
+  aware block bootstrap — prediction snapshots on nearby dates aren't
+  fully independent (shared market-wide moves, overlapping horizons), so
+  reported intervals are narrower than the true uncertainty.
+- **Drift reference = the older half of the same window**, not the
+  original training-time distribution (which this project doesn't
+  persist) — this detects drift *since going live*, not drift the model
+  already had at deployment.
+- **Economic diagnostics are a simple long/flat sanity check**
+  (`reliability_metrics.compute_economic_diagnostics`), not a portfolio
+  backtest — no position sizing, no shorting, no liquidity constraints.
+  See `BacktestRun`/`docs/DEPLOYMENT.md`'s backtest engine for that.
+- Never change the thresholds in `reliability_metrics.py`/
+  `reliability_drift.py` (`MIN_SAMPLES_*`, `HIGH_CALIBRATION_ERROR`,
+  `PSI_MODERATE`/`PSI_MAJOR`) merely to make a currently-unhealthy model
+  read as healthy — if a threshold is genuinely wrong, that's a decision
+  to make deliberately and document, not a way to silence an alert.
+
 ## Rollback: application code
 
 See `docs/DEPLOYMENT.md` — deploy the previous release the same way any

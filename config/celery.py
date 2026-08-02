@@ -67,6 +67,14 @@ app.conf.beat_schedule = {
         "task": "notifications.tasks.send_daily_digest",
         "schedule": crontab(hour=15, minute=0, day_of_week=_BD_WEEK),
     },
+    # ML Reliability Monitor: capture today's predictions, settle due
+    # outcomes, assess both model families against rolling windows. Runs
+    # after train-ml-model/close-learn-settlement/digest so the day's
+    # AnalysisResult/NextDayCloseForecast rows already exist to capture from.
+    "assess-ml-reliability-1520": {
+        "task": "market.tasks.assess_ml_reliability",
+        "schedule": crontab(hour=15, minute=20, day_of_week=_BD_WEEK),
+    },
     # Refresh the DSE holiday calendar (market.models.MarketHoliday) so next
     # month's holidays are on record before they're needed. Fires daily on
     # the 28th-31st at 23:30; the task itself only proceeds on the actual

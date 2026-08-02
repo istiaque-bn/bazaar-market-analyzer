@@ -480,6 +480,139 @@ class TaskRun(models.Model):
         return f"{self.task_name} [{self.status}] {self.started_at:%Y-%m-%d %H:%M}"
 
 
+class PredictionSnapshot(models.Model):
+    """One immutable row per served prediction from either ML model
+    family, captured from that day's existing prediction artifact
+    (AnalysisResult.ml_score for forward_return_rf, NextDayCloseForecast
+    for next_close_rf) rather than by re-running inference — see
+    market.services.reliability_capture. Once written, the predicted_*/
+    *_baseline_*/reference_close/confidence_* fields are never modified;
+    only settlement (outcome_*/settlement_*) writes to a row after
+    creation, and only while it's still PENDING. This is what makes the
+    row a trustworthy point-in-time record of what was actually
+    predicted, immune to later feature/price corrections."""
+
+    class ModelFamily(models.TextChoices):
+        FORWARD_RETURN_RF = "forward_return_rf", "Forward Return Classifier"
+        NEXT_CLOSE_RF = "next_close_rf", "Next Close Regressor"
+
+    class SettlementStatus(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SETTLED = "settled", "Settled"
+        EXCLUDED = "excluded", "Excluded"
+
+    model_family = models.CharField(max_length=32, choices=ModelFamily.choices, db_index=True)
+    model_version = models.ForeignKey(
+        MLModelVersion, null=True, blank=True, on_delete=models.SET_NULL, related_name="prediction_snapshots"
+    )
+    model_version_tag = models.CharField(max_length=32, help_text="Immutable copy of MLModelVersion.version at capture time")
+    feature_schema_version = models.CharField(max_length=32, blank=True, help_text="Hash of the feature-column list used at capture time")
+
+    exchange = models.CharField(max_length=3, choices=Exchange.choices, db_index=True)
+    stock = models.ForeignKey(Stock, null=True, blank=True, on_delete=models.SET_NULL, related_name="prediction_snapshots")
+    stock_trading_code = models.CharField(max_length=32, help_text="Immutable copy of the stock's trading code at capture time")
+
+    prediction_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    data_cutoff_date = models.DateField(db_index=True, help_text="Last trading session whose price data fed this prediction")
+    horizon_trading_days = models.PositiveSmallIntegerField()
+    target_date = models.DateField(null=True, blank=True, db_index=True, help_text="Trading session this prediction is settled against")
+
+    reference_close = models.FloatField(help_text="Close price at data_cutoff_date — the entry price for economic evaluation")
+
+    # Classifier-only (forward_return_rf)
+    predicted_class = models.BooleanField(null=True, blank=True, help_text="True = forward return predicted positive")
+    predicted_probability = models.FloatField(null=True, blank=True)
+    rule_baseline_class = models.BooleanField(null=True, blank=True, help_text="predictor.predict_stock's rule-score sign")
+    naive_baseline_class = models.BooleanField(null=True, blank=True, help_text="Majority class observed in the model's own training data")
+
+    # Regressor-only (next_close_rf)
+    predicted_return = models.FloatField(null=True, blank=True)
+    predicted_price = models.FloatField(null=True, blank=True)
+    rule_baseline_return = models.FloatField(null=True, blank=True, help_text="Persistence baseline: prior session's 1-day return")
+    naive_baseline_return = models.FloatField(null=True, blank=True, help_text="Zero-return (no-change) baseline")
+
+    confidence_value = models.FloatField(null=True, blank=True)
+    confidence_label = models.CharField(max_length=16, blank=True)
+
+    data_quality_status = models.CharField(max_length=16, default="ok", help_text="ok / stale / thin_liquidity")
+    data_quality_notes = models.JSONField(default=dict, blank=True)
+
+    outcome_return = models.FloatField(null=True, blank=True)
+    outcome_class = models.BooleanField(null=True, blank=True)
+    outcome_price = models.FloatField(null=True, blank=True)
+
+    settlement_status = models.CharField(
+        max_length=16, choices=SettlementStatus.choices, default=SettlementStatus.PENDING, db_index=True
+    )
+    settled_at = models.DateTimeField(null=True, blank=True)
+    exclusion_reason = models.CharField(max_length=64, blank=True)
+
+    class Meta:
+        ordering = ["-prediction_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["model_family", "model_version_tag", "stock_trading_code", "exchange", "data_cutoff_date", "horizon_trading_days"],
+                name="uniq_prediction_snapshot",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["model_family", "exchange", "settlement_status"]),
+            models.Index(fields=["model_family", "exchange", "horizon_trading_days", "target_date"]),
+        ]
+
+    def __str__(self):
+        return f"{self.model_family}[{self.exchange}] {self.stock_trading_code} @ {self.data_cutoff_date} ({self.settlement_status})"
+
+
+class ReliabilityAssessment(models.Model):
+    """One immutable row per (model family, exchange, horizon, window)
+    per assessment run — see market.services.reliability_report. Never
+    updated after creation; history accumulates as new rows, so past
+    assessments can't be silently revised."""
+
+    class Status(models.TextChoices):
+        INSUFFICIENT_DATA = "insufficient_data", "Insufficient data"
+        HEALTHY = "healthy", "Healthy"
+        WATCH = "watch", "Watch"
+        DEGRADED = "degraded", "Degraded"
+        CRITICAL = "critical", "Critical"
+
+    run_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    schema_version = models.CharField(max_length=16, default="1")
+
+    model_family = models.CharField(max_length=32, choices=PredictionSnapshot.ModelFamily.choices, db_index=True)
+    model_version = models.ForeignKey(
+        MLModelVersion, null=True, blank=True, on_delete=models.SET_NULL, related_name="reliability_assessments"
+    )
+    model_version_tag = models.CharField(max_length=32, blank=True)
+    exchange = models.CharField(max_length=3, choices=Exchange.choices, db_index=True)
+    horizon_trading_days = models.PositiveSmallIntegerField()
+    window_label = models.CharField(max_length=16, help_text="e.g. 30 / 90 / 180 / 365")
+    window_size = models.PositiveIntegerField()
+    period_start = models.DateField(null=True, blank=True)
+    period_end = models.DateField(null=True, blank=True)
+
+    sample_count = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=20, choices=Status.choices, db_index=True)
+    reasons = models.JSONField(default=list, blank=True)
+    recommendations = models.JSONField(default=list, blank=True)
+
+    metrics = models.JSONField(default=dict, blank=True)
+    confidence_intervals = models.JSONField(default=dict, blank=True)
+    drift = models.JSONField(default=dict, blank=True)
+    threshold_config = models.JSONField(default=dict, blank=True)
+    failure_detail = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-run_at"]
+        indexes = [
+            models.Index(fields=["model_family", "exchange", "horizon_trading_days", "window_label", "-run_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.model_family}[{self.exchange}] h={self.horizon_trading_days} w={self.window_label} {self.status} @ {self.run_at:%Y-%m-%d %H:%M}"
+
+
 class AdminAuditAction(models.TextChoices):
     PIPELINE_TRIGGERED = "pipeline_triggered", "Pipeline triggered"
     MODEL_ACTIVATED = "model_activated", "Model activated"

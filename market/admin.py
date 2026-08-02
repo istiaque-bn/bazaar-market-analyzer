@@ -12,8 +12,10 @@ from market.models import (
     MLModelVersion,
     NextDayCloseForecast,
     PatternHit,
+    PredictionSnapshot,
     PriceHistory,
     PriceHistoryRevision,
+    ReliabilityAssessment,
     Stock,
     TaskRun,
     TechnicalSnapshot,
@@ -220,6 +222,61 @@ class MLModelVersionAdmin(admin.ModelAdmin):
         "notes",
         "trained_at",
     )
+
+
+@admin.register(PredictionSnapshot)
+class PredictionSnapshotAdmin(admin.ModelAdmin):
+    """Read-only audit trail — see the model docstring. Only settlement
+    (still limited to outcome_*/settlement_* fields) ever touches a row
+    after creation; even that shouldn't happen from /admin."""
+
+    list_display = (
+        "model_family",
+        "exchange",
+        "stock_trading_code",
+        "data_cutoff_date",
+        "target_date",
+        "settlement_status",
+        "predicted_class",
+        "predicted_return",
+        "outcome_class",
+        "outcome_return",
+    )
+    list_filter = ("model_family", "exchange", "settlement_status", "data_quality_status")
+    search_fields = ("stock_trading_code", "model_version_tag")
+    date_hierarchy = "data_cutoff_date"
+    readonly_fields = [f.name for f in PredictionSnapshot._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ReliabilityAssessment)
+class ReliabilityAssessmentAdmin(admin.ModelAdmin):
+    """Read-only audit trail — historical assessments must not be
+    silently revised (see the model docstring)."""
+
+    list_display = (
+        "model_family",
+        "exchange",
+        "horizon_trading_days",
+        "window_label",
+        "sample_count",
+        "status",
+        "run_at",
+    )
+    list_filter = ("model_family", "exchange", "status", "window_label")
+    date_hierarchy = "run_at"
+    readonly_fields = [f.name for f in ReliabilityAssessment._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(AdminAuditLog)

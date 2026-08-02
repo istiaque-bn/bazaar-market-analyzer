@@ -12,4 +12,5 @@ urlpatterns = [
     path("screener/", views.ScreenerAPI.as_view(), name="api_screener"),
     path("backtests/", views.BacktestListAPI.as_view(), name="api_backtests"),
     path("alerts/", views.AlertListAPI.as_view(), name="api_alerts"),
+    path("ml-reliability/", views.MLReliabilityAPI.as_view(), name="api_ml_reliability"),
 ]
