@@ -31,7 +31,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from django.conf import settings
-from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
 
 from market.models import Exchange, Stock
 from market.services.indicators import compute_indicators, prices_to_df
@@ -79,6 +79,7 @@ FEATURE_COLS = [
     "return_20d",
     "volatility_20",
     "volume_ratio",
+    "turnover_ratio",
     "dist_sma20",
     "dist_sma50",
 ]
@@ -90,6 +91,21 @@ def _feature_frame(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     out = data.copy()
     out["volume_ratio"] = out["volume"] / out["volume_sma_20"].replace(0, np.nan)
+    # Traded value (price x volume), not just share count — comparable
+    # across stocks that span a huge price range (5-taka penny names to
+    # 500+-taka blue chips), where raw volume alone isn't apples-to-apples.
+    # Unlike the other features here, a missing/zero "value" (legacy rows
+    # predating turnover tracking, a genuine no-trade day, or a caller
+    # that built its DataFrame by hand without a "value" column at all)
+    # must NOT turn into NaN: build_training_panel() does a blanket
+    # dropna() across all FEATURE_COLS, so an unfillable ratio here would
+    # silently drop the whole row — shrinking the training set — rather
+    # than just losing this one feature's signal for that row. Fall back
+    # to 1.0 ("in line with its own recent average") instead.
+    if "value" in out.columns:
+        out["turnover_ratio"] = (out["value"] / out["value"].rolling(20, min_periods=10).mean().replace(0, np.nan)).fillna(1.0)
+    else:
+        out["turnover_ratio"] = 1.0
     out["dist_sma20"] = out["close"] / out["sma_20"] - 1
     out["dist_sma50"] = out["close"] / out["sma_50"] - 1
     out["fwd_ret_10"] = out["close"].shift(-10) / out["close"] - 1
@@ -173,7 +189,7 @@ def walk_forward_evaluate(panel: pd.DataFrame, n_folds: int = 5) -> dict:
         X_train_i = apply_imputer(imputer, X_train)
         X_test_i = apply_imputer(imputer, X_test)
 
-        model = RandomForestClassifier(n_estimators=120, max_depth=6, min_samples_leaf=8, random_state=42, n_jobs=-1)
+        model = XGBClassifier(n_estimators=120, max_depth=4, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=-1, eval_metric="logloss")
         model.fit(X_train_i, y_train)
         classes = list(model.classes_)
         proba = model.predict_proba(X_test_i)
@@ -256,7 +272,7 @@ def _final_fit_and_save(panel: pd.DataFrame, eval_result: dict, *, exchange_scop
     X, y = panel[FEATURE_COLS], panel["label"].to_numpy()
     imputer = fit_median_imputer(X)
     X_i = apply_imputer(imputer, X)
-    model = RandomForestClassifier(n_estimators=120, max_depth=6, min_samples_leaf=8, random_state=42, n_jobs=-1)
+    model = XGBClassifier(n_estimators=120, max_depth=4, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=-1, eval_metric="logloss")
     model.fit(X_i, y)
 
     skill = eval_result.get("skill_vs_naive")
@@ -314,16 +330,39 @@ def _final_fit_and_save(panel: pd.DataFrame, eval_result: dict, *, exchange_scop
     }
 
 
-def train_model(limit_stocks: int = 120) -> dict:
+def train_model(limit_stocks: int = 120, force: bool = False) -> dict:
     """Evaluate + (re)train the forward-return classifier. Always
     evaluates DSE and CSE separately via chronological walk-forward CV;
     only pools them into one deployed model when _justify_combining()
-    says the comparison supports it (see module docstring)."""
+    says the comparison supports it (see module docstring).
+
+    Skips the (expensive) walk-forward + fit if no label-resolvable data
+    newer than what's already deployed has arrived — every manual
+    "Analyze"/"Fetch" click and run_full_analysis(train_ml=True) call used
+    to force a full retrain unconditionally, several times a day,
+    producing byte-identical metrics since nothing had actually changed.
+    Compared against the panel's own max date rather than the latest raw
+    price date: a 10-day-forward label means the newest ~10 trading days
+    of prices can never resolve to a usable row, so data_cutoff
+    structurally lags raw price data by that much and would never match
+    it. Pass force=True to retrain regardless, e.g. after a feature/code
+    change."""
     dse_panel = build_training_panel(Exchange.DSE, limit_stocks=limit_stocks)
     cse_panel = build_training_panel(Exchange.CSE, limit_stocks=limit_stocks)
 
     if dse_panel.empty and cse_panel.empty:
         return {"ok": False, "error": "Not enough data to train"}
+
+    if not force:
+        candidate_cutoff = max(p["date"].max().date() for p in (dse_panel, cse_panel) if not p.empty)
+        already_current = any(
+            (v := active_model_version(MODEL_NAME, exchange_scope=scope)) is not None
+            and v.data_cutoff is not None
+            and v.data_cutoff >= candidate_cutoff
+            for scope in ("combined", Exchange.DSE, Exchange.CSE)
+        )
+        if already_current:
+            return {"ok": True, "skipped": "no new label-resolvable data since last train", "data_cutoff": candidate_cutoff.isoformat()}
 
     dse_eval = walk_forward_evaluate(dse_panel) if len(dse_panel) >= MIN_PANEL_ROWS else {"ok": False, "error": f"insufficient DSE rows ({len(dse_panel)})"}
     cse_eval = walk_forward_evaluate(cse_panel) if len(cse_panel) >= MIN_PANEL_ROWS else {"ok": False, "error": f"insufficient CSE rows ({len(cse_panel)})"}
@@ -393,7 +432,15 @@ def ml_probability(df: pd.DataFrame, exchange: str | None = None) -> float | Non
     feats = _feature_frame(df)
     if feats.empty:
         return None
-    row = feats.iloc[[-1]][FEATURE_COLS]
+    # Use the feature list the *deployed bundle* was actually trained
+    # with, not the live FEATURE_COLS constant — those two can legitimately
+    # diverge (e.g. mid-experiment on a new feature) without the active
+    # model having been retrained yet, and inference must keep matching
+    # whatever artifact is actually loaded, not today's module state.
+    feature_cols = bundle.get("features", FEATURE_COLS)
+    if any(c not in feats.columns for c in feature_cols):
+        return None
+    row = feats.iloc[[-1]][feature_cols]
     if row.isna().any(axis=None):
         return None
     imputer = bundle.get("imputer")

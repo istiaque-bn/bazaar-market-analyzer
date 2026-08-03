@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% load portfolio_extras %}
+{% block title %}Portfolios{% endblock %}
+{% block content %}
+<div class="section-title"><h2>Your portfolios</h2></div>
+<div class="disclaimer">
+  Figures below are personal-tracking estimates from cached/delayed market data — not a brokerage
+  statement, tax document, or investment advice.
+</div>
+
+<div class="grid-2">
+  {% for p, summary in summaries %}
+  <section class="panel">
+    <h3><a href="{% url 'portfolio_detail' p.id %}">{{ p.name }}</a>{% if p.is_default %} <span class="badge badge-watch tiny">Default</span>{% endif %}</h3>
+    <div class="grid-2">
+      <div class="stat">
+        <div class="label">Current value</div>
+        <div class="value">{{ summary.total_market_value|bdt }}</div>
+      </div>
+      <div class="stat">
+        <div class="label">Gain/loss</div>
+        <div class="value {{ summary.total_unrealized_pl|pl_class }}">
+          {{ summary.total_unrealized_pl|signed|default:"—" }}
+          {% if summary.total_unrealized_pl_pct != None %}<span class="tiny">({{ summary.total_unrealized_pl_pct|signed }}%)</span>{% endif %}
+        </div>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:0.6rem;">{{ summary.open_holdings_count }} open holding{{ summary.open_holdings_count|pluralize }}</p>
+    <a class="btn btn-small" href="{% url 'portfolio_detail' p.id %}">Open</a>
+  </section>
+  {% endfor %}
+</div>
+
+<div class="section-title"><h2>Create a new portfolio</h2></div>
+<section class="panel" style="max-width:420px;">
+  <form method="post" action="{% url 'portfolio_create' %}" class="form">
+    {% csrf_token %}
+    {{ create_form.name.label_tag }}
+    {{ create_form.name }}
+    {% if create_form.errors %}<p class="muted" style="color: var(--fall);">{{ create_form.name.errors|join:" " }}</p>{% endif %}
+    <button class="btn" type="submit">Create portfolio</button>
+  </form>
+</section>
+{% endblock %}

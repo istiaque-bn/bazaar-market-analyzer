@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import models
 from django.contrib.auth.models import User
 
@@ -646,3 +648,86 @@ class AdminAuditLog(models.Model):
 
     def __str__(self):
         return f"{self.username_snapshot or 'system'} {self.action} @ {self.created_at:%Y-%m-%d %H:%M}"
+
+
+class Portfolio(models.Model):
+    """A named collection of BUY/SELL transactions for one user. Holdings,
+    cost basis and P/L are never stored here — they're derived on demand
+    from the full PortfolioTransaction history by
+    market.services.portfolio, so there's nothing that can drift out of
+    sync with the transaction log (see that module's docstring for why)."""
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="portfolios")
+    name = models.CharField(max_length=64, default="Default")
+    currency = models.CharField(max_length=8, default="BDT")
+    is_default = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("user", "name")
+        ordering = ["-is_default", "name"]
+        constraints = [
+            # SQLite/Postgres both support partial unique indexes — enforces
+            # "at most one default portfolio per user" at the DB level, not
+            # just in application code (get_or_create_default_portfolio()
+            # still does the friendly get-or-create dance on top of this).
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=models.Q(is_default=True),
+                name="unique_default_portfolio_per_user",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username}: {self.name}"
+
+
+class TransactionType(models.TextChoices):
+    BUY = "BUY", "Buy"
+    SELL = "SELL", "Sell"
+
+
+class PortfolioTransaction(models.Model):
+    """One row per BUY or SELL fill — the complete, append-mostly ledger a
+    portfolio's holdings/cost-basis/P&L are computed from. Editing or
+    deleting a row is allowed (mistakes happen), but every mutation is
+    re-validated against the *whole* chronological sequence for that
+    (portfolio, stock) — see market.services.portfolio.validate_no_negative_holding
+    — so an edit that would retroactively make a later SELL exceed the
+    held quantity is rejected rather than silently producing a negative
+    holding.
+
+    Stock uses PROTECT, not CASCADE: a stock must never be deleted out
+    from under a user's real financial transaction history."""
+
+    portfolio = models.ForeignKey(Portfolio, on_delete=models.CASCADE, related_name="transactions")
+    stock = models.ForeignKey(Stock, on_delete=models.PROTECT, related_name="portfolio_transactions")
+    transaction_type = models.CharField(max_length=4, choices=TransactionType.choices)
+    quantity = models.DecimalField(max_digits=18, decimal_places=4)
+    price_per_share = models.DecimalField(max_digits=14, decimal_places=4)
+    fees = models.DecimalField(max_digits=12, decimal_places=4, default=Decimal("0"))
+    transaction_date = models.DateField(db_index=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-transaction_date", "-created_at"]
+        indexes = [
+            models.Index(fields=["portfolio", "stock"]),
+            models.Index(fields=["portfolio", "transaction_date"]),
+        ]
+        constraints = [
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name="portfolio_txn_quantity_positive"),
+            models.CheckConstraint(condition=models.Q(price_per_share__gte=0), name="portfolio_txn_price_non_negative"),
+            models.CheckConstraint(condition=models.Q(fees__gte=0), name="portfolio_txn_fees_non_negative"),
+        ]
+
+    def __str__(self):
+        return f"{self.transaction_type} {self.quantity} {self.stock.trading_code} @ {self.price_per_share} ({self.transaction_date})"
+
+    @property
+    def gross_amount(self) -> Decimal:
+        """Quantity x price, before fees."""
+        return self.quantity * self.price_per_share

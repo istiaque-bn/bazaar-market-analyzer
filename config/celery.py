@@ -67,6 +67,11 @@ app.conf.beat_schedule = {
         "task": "notifications.tasks.send_daily_digest",
         "schedule": crontab(hour=15, minute=0, day_of_week=_BD_WEEK),
     },
+    # DSE trailing-P/E snapshot — display only, one bulk request/day.
+    "sync-pe-ratios-1010": {
+        "task": "market.tasks.sync_pe_ratios",
+        "schedule": crontab(hour=10, minute=10, day_of_week=_BD_WEEK),
+    },
     # ML Reliability Monitor: capture today's predictions, settle due
     # outcomes, assess both model families against rolling windows. Runs
     # after train-ml-model/close-learn-settlement/digest so the day's

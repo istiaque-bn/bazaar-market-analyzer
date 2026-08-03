@@ -303,6 +303,9 @@ def sync_cse_live() -> dict:
     mirror_batch = create_import_batch(DataSource.CSE_MIRROR_FALLBACK, exchange=Exchange.CSE, note="mirrored from DSE last price, not a real CSE fetch")
     mirrored = 0
     now = timezone.now()
+    from market.services.trading_calendar import closure_reason
+
+    is_trading_day_today = closure_reason(timezone.localdate()) is None
     try:
         for code, name, sector, group in DEMO_SYMBOLS:
             dse = Stock.objects.filter(exchange=Exchange.DSE, trading_code=code).first()
@@ -319,7 +322,7 @@ def sync_cse_live() -> dict:
                     "last_volume": int((dse.last_volume or 0) * 0.3) if dse else None,
                 },
             )
-            if stock.last_price:
+            if stock.last_price and is_trading_day_today:
                 today = timezone.localdate()
                 existing = PriceHistory.objects.filter(stock=stock, date=today).first()
                 new_values = {

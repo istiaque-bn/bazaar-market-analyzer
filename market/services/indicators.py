@@ -6,12 +6,12 @@ import pandas as pd
 
 
 def prices_to_df(price_qs) -> pd.DataFrame:
-    rows = list(price_qs.order_by("date").values("date", "open", "high", "low", "close", "volume"))
+    rows = list(price_qs.order_by("date").values("date", "open", "high", "low", "close", "volume", "value"))
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"])
-    for c in ("open", "high", "low", "close", "volume"):
+    for c in ("open", "high", "low", "close", "volume", "value"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df.dropna(subset=["close"]).reset_index(drop=True)
 

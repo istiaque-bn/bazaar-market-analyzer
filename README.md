@@ -114,6 +114,9 @@ request-thread blocking (the exact problem enqueueing was added to avoid).
 # Run the full suite (Redis must be running — some locking tests use it directly)
 python manage.py test accounts api market notifications
 
+# Portfolio feature only
+python manage.py test market.tests.test_portfolio
+
 # CI-friendly: run under coverage and fail the build below the configured gate
 coverage run manage.py test accounts api market notifications
 coverage report          # terminal summary, fails if TOTAL < fail_under (.coveragerc)
@@ -537,6 +540,158 @@ should be presented as investment advice, a safe-buy signal, or
 production-ready for real trading.** No order-execution capability
 exists in this codebase at all.
 
+## Portfolio
+
+Authenticated users can record their own DSE/CSE holdings as a plain BUY/SELL
+transaction ledger and see live-tracked cost basis, market value, and
+profit/loss against the same `Stock.last_price`/`PriceHistory` data the rest
+of the app uses — no second quote-fetching system, and no page request ever
+triggers a live scrape (see "Live price updates" below).
+
+**Nothing is stored pre-calculated.** `Portfolio` and `PortfolioTransaction`
+are the only two tables; every holding, cost basis, and P/L figure is derived
+on demand from the transaction history by `market/services/portfolio.py`, so
+there's nothing that can drift out of sync with the ledger. Every user gets a
+default portfolio automatically on first visit (`GET /portfolio/`); a
+`UniqueConstraint` enforces at most one `is_default=True` portfolio per user
+at the database level, not just in application code.
+
+### Cost basis method: weighted average cost (WAC)
+
+- Every **BUY** adds `quantity × price` to a running purchase-cost total and
+  its fee to a running fees total. `cost_basis = purchase_cost + fees` at all
+  times.
+- Every **SELL** removes a *proportional* slice of both running totals —
+  proportional to `quantity_sold / quantity_held_immediately_before` — so a
+  partial sale never changes the average price of the remaining shares. The
+  removed slice's difference from the sale proceeds becomes that sale's
+  contribution to **realized P/L**, which accumulates independently of
+  **unrealized P/L** (marked only against the shares still held). Sell-side
+  fees reduce proceeds; buy-side fees capitalize into cost basis — standard
+  treatment, and the two are never mixed.
+- Closing a position completely always leaves `cost_basis` at exactly `0`,
+  never a rounding-drifted near-zero, because the final sale's ratio is
+  always exactly 1.
+- **Formulas**, for one stock within one portfolio, replayed in chronological
+  transaction-date order:
+  ```
+  BUY:  purchase_cost += qty * price;  fees_basis += fee;  qty_held += qty
+  SELL: ratio = qty_sold / qty_held
+        cost_removed = purchase_cost*ratio + fees_basis*ratio
+        proceeds = qty_sold*price - fee
+        realized_pl += proceeds - cost_removed
+        purchase_cost -= purchase_cost*ratio;  fees_basis -= fees_basis*ratio
+        qty_held -= qty_sold
+
+  cost_basis      = purchase_cost + fees_basis
+  average_price   = purchase_cost / qty_held                  (excludes fees)
+  market_value    = qty_held * latest_price
+  unrealized_pl   = market_value - cost_basis
+  unrealized_pl_pct = unrealized_pl / cost_basis * 100        (undefined, shown as "—", if cost_basis is 0)
+  today_pl        = (latest_price - previous_close) * qty_held
+  today_pl_pct    = (latest_price - previous_close) / previous_close * 100
+  allocation_pct  = holding_market_value / total_portfolio_market_value * 100
+  ```
+- A **future-dated** transaction is stored immediately but excluded from
+  every "current state" calculation (`transaction_date__lte=today` at the
+  query level) until its date actually arrives.
+- Every mutation (create/edit/delete) is validated against the transaction's
+  own date first, and an edit/delete is additionally re-validated against
+  the **entire** post-mutation chronological sequence for that
+  (portfolio, stock) — editing an early BUY's quantity down, or deleting it,
+  is rejected if a later SELL would then exceed what was actually held,
+  wrapped in `transaction.atomic()` so a rejected mutation never partially
+  commits.
+- All monetary/quantity fields are `DecimalField`; `market.services.portfolio`
+  converts any float (e.g. `Stock.last_price`) via `Decimal(str(x))`, never
+  `Decimal(x)` directly, so no float binary-imprecision ever enters the math.
+
+### Quote status: Live / Delayed / Stale / Market closed / Demo-Synthetic / Unavailable
+
+`quote_status()` never labels a price "Live" just because the page loaded
+recently — it's purely a function of the quote's own age, source, and the
+exchange's real session state (precedence, first match wins):
+
+1. No price at all → **Unavailable**
+2. Most recent price bar for that stock is synthetic/demo/mirror-fallback → **Demo/Synthetic**
+3. `Stock.updated_at` older than `STALE_DATA_DAYS` (4, shared with the ops-alerts threshold) → **Stale**
+4. Exchange session open and refreshed within 5 minutes (matches the ticker's own LIVE threshold) → **Live**
+5. Exchange session open but older than 5 minutes → **Delayed**
+6. Exchange session closed → **Market closed**
+
+### Live price updates
+
+The portfolio page never blocks a request on a live market fetch — prices
+come only from `Stock.last_price`/`PriceHistory`, written exclusively by the
+existing background sync pipeline (`autosync`, `dse_fetcher`, `cse_fetcher`,
+Celery beat). An open portfolio page polls a lightweight authenticated JSON
+endpoint (`GET /portfolio/<id>/quotes.json`, rate-limited, cache/DB-only —
+same pattern as the public `/ticker.json`) every 20s during DSE/CSE market
+hours or 60s outside them, matching `static/js/ticker.js`'s own cadence, and
+pauses entirely while the browser tab is hidden.
+
+### Routes
+
+- `GET /portfolio/` — redirect to the caller's default portfolio (auto-created)
+- `GET /portfolio/list/`, `POST /portfolio/create/`
+- `GET /portfolio/<id>/` — dashboard: summary cards, holdings, allocation, recent transactions
+- `POST /portfolio/<id>/rename/`, `POST /portfolio/<id>/set-default/`, `POST /portfolio/<id>/delete/` (requires typing the portfolio name to confirm)
+- `GET|POST /portfolio/<id>/holdings/add/` — simplified first-BUY flow
+- `GET|POST /portfolio/<id>/transactions/add/`, `GET|POST /portfolio/<id>/transactions/<txn_id>/edit/`, `POST /portfolio/<id>/transactions/<txn_id>/delete/`
+- `GET /portfolio/<id>/transactions/` — paginated history with filters
+- `GET /portfolio/<id>/quotes.json` — polling endpoint (auth required, rate-limited)
+
+### API (all endpoints require token auth; every lookup is scoped to the caller)
+
+- `GET|POST /api/portfolios/` — list/create
+- `GET|PATCH|DELETE /api/portfolios/<id>/`
+- `GET /api/portfolios/<id>/summary/` — full summary (totals, best/worst, allocation)
+- `GET /api/portfolios/<id>/holdings/`
+- `GET|POST /api/portfolios/<id>/transactions/`
+- `GET|PUT|PATCH|DELETE /api/portfolios/<id>/transactions/<txn_id>/`
+- `GET /api/portfolios/<id>/quote-snapshot/` — lightweight latest-quote poll
+
+All monetary/quantity values are returned as **strings** (e.g.
+`"market_value": "42.00"`), never JSON numbers, so no client's JSON parser
+can round-trip a Decimal through a float.
+
+### Migrations
+
+`market/migrations/0011_portfolio_portfoliotransaction_and_more.py` adds the
+`Portfolio` and `PortfolioTransaction` tables plus their constraints/indexes.
+Apply with the usual `python manage.py migrate`.
+
+### Tests
+
+```bash
+python manage.py test market.tests.test_portfolio
+```
+
+67 tests covering: ownership/cross-user access, auth requirements, default
+portfolio behavior + uniqueness, BUY/SELL validation (negative/zero
+quantity/price/fees), overselling prevention (including date-aware checks
+and edit/delete-time re-validation), WAC math (single/blended buys, partial
+and complete sells, fee treatment, realized-vs-unrealized independence),
+percentage calculations, zero-cost-basis and missing-price edge cases
+without division errors, DSE/CSE stocks sharing a trading code, future-dated
+transactions, quote-status labeling for all six states, the web views (POST-
+only mutations, CSRF enforcement, no live fetch ever triggered), the DRF API
+(auth, cross-user 404s, string-encoded Decimals), and query-count bounds for
+a portfolio with many holdings.
+
+### Known limitations
+
+- No performance/value history chart — the app doesn't snapshot daily
+  portfolio value over time, so a real historical-performance chart isn't
+  possible without fabricating data. The allocation breakdowns (by stock,
+  exchange, sector) are real and live.
+- P/E-style fundamentals aren't part of this feature (see the ML section for
+  the separate, unrelated `pe_ratio` fetcher).
+- Figures are personal-tracking estimates from delayed/cached market data —
+  explicitly **not** a brokerage statement, tax document, or investment
+  advice (shown as a standing disclaimer on every portfolio page/API summary
+  response).
+
 ## API
 
 - `GET /api/screener/` — potential shares / experimental research candidates / sells (`is_experimental_candidate`, not `is_safe_buy` — see Phase 7)
@@ -548,6 +703,7 @@ exists in this codebase at all.
 - `POST /api/auth/register/` `{username,password,email}`
 - `POST /api/auth/login/` `{username,password}` → token
 - `GET /api/alerts/` (auth)
+- `GET|POST /api/portfolios/`, `GET/PATCH/DELETE /api/portfolios/<id>/` (auth, own records only — see "Portfolio" above)
 
 ## Notifications
 

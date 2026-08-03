@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · {{ portfolio.name }}{% endblock %}
+{% block content %}
+<div class="section-title">
+  <h2>{{ title }}</h2>
+  <a href="{% url 'portfolio_detail' portfolio.id %}">← Back to {{ portfolio.name }}</a>
+</div>
+
+{% if form.non_field_errors %}
+<div class="disclaimer" style="border-color: var(--fall); color: var(--fall);">
+  {% for e in form.non_field_errors %}<p>{{ e }}</p>{% endfor %}
+</div>
+{% endif %}
+
+<section class="panel" style="max-width:520px;">
+  <form method="post" class="form" novalidate>
+    {% csrf_token %}
+
+    {% if mode == "add_holding" %}
+      <input type="hidden" name="transaction_type" value="BUY">
+      <p class="muted">Records the purchase that started this holding. You can add more BUY/SELL transactions for
+      the same stock afterwards.</p>
+    {% endif %}
+
+    <label for="{{ form.stock.id_for_label }}">
+      Stock {{ form.stock.errors }}
+      {{ form.stock }}
+    </label>
+    <p class="muted tiny">DSE and CSE stocks with the same trading code are listed separately — check the exchange
+    tag next to the code.</p>
+
+    {% if mode != "add_holding" %}
+    <fieldset style="border:none; padding:0; margin:0;">
+      <legend class="muted" style="font-weight:500; font-size:0.92rem; padding:0; margin-bottom:0.35rem;">Type</legend>
+      <label style="display:flex; flex-direction:row; align-items:center; gap:0.4rem; font-weight:400;">
+        <input type="radio" name="transaction_type" value="BUY" {% if form.transaction_type.value == "BUY" or not form.transaction_type.value %}checked{% endif %}> Buy
+      </label>
+      <label style="display:flex; flex-direction:row; align-items:center; gap:0.4rem; font-weight:400;">
+        <input type="radio" name="transaction_type" value="SELL" {% if form.transaction_type.value == "SELL" %}checked{% endif %}> Sell
+      </label>
+      {{ form.transaction_type.errors }}
+    </fieldset>
+    {% endif %}
+
+    <label for="{{ form.quantity.id_for_label }}">
+      Quantity (shares) {{ form.quantity.errors }}
+      {{ form.quantity }}
+    </label>
+
+    <label for="{{ form.price_per_share.id_for_label }}">
+      Price per share (BDT) {{ form.price_per_share.errors }}
+      {{ form.price_per_share }}
+    </label>
+
+    <label for="{{ form.fees.id_for_label }}">
+      Brokerage fee / other charges (BDT, optional) {{ form.fees.errors }}
+      {{ form.fees }}
+    </label>
+
+    <label for="{{ form.transaction_date.id_for_label }}">
+      Transaction date {{ form.transaction_date.errors }}
+      {{ form.transaction_date }}
+    </label>
+    <p class="muted tiny">A future date is recorded but won't affect today's holdings until that date arrives.</p>
+
+    <label for="{{ form.notes.id_for_label }}">
+      Notes (optional) {{ form.notes.errors }}
+      {{ form.notes }}
+    </label>
+
+    <button class="btn" type="submit">
+      {% if mode == "edit" %}Save changes{% elif mode == "add_holding" %}Add holding{% else %}Record transaction{% endif %}
+    </button>
+  </form>
+
+  {% if mode == "edit" %}
+  <form method="post" action="{% url 'portfolio_delete_transaction' portfolio.id txn.id %}" style="margin-top:1rem;"
+        onsubmit="return confirm('Delete this transaction? This cannot be undone.');">
+    {% csrf_token %}
+    <button class="btn btn-small btn-ghost" type="submit" style="color: var(--fall); border-color: var(--fall);">Delete transaction</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

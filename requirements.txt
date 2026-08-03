@@ -15,6 +15,7 @@ django-celery-beat==2.9.0
 pandas==3.0.5
 numpy==2.5.1
 scikit-learn==1.9.0
+xgboost==3.3.0  # forward_return_rf classifier — walk-forward comparison vs RandomForest showed a consistent (if modest) skill improvement on both DSE/CSE; see market/services/ml_model.py
 requests==2.34.2
 beautifulsoup4==4.15.0
 lxml==6.1.1

@@ -34,6 +34,7 @@ def _price_df(n=120, seed=0):
     rng = np.random.default_rng(seed)
     dates = pd.bdate_range("2025-01-01", periods=n, freq="C", weekmask="Sun Mon Tue Wed Thu")
     closes = 100 + np.cumsum(rng.normal(0, 1, n))
+    volume = np.full(n, 5000)
     return pd.DataFrame(
         {
             "date": dates,
@@ -41,7 +42,8 @@ def _price_df(n=120, seed=0):
             "high": closes + 0.5,
             "low": closes - 0.5,
             "close": closes,
-            "volume": np.full(n, 5000),
+            "volume": volume,
+            "value": closes * volume,
         }
     )
 

@@ -124,6 +124,27 @@ def append_daily_bars():
 
 
 @shared_task(
+    name="market.tasks.sync_pe_ratios",
+    autoretry_for=_TRANSIENT_ERRORS,
+    retry_backoff=True,
+    retry_backoff_max=120,
+    retry_jitter=True,
+    max_retries=3,
+    time_limit=90,
+    soft_time_limit=75,
+)
+@record_task_run("market.tasks.sync_pe_ratios")
+def sync_pe_ratios():
+    """Daily DSE trailing-P/E snapshot refresh (display only — see
+    sync_dse_pe_ratios's docstring on why this isn't an ML feature)."""
+    from market.services.autosync import exclusive_db_write
+    from market.services.dse_fetcher import sync_dse_pe_ratios
+
+    with exclusive_db_write(blocking=True, timeout=60):
+        return sync_dse_pe_ratios()
+
+
+@shared_task(
     name="market.tasks.train_ml_model",
     autoretry_for=_TRANSIENT_ERRORS,
     retry_backoff=True,

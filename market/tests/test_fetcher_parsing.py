@@ -8,8 +8,9 @@ from datetime import date
 from pathlib import Path
 from unittest import mock
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
+from market.models import Exchange, PriceHistory, Stock
 from market.services import cse_fetcher, dse_fetcher
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -96,6 +97,49 @@ class DseArchiveParsingTests(SimpleTestCase):
         self.assertIsNone(df)
 
 
+class DsePeRatioParsingTests(SimpleTestCase):
+    def test_parses_trailing_pe_and_skips_unavailable_rows(self):
+        html = _read("dse_latest_pe_sample.html")
+        with mock.patch("market.services.dse_fetcher._get", return_value=_resp(text=html)):
+            df = dse_fetcher.fetch_dse_pe_ratios()
+        self.assertIsNotNone(df)
+        # 1JANATAMF's Trailing P/E is "n/a" — must be excluded, not coerced to 0/NaN.
+        self.assertEqual(set(df["trading_code"]), {"GP", "SQURPHARMA"})
+        gp = df[df["trading_code"] == "GP"].iloc[0]
+        self.assertEqual(gp["pe_ratio"], 12.45)
+
+    def test_no_table_found_returns_none(self):
+        with mock.patch("market.services.dse_fetcher._get", return_value=_resp(text="<html><body>no data</body></html>")):
+            df = dse_fetcher.fetch_dse_pe_ratios()
+        self.assertIsNone(df)
+
+    def test_http_error_status_returns_none_not_raises(self):
+        resp = _resp(text="")
+        resp.raise_for_status.side_effect = Exception("500 server error")
+        with mock.patch("market.services.dse_fetcher._get", return_value=resp):
+            df = dse_fetcher.fetch_dse_pe_ratios()
+        self.assertIsNone(df)
+
+
+class SyncDsePeRatiosTests(TestCase):
+    def test_updates_matching_active_stocks_only(self):
+        gp = Stock.objects.create(exchange=Exchange.DSE, trading_code="GP", is_active=True)
+        inactive = Stock.objects.create(exchange=Exchange.DSE, trading_code="SQURPHARMA", is_active=False)
+        html = _read("dse_latest_pe_sample.html")
+        with mock.patch("market.services.dse_fetcher._get", return_value=_resp(text=html)):
+            result = dse_fetcher.sync_dse_pe_ratios()
+        self.assertTrue(result["ok"])
+        gp.refresh_from_db()
+        inactive.refresh_from_db()
+        self.assertEqual(gp.pe_ratio, 12.45)
+        self.assertIsNone(inactive.pe_ratio, "inactive stocks must not be updated")
+
+    def test_no_data_returns_not_ok(self):
+        with mock.patch("market.services.dse_fetcher._get", return_value=_resp(text="<html></html>")):
+            result = dse_fetcher.sync_dse_pe_ratios()
+        self.assertFalse(result["ok"])
+
+
 class CseLiveScrapeParsingTests(SimpleTestCase):
     def test_parses_representative_current_price_table(self):
         html = _read("cse_current_price_sample.html")
@@ -171,3 +215,36 @@ class CseBulkHistoryParsingTests(SimpleTestCase):
         ):
             df = cse_fetcher.fetch_cse_history_bulk(date(2026, 1, 1), date(2026, 2, 28))
         self.assertIsNone(df)
+
+
+class CseMirrorFallbackWeekendGuardTests(TestCase):
+    """Regression coverage for the 2026-08-01 incident: when CSE's real live
+    feed is unavailable, sync_cse_live() falls back to mirroring DSE prices.
+    That fallback must obey the same "never fabricate a PriceHistory row for
+    a day the market never traded" rule as upsert_live_quotes — it didn't,
+    until this guard was added."""
+
+    def setUp(self):
+        Stock.objects.create(exchange=Exchange.DSE, trading_code="GP", company_name="Grameenphone Ltd", last_price=285.30, last_change_pct=1.2, last_volume=53210)
+        # Both real CSE sources fail so sync_cse_live() takes the mirror path.
+        self._bdshare = mock.patch("market.services.cse_fetcher.fetch_cse_live_via_bdshare", return_value=None)
+        self._scrape = mock.patch("market.services.cse_fetcher.fetch_cse_live_scrape", return_value=None)
+        self._bdshare.start()
+        self._scrape.start()
+        self.addCleanup(self._bdshare.stop)
+        self.addCleanup(self._scrape.stop)
+
+    def test_mirror_fallback_skips_price_history_on_a_closed_day(self):
+        with mock.patch("market.services.trading_calendar.closure_reason", return_value="Weekend"):
+            result = cse_fetcher.sync_cse_live()
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(PriceHistory.objects.filter(stock__exchange=Exchange.CSE).count(), 0)
+        # Stock.last_price (the ticker) still gets refreshed even on a closed day.
+        gp_cse = Stock.objects.get(exchange=Exchange.CSE, trading_code="GP")
+        self.assertIsNotNone(gp_cse.last_price)
+
+    def test_mirror_fallback_still_writes_price_history_on_a_trading_day(self):
+        with mock.patch("market.services.trading_calendar.closure_reason", return_value=None):
+            result = cse_fetcher.sync_cse_live()
+        self.assertGreater(result["count"], 0)
+        self.assertTrue(PriceHistory.objects.filter(stock__exchange=Exchange.CSE).exists())

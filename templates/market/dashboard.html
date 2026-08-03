@@ -9,6 +9,9 @@
       Data last updated at
       {% if data_last_updated %}{{ data_last_updated|date:"d M Y, h:i A" }}{% else %}—{% endif %}
     </p>
+    {% if health_issue %}
+    <p class="health-warning">⚠ {{ health_issue }} <a href="{% url 'ops_report' %}">See ops report</a></p>
+    {% endif %}
   </div>
 </div>
 
@@ -45,44 +48,6 @@
   {% if edge.has_edge %}<span class="badge badge-buy">Demonstrated edge</span>{% else %}<span class="badge badge-hold">No demonstrated predictive edge</span>{% endif %}
   <span class="muted">{{ edge.edge_reason }}</span>
 </div>
-
-{% if close_learn %}
-<section class="panel learn-panel" style="margin-top:1.2rem;">
-  <h3>Next-day close learner</h3>
-  <p class="muted" style="margin-top:0;">Predicts tomorrow’s <strong>close</strong> after each session · scored vs naive baseline (close unchanged)</p>
-  <div class="grid-4 learn-stats">
-    <div class="stat">
-      <div class="label">Skill vs naive</div>
-      <div class="value {% if close_learn.skill.skill_vs_naive and close_learn.skill.skill_vs_naive > 0 %}up{% elif close_learn.skill.skill_vs_naive and close_learn.skill.skill_vs_naive < 0 %}down{% endif %}">
-        {% if close_learn.skill.skill_pct != None %}{{ close_learn.skill.skill_pct|floatformat:1 }}%{% elif close_learn.skill.skill_vs_naive != None %}{{ close_learn.skill.skill_vs_naive|floatformat:3 }}{% else %}—{% endif %}
-      </div>
-      <div class="muted tiny">1 − model/baseline return MAE</div>
-    </div>
-    <div class="stat">
-      <div class="label">Beats naive</div>
-      <div class="value">{% if close_learn.skill.beats_naive_pct != None %}{% widthratio close_learn.skill.beats_naive_pct 1 100 %}%{% else %}—{% endif %}</div>
-      <div class="muted tiny">share of settles with smaller error</div>
-    </div>
-    <div class="stat">
-      <div class="label">Direction hit</div>
-      <div class="value">{% if close_learn.skill.direction_hit_rate != None %}{% widthratio close_learn.skill.direction_hit_rate 1 100 %}%{% else %}{% widthratio close_learn.direction_hit_rate 1 100 %}%{% endif %}</div>
-      <div class="muted tiny">up/down correct</div>
-    </div>
-    <div class="stat">
-      <div class="label">MAPE (model / naive)</div>
-      <div class="value" style="font-size:1.35rem;">
-        {% if close_learn.skill.model_mape != None %}{{ close_learn.skill.model_mape|floatformat:2 }}{% else %}{{ close_learn.mape|floatformat:2 }}{% endif %}
-        <span class="muted" style="font-size:0.85rem;"> / {% if close_learn.skill.baseline_mape != None %}{{ close_learn.skill.baseline_mape|floatformat:2 }}{% else %}—{% endif %}%</span>
-      </div>
-      <div class="muted tiny">settled {{ close_learn.settled_count }} · stock biases {{ close_learn.stock_bias_active }}</div>
-    </div>
-  </div>
-  <p class="muted" style="margin:0.75rem 0 0;">
-    Global bias {{ close_learn.return_bias }} · liquid universe {{ close_learn.liquid_universe }} ·
-    pending forecasts {{ close_learn.pending_forecasts }} · features: index / sector / breadth
-  </p>
-</section>
-{% endif %}
 
 <div class="grid-2" style="margin-top:1.2rem;">
   <section class="panel">
@@ -154,6 +119,44 @@
     </div>
   </section>
 </div>
+
+{% if close_learn %}
+<section class="panel learn-panel" style="margin-top:1.2rem;">
+  <h3>Next-day close learner <span class="muted" style="font-weight:normal;">(secondary signal)</span></h3>
+  <p class="muted" style="margin-top:0;">Predicts tomorrow’s <strong>close</strong> after each session · scored vs naive baseline (close unchanged). The buy/sell/research calls above come from the direction model, which independently demonstrates a real (if modest) edge — this price-level forecast is a supporting signal, not the primary one.</p>
+  <div class="grid-4 learn-stats">
+    <div class="stat">
+      <div class="label">Skill vs naive</div>
+      <div class="value {% if close_learn.skill.skill_vs_naive and close_learn.skill.skill_vs_naive > 0 %}up{% elif close_learn.skill.skill_vs_naive and close_learn.skill.skill_vs_naive < 0 %}down{% endif %}">
+        {% if close_learn.skill.skill_pct != None %}{{ close_learn.skill.skill_pct|floatformat:1 }}%{% elif close_learn.skill.skill_vs_naive != None %}{{ close_learn.skill.skill_vs_naive|floatformat:3 }}{% else %}—{% endif %}
+      </div>
+      <div class="muted tiny">1 − model/baseline return MAE</div>
+    </div>
+    <div class="stat">
+      <div class="label">Beats naive</div>
+      <div class="value">{% if close_learn.skill.beats_naive_pct != None %}{% widthratio close_learn.skill.beats_naive_pct 1 100 %}%{% else %}—{% endif %}</div>
+      <div class="muted tiny">share of settles with smaller error</div>
+    </div>
+    <div class="stat">
+      <div class="label">Direction hit</div>
+      <div class="value">{% if close_learn.skill.direction_hit_rate != None %}{% widthratio close_learn.skill.direction_hit_rate 1 100 %}%{% else %}{% widthratio close_learn.direction_hit_rate 1 100 %}%{% endif %}</div>
+      <div class="muted tiny">up/down correct</div>
+    </div>
+    <div class="stat">
+      <div class="label">MAPE (model / naive)</div>
+      <div class="value" style="font-size:1.35rem;">
+        {% if close_learn.skill.model_mape != None %}{{ close_learn.skill.model_mape|floatformat:2 }}{% else %}{{ close_learn.mape|floatformat:2 }}{% endif %}
+        <span class="muted" style="font-size:0.85rem;"> / {% if close_learn.skill.baseline_mape != None %}{{ close_learn.skill.baseline_mape|floatformat:2 }}{% else %}—{% endif %}%</span>
+      </div>
+      <div class="muted tiny">settled {{ close_learn.settled_count }} · stock biases {{ close_learn.stock_bias_active }}</div>
+    </div>
+  </div>
+  <p class="muted" style="margin:0.75rem 0 0;">
+    Global bias {{ close_learn.return_bias }} · liquid universe {{ close_learn.liquid_universe }} ·
+    pending forecasts {{ close_learn.pending_forecasts }} · features: index / sector / breadth
+  </p>
+</section>
+{% endif %}
 
 <div class="grid-2" style="margin-top:1.2rem;">
   <section class="panel">

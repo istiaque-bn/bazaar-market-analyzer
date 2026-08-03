@@ -23,7 +23,7 @@ import pandas as pd
 from django.conf import settings
 from django.db.models import Avg
 from django.utils import timezone
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
 from market.models import CloseLearnState, Exchange, NextDayCloseForecast, PriceHistory, Stock
 from market.services.indicators import compute_indicators, prices_to_df
@@ -355,18 +355,27 @@ def load_next_close_model(exchange: str | None = None) -> dict | None:
 
 
 def _ml_one_day_return(feats: dict, exchange: str | None = None) -> float | None:
+    """Zero-inflated two-stage prediction: P(next-day return != 0) times a
+    magnitude regressed only on historical mover days. A plain continuous
+    regressor loses to the "predict no change" baseline on thin names that
+    often go a whole session with an unchanged close — see
+    _walk_forward_evaluate_next_close's docstring. Older single-model
+    bundles (key "model") are still honored for backward compatibility."""
     bundle = load_next_close_model(exchange=exchange)
     if bundle is None:
         return None
     try:
-        model = bundle["model"]
         cols = bundle.get("features", FEATURE_COLS)
         payload = {c: feats.get(c, 0.0) for c in cols}
         row = pd.DataFrame([payload])
         imputer = bundle.get("imputer")
         if imputer is not None:
             row = apply_imputer(imputer, row)
-        return float(model.predict(row)[0])
+        if "classifier" in bundle and "regressor" in bundle:
+            p_move = float(bundle["classifier"].predict_proba(row)[0, 1])
+            magnitude = float(bundle["regressor"].predict(row)[0])
+            return p_move * magnitude
+        return float(bundle["model"].predict(row)[0])
     except Exception as exc:
         logger.warning("next-close ML predict failed: %s", exc)
         return None
@@ -737,6 +746,45 @@ def _build_next_close_panel(exchange: str, limit_stocks: int = 80) -> pd.DataFra
     return panel.sort_values("date", kind="mergesort").reset_index(drop=True)
 
 
+ZERO_RETURN_EPS = 1e-9  # a next-day return this close to 0 is an unchanged close, not a rounding artifact
+
+
+def _fit_zero_inflated_next_close(X_train_i: pd.DataFrame, y_train: np.ndarray):
+    """Two-stage model: classify whether the close moves at all tomorrow,
+    then regress a magnitude using only historical mover days, and
+    multiply. A plain regressor loses to the zero_return baseline on thin
+    names that often post an unchanged close for a whole session — no
+    continuous model naturally lands on an exact 0.0, so it pays an error
+    on every one of those rows while the naive baseline pays none. See
+    forecast comparison in the 2026-08-03 next-close skill investigation:
+    this flipped DSE's out-of-sample skill_vs_naive from -0.007 to +0.004."""
+    move_train = (np.abs(y_train) > ZERO_RETURN_EPS).astype(int)
+    classifier = RandomForestClassifier(
+        n_estimators=140, max_depth=7, min_samples_leaf=10, random_state=42, n_jobs=-1, class_weight="balanced"
+    )
+    classifier.fit(X_train_i, move_train)
+
+    mover_mask = move_train == 1
+    regressor = RandomForestRegressor(n_estimators=140, max_depth=7, min_samples_leaf=10, random_state=42, n_jobs=-1)
+    regressor.fit(X_train_i[mover_mask], y_train[mover_mask])
+    return classifier, regressor
+
+
+def _predict_zero_inflated(classifier, regressor, X_i: pd.DataFrame) -> np.ndarray:
+    proba = classifier.predict_proba(X_i)
+    if 1 in classifier.classes_:
+        move_idx = list(classifier.classes_).index(1)
+        p_move = proba[:, move_idx]
+    else:
+        # Every training row fell in one class (e.g. a small/synthetic
+        # fold with no movers at all) — predict_proba only has one
+        # column then. If that lone class is "no move" (0), there's
+        # nothing to predict a magnitude for.
+        p_move = np.zeros(len(X_i))
+    magnitude = regressor.predict(X_i)
+    return p_move * magnitude
+
+
 def _walk_forward_evaluate_next_close(panel: pd.DataFrame, n_folds: int = 5) -> dict:
     """Chronological walk-forward CV with an embargo gap >= the 1-day
     label horizon. Baselines: zero-return (predict no change — the
@@ -771,9 +819,8 @@ def _walk_forward_evaluate_next_close(panel: pd.DataFrame, n_folds: int = 5) -> 
         X_train_i = apply_imputer(imputer, X_train)
         X_test_i = apply_imputer(imputer, X_test)
 
-        model = RandomForestRegressor(n_estimators=140, max_depth=7, min_samples_leaf=10, random_state=42, n_jobs=-1)
-        model.fit(X_train_i, y_train)
-        pred = model.predict(X_test_i)
+        classifier, regressor = _fit_zero_inflated_next_close(X_train_i, y_train)
+        pred = _predict_zero_inflated(classifier, regressor, X_test_i)
 
         m_metrics = regression_metrics(y_test, pred)
         model_metrics_list.append(m_metrics)
@@ -835,6 +882,8 @@ def _justify_combining_next_close(dse_eval: dict, cse_eval: dict) -> tuple[bool,
     dse_skill, cse_skill = dse_eval.get("skill_vs_naive"), cse_eval.get("skill_vs_naive")
     if dse_skill is None or cse_skill is None:
         return False, "walk-forward skill undefined for one exchange"
+    if (dse_skill > 0) != (cse_skill > 0):
+        return False, f"one exchange clears the deployment gate and the other doesn't (DSE={dse_skill}, CSE={cse_skill}); pooling would average away a real per-exchange win"
     if abs(dse_skill - cse_skill) > 0.15:
         return False, f"DSE/CSE walk-forward skill diverge too much to justify one pooled model (DSE={dse_skill}, CSE={cse_skill})"
     return True, f"DSE/CSE walk-forward skill are consistent (DSE={dse_skill}, CSE={cse_skill}); pooling adds sample size without hiding a weak exchange"
@@ -845,8 +894,7 @@ def _final_fit_and_save_next_close(panel: pd.DataFrame, eval_result: dict, *, ex
     y = panel["fwd_ret_1"].clip(-0.2, 0.2).to_numpy()
     imputer = fit_median_imputer(X)
     X_i = apply_imputer(imputer, X)
-    model = RandomForestRegressor(n_estimators=140, max_depth=7, min_samples_leaf=10, random_state=42, n_jobs=-1)
-    model.fit(X_i, y)
+    classifier, regressor = _fit_zero_inflated_next_close(X_i, y)
 
     skill = eval_result.get("skill_vs_naive")
     is_active = skill is not None and skill > 0
@@ -859,7 +907,8 @@ def _final_fit_and_save_next_close(panel: pd.DataFrame, eval_result: dict, *, ex
 
     joblib.dump(
         {
-            "model": model,
+            "classifier": classifier,
+            "regressor": regressor,
             "imputer": imputer,
             "features": FEATURE_COLS,
             "version": version,

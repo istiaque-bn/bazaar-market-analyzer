@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 DSE_LATEST = "https://www.dsebd.org/latest_share_price_scroll_l.php"
 DSE_HIST = "https://www.dsebd.org/day_end_archive.php"
+DSE_LATEST_PE = "https://www.dsebd.org/latest_PE.php"
 USER_AGENT = "BazaarMarketAnalyzer/1.0 (+educational; respectful rate limits)"
 
 
@@ -160,6 +161,66 @@ def fetch_dse_live_via_scrape() -> pd.DataFrame | None:
     except Exception as exc:
         logger.warning("DSE scrape failed: %s", exc)
         return None
+
+
+def fetch_dse_pe_ratios() -> pd.DataFrame | None:
+    """Scrape dsebd.org's bulk "Trailing P/E" table — one request covers
+    every listed DSE company. Not sourced via bdshare's get_latest_pe():
+    that helper slices off exactly the "Trailing P/E" column (keeps only
+    the mostly-"n/a" P/E 1-6 variants), so this parses the page directly
+    instead. Columns: #, Trade Code, Close Price, YCP, P/E 1-6*, Trailing
+    P/E."""
+    try:
+        resp = _get(DSE_LATEST_PE, timeout=30)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "lxml")
+        table = soup.select_one("table.shares-table") or soup.find(
+            "table", class_=lambda c: c and "shares-table" in c
+        )
+        if not table:
+            for candidate in soup.find_all("table"):
+                head = candidate.find("tr")
+                if head and "TRADE CODE" in head.get_text(" ", strip=True).upper():
+                    table = candidate
+                    break
+        if not table:
+            return None
+        rows = []
+        for tr in table.find_all("tr")[1:]:
+            cells = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+            if len(cells) < 11:
+                continue
+            code = cells[1].strip().upper()
+            if not code or code == "#":
+                continue
+            pe = _safe_float(cells[10])
+            if pe is None or pe <= 0:
+                continue
+            rows.append({"trading_code": code, "pe_ratio": pe})
+        if not rows:
+            return None
+        return pd.DataFrame(rows)
+    except Exception as exc:
+        logger.warning("DSE latest_PE scrape failed: %s", exc)
+        return None
+
+
+def sync_dse_pe_ratios() -> dict:
+    """Update Stock.pe_ratio for every matching active DSE stock from the
+    bulk trailing-P/E table. A live snapshot only (no history is kept),
+    so it's safe for display but must NOT be used as a walk-forward ML
+    feature as-is — that would need a genuine daily time series to avoid
+    leaking a stock's future P/E into historical training rows."""
+    df = fetch_dse_pe_ratios()
+    if df is None or df.empty:
+        return {"ok": False, "error": "No P/E data available", "updated": 0}
+
+    pe_by_code = dict(zip(df["trading_code"], df["pe_ratio"]))
+    stocks = list(Stock.objects.filter(exchange=Exchange.DSE, is_active=True, trading_code__in=pe_by_code.keys()))
+    for stock in stocks:
+        stock.pe_ratio = pe_by_code[stock.trading_code]
+    updated = Stock.objects.bulk_update(stocks, ["pe_ratio"], batch_size=200)
+    return {"ok": True, "updated": len(stocks), "matched_of_scraped": len(stocks), "scraped_rows": len(df)}
 
 
 def fetch_dse_history_via_bdshare(code: str, start: date, end: date) -> pd.DataFrame | None:

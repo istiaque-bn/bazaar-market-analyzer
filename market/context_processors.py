@@ -1,3 +1,40 @@
+# Exact url_name membership per navbar group — used for active-state
+# highlighting so a stock-detail page keeps "Stocks" active, a portfolio
+# sub-page keeps "Portfolio" active, etc. Deliberately a set-membership
+# check (not a substring/`in` string test) so a url_name can never
+# accidentally match a sibling group's name.
+NAV_GROUPS = {
+    "dashboard": {"dashboard"},
+    "stocks": {"stock_list", "stock_detail", "predict_price"},
+    "portfolio": {
+        "portfolio_redirect",
+        "portfolio_list",
+        "portfolio_create",
+        "portfolio_detail",
+        "portfolio_rename",
+        "portfolio_set_default",
+        "portfolio_delete",
+        "portfolio_transactions",
+        "portfolio_add_transaction",
+        "portfolio_add_holding",
+        "portfolio_edit_transaction",
+        "portfolio_delete_transaction",
+    },
+    "watchlist": {"watchlist"},
+    "tools": {"backtests", "alerts"},
+    "admin": {"data_quality", "ops_report", "ml_reliability"},
+}
+
+
+def _active_nav(request):
+    match = getattr(request, "resolver_match", None)
+    url_name = getattr(match, "url_name", None) if match else None
+    for group, names in NAV_GROUPS.items():
+        if url_name in names:
+            return group
+    return None
+
+
 def market_nav(request):
     from django.conf import settings
     from django.utils import timezone
@@ -56,4 +93,5 @@ def market_nav(request):
         "project_timezone": settings.TIME_ZONE,
         "local_now": local_now,
         "local_now_display": local_now.strftime("%a %d %b · %I:%M %p").lstrip("0").replace(" 0", " "),
+        "active_nav": _active_nav(request),
     }

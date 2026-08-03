@@ -67,6 +67,97 @@ def _stale_data_alerts(freshness: dict) -> list[dict]:
     return alerts
 
 
+def _stale_analysis_alerts(predictions: dict) -> list[dict]:
+    """Price data and analysis/signal generation can go stale independently
+    — a fetch can keep succeeding while the analysis step never runs (or
+    silently errors), which _stale_data_alerts alone won't catch since it
+    only looks at PriceHistory. Same threshold/rationale as stale price
+    data (STALE_DATA_DAYS): a normal weekend gap shouldn't fire this."""
+    latest_as_of = predictions.get("latest_as_of")
+    today = timezone.localdate()
+    if not latest_as_of:
+        return [
+            {
+                "key": "stale_analysis",
+                "severity": "critical",
+                "message": "No AnalysisResult rows exist at all — signals have never been generated.",
+                "detail": {},
+            }
+        ]
+    age = (today - timezone.datetime.fromisoformat(latest_as_of).date()).days
+    if age > STALE_DATA_DAYS:
+        return [
+            {
+                "key": "stale_analysis",
+                "severity": "warning" if age <= STALE_DATA_DAYS * 2 else "critical",
+                "message": f"Latest analysis/signals are {age} days old (as of {latest_as_of}, threshold {STALE_DATA_DAYS}).",
+                "detail": {"latest_as_of": latest_as_of, "age_days": age},
+            }
+        ]
+    return []
+
+
+def extract_sync_errors(detail: dict) -> list[str]:
+    """dse_fetcher/cse_fetcher/autosync deliberately catch their own
+    exceptions and return {"ok": False, "error": ...} (sometimes nested
+    under "dse"/"cse"/"live") instead of raising, so a broken fetch never
+    surfaces as a TaskRun FAILURE — record_task_run only sees a normal
+    return value and marks the run 'success'. This walks the stored
+    result payload for any such embedded error regardless of which
+    task/shape produced it, so that class of failure isn't invisible."""
+    errors = []
+    if not isinstance(detail, dict):
+        return errors
+    if detail.get("ok") is False and detail.get("error"):
+        errors.append(str(detail["error"]))
+    if detail.get("last_error"):
+        errors.append(str(detail["last_error"]))
+    for key in ("dse", "cse", "live", "analysis"):
+        sub = detail.get(key)
+        if isinstance(sub, dict):
+            errors.extend(extract_sync_errors(sub))
+    return errors
+
+
+#  append_daily_bars only runs twice a day (10:05/14:05), so without a
+# recency bound its "latest success" could be many hours old — long
+# enough that a worker fixed and restarted since then would still show
+# as unhealthy off pure history. Bounded to a window that comfortably
+# covers the gap between scheduled runs of any FETCH_TASK_NAMES task.
+SILENT_FAILURE_LOOKBACK_HOURS = 6
+
+
+def recent_silent_sync_error(task_name: str, lookback_hours: int = SILENT_FAILURE_LOOKBACK_HOURS) -> str | None:
+    """The first embedded error from task_name's most recent run within
+    the lookback window, if that run reported status=success — i.e. the
+    exact "looked fine to Celery, wasn't fine" case extract_sync_errors
+    exists to catch. None if the latest recent run had no embedded error,
+    already shows as FAILURE (a different, already-visible alert), or
+    there's no run in the window at all."""
+    cutoff = timezone.now() - timedelta(hours=lookback_hours)
+    latest = TaskRun.objects.filter(task_name=task_name, started_at__gte=cutoff).order_by("-started_at").first()
+    if latest is None or latest.status != TaskStatus.SUCCESS:
+        return None
+    errors = extract_sync_errors(latest.detail)
+    return errors[0] if errors else None
+
+
+def _silent_sync_failure_alerts() -> list[dict]:
+    alerts = []
+    for task_name in FETCH_TASK_NAMES:
+        error = recent_silent_sync_error(task_name)
+        if error:
+            alerts.append(
+                {
+                    "key": f"silent_sync_failure_{task_name}",
+                    "severity": "critical",
+                    "message": f"{task_name}: a recent run reported 'success' but its own result recorded an error: {error[:200]}",
+                    "detail": {"task_name": task_name, "error": error},
+                }
+            )
+    return alerts
+
+
 def _repeated_failure_alerts() -> list[dict]:
     alerts = []
     for task_name in FETCH_TASK_NAMES:
@@ -177,7 +268,9 @@ def evaluate_alerts(summary: dict | None = None) -> list[dict]:
     summary = summary if summary is not None else ops_metrics.ops_summary()
     alerts = (
         _stale_data_alerts(summary["rejected_rows"]["freshness"])
+        + _stale_analysis_alerts(summary["predictions"])
         + _repeated_failure_alerts()
+        + _silent_sync_failure_alerts()
         + _job_overlap_and_stuck_alerts()
         + _database_alerts()
         + _model_degradation_alerts(summary["models"])

@@ -1,0 +1,260 @@
+{% extends "base.html" %}
+{% load portfolio_extras %}
+{% block title %}{{ portfolio.name }} · Portfolio{% endblock %}
+{% block content %}
+<div class="section-title">
+  <div>
+    <h2>{{ portfolio.name }}{% if portfolio.is_default %} <span class="badge badge-watch">Default</span>{% endif %}</h2>
+    <p class="muted" id="portfolioLastUpdated">
+      Last updated <span id="portfolioLastUpdatedTime">just now</span> (Asia/Dhaka) ·
+      DSE <span class="{% if market_hours.dse.is_open %}up{% else %}muted{% endif %}">{{ market_hours.dse.status }}</span> ·
+      CSE <span class="{% if market_hours.cse.is_open %}up{% else %}muted{% endif %}">{{ market_hours.cse.status }}</span>
+    </p>
+  </div>
+  <div class="portfolio-actions">
+    {% if portfolios|length > 1 %}
+    <form method="get" action="" class="inline">
+      <select onchange="if(this.value) window.location.href=this.value;">
+        {% for p in portfolios %}
+        <option value="{% url 'portfolio_detail' p.id %}" {% if p.id == portfolio.id %}selected{% endif %}>{{ p.name }}{% if p.is_default %} (default){% endif %}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% endif %}
+    <a class="btn btn-small btn-gold" href="{% url 'portfolio_add_holding' portfolio.id %}">+ Add holding</a>
+    <a class="btn btn-small btn-ghost" href="{% url 'portfolio_add_transaction' portfolio.id %}">+ Add transaction</a>
+    <button class="btn btn-small btn-ghost" type="button" id="portfolioRefreshBtn">↻ Refresh</button>
+  </div>
+</div>
+
+<div class="disclaimer">{{ disclaimer }}</div>
+
+{% if summary.has_any_data_warning %}
+<div class="disclaimer" style="border-color: var(--fall); color: var(--fall);">
+  ⚠ One or more holdings have an inconsistent transaction history (a sale appears to exceed shares held at that
+  date). Figures below may be incomplete for that stock — check its transaction history.
+</div>
+{% endif %}
+
+<div class="grid-4">
+  <div class="stat">
+    <div class="label">Invested (cost basis)</div>
+    <div class="value">{{ summary.total_cost_basis|bdt }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Current value</div>
+    <div class="value" id="statMarketValue">{{ summary.total_market_value|bdt }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Total gain/loss</div>
+    <div class="value {{ summary.total_unrealized_pl|pl_class }}" id="statUnrealizedPl">
+      {{ summary.total_unrealized_pl|signed:2|default:"—" }}
+      {% if summary.total_unrealized_pl_pct != None %}<span class="tiny">({{ summary.total_unrealized_pl_pct|signed:2 }}%)</span>{% endif %}
+    </div>
+  </div>
+  <div class="stat">
+    <div class="label">Today's gain/loss</div>
+    <div class="value {{ summary.today_total_pl|pl_class }}" id="statTodayPl">
+      {% if summary.today_total_pl != None %}{{ summary.today_total_pl|signed:2 }}{% else %}—{% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="grid-4" style="margin-top:1rem;">
+  <div class="stat">
+    <div class="label">Realized gain/loss (all-time)</div>
+    <div class="value {{ summary.total_realized_pl|pl_class }}">{{ summary.total_realized_pl|signed:2 }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Open holdings</div>
+    <div class="value">{{ summary.open_holdings_count }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Best performer</div>
+    <div class="value" style="font-size:1.2rem;">
+      {% if summary.best_holding %}
+        <a href="{% url 'stock_detail' summary.best_holding.exchange summary.best_holding.trading_code %}">{{ summary.best_holding.trading_code }}</a>
+        <span class="up tiny">+{{ summary.best_holding.unrealized_pl_pct }}%</span>
+      {% else %}—{% endif %}
+    </div>
+  </div>
+  <div class="stat">
+    <div class="label">Worst performer</div>
+    <div class="value" style="font-size:1.2rem;">
+      {% if summary.worst_holding %}
+        <a href="{% url 'stock_detail' summary.worst_holding.exchange summary.worst_holding.trading_code %}">{{ summary.worst_holding.trading_code }}</a>
+        <span class="{{ summary.worst_holding.unrealized_pl_pct|pl_class }} tiny">{{ summary.worst_holding.unrealized_pl_pct }}%</span>
+      {% else %}—{% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="section-title"><h2>Holdings</h2></div>
+
+{% if not summary.holdings %}
+<div class="panel empty-state">
+  <p><strong>No open holdings yet.</strong></p>
+  <p class="muted">Add your first holding to start tracking cost basis and profit/loss against live DSE/CSE prices.</p>
+  <a class="btn btn-gold" href="{% url 'portfolio_add_holding' portfolio.id %}">+ Add your first holding</a>
+</div>
+{% else %}
+<form class="filters" method="get" id="holdingsFilterForm">
+  <select id="holdingsExchangeFilter">
+    <option value="">All exchanges</option>
+    <option value="DSE">DSE</option>
+    <option value="CSE">CSE</option>
+  </select>
+  <select id="holdingsPlFilter">
+    <option value="">All (gain/loss)</option>
+    <option value="up">Gaining</option>
+    <option value="down">Losing</option>
+  </select>
+  <input type="search" id="holdingsSearch" placeholder="Search code or company">
+</form>
+<div class="panel">
+  <div class="table-wrap">
+    <table id="holdingsTable">
+      <thead>
+        <tr>
+          <th data-sort="trading_code" class="sortable">Code</th>
+          <th>Quote</th>
+          <th data-sort="quantity" class="sortable">Qty</th>
+          <th data-sort="average_price" class="sortable">Avg buy</th>
+          <th data-sort="cost_basis" class="sortable">Cost basis</th>
+          <th data-sort="latest_price" class="sortable">Price</th>
+          <th data-sort="market_value" class="sortable">Value</th>
+          <th data-sort="unrealized_pl" class="sortable">Gain/loss</th>
+          <th data-sort="today_pl" class="sortable">Today</th>
+          <th data-sort="allocation_pct" class="sortable">Alloc %</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in summary.holdings %}
+        <tr data-exchange="{{ r.exchange }}" data-code="{{ r.trading_code }}" data-company="{{ r.company_name|lower }}"
+            data-pl-sign="{{ r.unrealized_pl|pl_class }}"
+            data-quote-row="{{ r.exchange }}:{{ r.trading_code }}">
+          <td><a href="{% url 'stock_detail' r.exchange r.trading_code %}">{{ r.trading_code }}</a> <span class="muted tiny">{{ r.exchange }}</span></td>
+          <td><span class="badge quote-badge quote-{{ r.quote_status }}" title="{% if r.quote_as_of %}as of {{ r.quote_as_of|date:'d M, h:i A' }}{% endif %}">{{ r.quote_label }}</span></td>
+          <td data-field="quantity">{{ r.quantity|floatformat:0 }}</td>
+          <td data-field="average_price">{{ r.average_price|bdt:4 }}</td>
+          <td data-field="cost_basis">{{ r.cost_basis|bdt }}</td>
+          <td data-field="latest_price">{% if r.latest_price %}{{ r.latest_price|bdt }}{% else %}—{% endif %}</td>
+          <td data-field="market_value">{{ r.market_value|bdt }}</td>
+          <td data-field="unrealized_pl" class="{{ r.unrealized_pl|pl_class }}">
+            {{ r.unrealized_pl|signed|default:"—" }}
+            {% if r.unrealized_pl_pct != None %}<br><span class="tiny">({{ r.unrealized_pl_pct|signed }}%)</span>{% endif %}
+          </td>
+          <td data-field="today_pl" class="{{ r.today_pl|pl_class }}">{% if r.today_pl != None %}{{ r.today_pl|signed }}{% else %}—{% endif %}</td>
+          <td data-field="allocation_pct">{% if r.allocation_pct != None %}{{ r.allocation_pct }}%{% else %}—{% endif %}</td>
+          <td><a class="btn btn-small btn-ghost" href="{% url 'portfolio_add_transaction' portfolio.id %}?stock={{ r.stock.id }}">Trade</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="grid-2" style="margin-top:1.2rem;">
+  <section class="panel">
+    <h3>Allocation by exchange</h3>
+    {% for a in summary.allocation_by_exchange %}
+    <div class="alloc-row">
+      <span class="alloc-label">{{ a.label }}</span>
+      <div class="alloc-bar"><div class="alloc-bar-fill" style="width:{{ a.pct|default:0 }}%;"></div></div>
+      <span class="alloc-pct">{{ a.pct|default:"—" }}%</span>
+    </div>
+    {% empty %}<p class="muted">No priced holdings yet.</p>{% endfor %}
+  </section>
+  <section class="panel">
+    <h3>Allocation by sector</h3>
+    {% for a in summary.allocation_by_sector %}
+    <div class="alloc-row">
+      <span class="alloc-label">{{ a.label }}</span>
+      <div class="alloc-bar"><div class="alloc-bar-fill" style="width:{{ a.pct|default:0 }}%;"></div></div>
+      <span class="alloc-pct">{{ a.pct|default:"—" }}%</span>
+    </div>
+    {% empty %}<p class="muted">No priced holdings yet.</p>{% endfor %}
+  </section>
+</div>
+{% endif %}
+
+<div class="section-title">
+  <h2>Recent transactions</h2>
+  <a href="{% url 'portfolio_transactions' portfolio.id %}">View all →</a>
+</div>
+<div class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Date</th><th>Type</th><th>Code</th><th>Qty</th><th>Price</th><th>Fees</th><th>Total</th><th></th></tr></thead>
+      <tbody>
+        {% for t in recent_transactions %}
+        <tr>
+          <td>{{ t.transaction_date|date:"d M Y" }}{% if t.transaction_date > today %} <span class="badge badge-watch tiny" title="Not yet applied to current holdings">Future</span>{% endif %}</td>
+          <td><span class="badge {% if t.transaction_type == 'BUY' %}badge-buy{% else %}badge-sell{% endif %}">{{ t.transaction_type }}</span></td>
+          <td><a href="{% url 'stock_detail' t.stock.exchange t.stock.trading_code %}">{{ t.stock.trading_code }}</a></td>
+          <td>{{ t.quantity|floatformat:0 }}</td>
+          <td>{{ t.price_per_share|bdt:2 }}</td>
+          <td>{{ t.fees|bdt:2 }}</td>
+          <td>{{ t.gross_amount|bdt:2 }}</td>
+          <td><a class="btn btn-small btn-ghost" href="{% url 'portfolio_edit_transaction' portfolio.id t.id %}">Edit</a></td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8" class="muted">No transactions yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="section-title"><h2>Manage portfolio</h2></div>
+<div class="grid-2">
+  <section class="panel">
+    <h3>Portfolios</h3>
+    <ul class="plain-list">
+      {% for p in portfolios %}
+      <li>
+        <a href="{% url 'portfolio_detail' p.id %}">{{ p.name }}</a>
+        {% if p.is_default %}<span class="badge badge-watch tiny">Default</span>{% else %}
+        <form class="inline" method="post" action="{% url 'portfolio_set_default' p.id %}">{% csrf_token %}<button class="linkish" type="submit">Make default</button></form>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    <form method="post" action="{% url 'portfolio_create' %}" class="form" style="margin-top:0.8rem;">
+      {% csrf_token %}
+      <label>New portfolio name
+        <input type="text" name="name" maxlength="64" placeholder="e.g. Long-term, Trading" required>
+      </label>
+      <button class="btn btn-small" type="submit">Create portfolio</button>
+    </form>
+  </section>
+  <section class="panel">
+    <h3>Rename "{{ portfolio.name }}"</h3>
+    <form method="post" action="{% url 'portfolio_rename' portfolio.id %}" class="form">
+      {% csrf_token %}
+      <label>Name
+        <input type="text" name="name" maxlength="64" value="{{ portfolio.name }}" required>
+      </label>
+      <button class="btn btn-small" type="submit">Save name</button>
+    </form>
+    <h3 style="margin-top:1.2rem; color: var(--fall);">Delete portfolio</h3>
+    <p class="muted">This permanently deletes "{{ portfolio.name }}" and every transaction recorded in it. This cannot be undone.</p>
+    <form method="post" action="{% url 'portfolio_delete' portfolio.id %}" class="form" id="deletePortfolioForm"
+          onsubmit="return confirm('Permanently delete \'{{ portfolio.name|escapejs }}\' and all its transactions? This cannot be undone.');">
+      {% csrf_token %}
+      <label>Type "{{ portfolio.name }}" to confirm
+        <input type="text" name="confirm_name" autocomplete="off" required>
+      </label>
+      <button class="btn btn-small" type="submit" style="background: var(--fall);">Delete portfolio</button>
+    </form>
+  </section>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  window.PORTFOLIO_QUOTES_URL = "{% url 'portfolio_quotes_json' portfolio.id %}";
+</script>
+<script src="/static/js/portfolio.js" defer></script>
+{% endblock %}

@@ -107,20 +107,97 @@
           </div>
         </div>
       </div>
-      <nav class="nav">
-        <a href="{% url 'dashboard' %}">Dashboard</a>
-        <a href="{% url 'stock_list' %}">Stocks</a>
-        <a href="{% url 'backtests' %}">Backtests</a>
-        <a href="{% url 'alerts' %}">Alerts</a>
-        {% if user.is_staff %}<a href="{% url 'data_quality' %}">Data QA</a><a href="{% url 'ops_report' %}">Ops</a><a href="{% url 'ml_reliability' %}">ML Reliability</a>{% endif %}
-        {% if user.is_authenticated %}
-          <a href="{% url 'watchlist' %}">Watchlist</a>
-          <a href="{% url 'profile' %}">Profile</a>
-          <form class="inline" method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit" class="linkish">Logout</button></form>
-        {% else %}
-          <a href="{% url 'login' %}">Login</a>
-          <a class="btn btn-small" href="{% url 'signup' %}">Sign up</a>
-        {% endif %}
+      <button type="button" class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="siteNav" aria-label="Open navigation menu">
+        <span class="nav-toggle-bars" aria-hidden="true"><span></span><span></span><span></span></span>
+      </button>
+
+      <div class="nav-scrim" id="navScrim" hidden></div>
+
+      <nav class="site-nav" id="siteNav" aria-label="Primary">
+        <div class="site-nav-panel">
+          <div class="nav-panel-head">
+            <span class="nav-panel-title">Menu</span>
+            <button type="button" class="nav-close" id="navClose" aria-label="Close navigation menu">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+
+          <ul class="nav-links">
+            <li>
+              <a href="{% url 'dashboard' %}" class="{% if active_nav == 'dashboard' %}active{% endif %}"{% if active_nav == 'dashboard' %} aria-current="page"{% endif %}>
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                <span>Dashboard</span>
+              </a>
+            </li>
+            <li>
+              <a href="{% url 'stock_list' %}" class="{% if active_nav == 'stocks' %}active{% endif %}"{% if active_nav == 'stocks' %} aria-current="page"{% endif %}>
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                <span>Stocks</span>
+              </a>
+            </li>
+            {% if user.is_authenticated %}
+              <li>
+                <a href="{% url 'portfolio_redirect' %}" class="{% if active_nav == 'portfolio' %}active{% endif %}"{% if active_nav == 'portfolio' %} aria-current="page"{% endif %}>
+                  <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+                  <span>Portfolio</span>
+                </a>
+              </li>
+              <li>
+                <a href="{% url 'watchlist' %}" class="{% if active_nav == 'watchlist' %}active{% endif %}"{% if active_nav == 'watchlist' %} aria-current="page"{% endif %}>
+                  <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                  <span>Watchlist</span>
+                </a>
+              </li>
+            {% endif %}
+            <li class="nav-dropdown">
+              <button type="button" class="nav-dropdown-btn{% if active_nav == 'tools' %} active{% endif %}" aria-haspopup="true" aria-expanded="false" aria-controls="toolsMenu"{% if active_nav == 'tools' %} aria-current="true"{% endif %}>
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+                <span>Tools</span>
+                <svg class="nav-icon nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <div class="nav-dropdown-menu" id="toolsMenu">
+                <a href="{% url 'backtests' %}">Backtests</a>
+                <a href="{% url 'alerts' %}">Alerts</a>
+              </div>
+            </li>
+            {% if user.is_staff %}
+              <li class="nav-dropdown">
+                <button type="button" class="nav-dropdown-btn{% if active_nav == 'admin' %} active{% endif %}" aria-haspopup="true" aria-expanded="false" aria-controls="staffMenu"{% if active_nav == 'admin' %} aria-current="true"{% endif %}>
+                  <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 2 3 7v6c0 5 4 9 9 9s9-4 9-9V7l-9-5Z"/></svg>
+                  <span>Admin</span>
+                  <svg class="nav-icon nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                <div class="nav-dropdown-menu" id="staffMenu">
+                  <a href="{% url 'data_quality' %}">Data QA</a>
+                  <a href="{% url 'ops_report' %}">Operations</a>
+                  <a href="{% url 'ml_reliability' %}">ML Reliability</a>
+                </div>
+              </li>
+            {% endif %}
+          </ul>
+
+          <div class="nav-account">
+            {% if user.is_authenticated %}
+              <div class="nav-dropdown nav-user">
+                <button type="button" class="nav-dropdown-btn nav-user-btn" aria-haspopup="true" aria-expanded="false" aria-controls="userMenu">
+                  <span class="nav-avatar" aria-hidden="true">{{ user.username|first|upper }}</span>
+                  <span class="nav-username" title="{{ user.username }}">{{ user.username }}</span>
+                  <svg class="nav-icon nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                <div class="nav-dropdown-menu nav-dropdown-menu-end" id="userMenu">
+                  <a href="{% url 'profile' %}">Profile</a>
+                  <form class="nav-logout-form" method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit" class="nav-logout-btn">Logout</button></form>
+                </div>
+              </div>
+            {% else %}
+              <a class="nav-login" href="{% url 'login' %}">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+                <span>Login</span>
+              </a>
+              <a class="btn btn-small btn-gold" href="{% url 'signup' %}">Sign up</a>
+            {% endif %}
+          </div>
+        </div>
       </nav>
     </header>
   </div>
@@ -141,6 +218,7 @@
     <p><strong>Bazaar</strong> analyses DSE &amp; CSE using ~1 year of price history. Signals are probabilistic estimates — not financial advice.</p>
   </footer>
   <script src="/static/js/ticker.js" defer></script>
+  <script src="/static/js/nav.js" defer></script>
   {% block extra_js %}{% endblock %}
 </body>
 </html>

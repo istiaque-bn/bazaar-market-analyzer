@@ -1,5 +1,8 @@
+from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
+from django.core.paginator import Paginator
+from django.db import transaction
 from django.db.models import Q
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -7,8 +10,21 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 from datetime import datetime
 
-from market.models import AnalysisResult, BacktestRun, MarketSnapshot, PatternHit, Stock, TechnicalSnapshot, Watchlist
+from market.forms import PortfolioForm, TransactionForm
+from market.models import (
+    AnalysisResult,
+    BacktestRun,
+    MarketSnapshot,
+    PatternHit,
+    Portfolio,
+    PortfolioTransaction,
+    Stock,
+    TechnicalSnapshot,
+    TransactionType,
+    Watchlist,
+)
 from market.services.autosync import get_last_success_at
+from market.services.ops_alerts import STALE_DATA_DAYS, recent_silent_sync_error
 from market.services.indicators import prices_to_df
 from market.services.predictor import CONFIDENCE_SCALE, RESEARCH_DISCLAIMER, predict_price_at_date
 from market.services.screener import potential_shares, safe_buys, screen_summary, sell_candidates, top_by_sector
@@ -44,6 +60,7 @@ def dashboard(request):
         edge = market_edge_status()
     except Exception:
         edge = {"has_edge": False, "edge_reason": "Model status unavailable."}
+    health_issue = _dashboard_health_issue(summary.get("as_of")) if request.user.is_staff else None
     return render(
         request,
         "market/dashboard.html",
@@ -59,8 +76,25 @@ def dashboard(request):
             "close_learn": close_learn,
             "edge": edge,
             "data_last_updated": get_last_success_at(),
+            "health_issue": health_issue,
         },
     )
+
+
+def _dashboard_health_issue(as_of) -> str | None:
+    """Cheap, staff-only pre-flight for the dashboard banner — deliberately
+    NOT the full ops_alerts.evaluate_alerts()/ops_summary(), since that
+    includes a provenance_report() scan over the whole PriceHistory table
+    that's too expensive to run on every dashboard load. Just the two
+    checks relevant to "is what I'm looking at right now trustworthy":
+    is the analysis stale, and is the last sync silently failing."""
+    today = timezone.localdate()
+    if as_of and (today - as_of).days > STALE_DATA_DAYS:
+        return f"Signals are {(today - as_of).days} days old (last analyzed {as_of}) — the pipeline may not be running."
+    error = recent_silent_sync_error("market.tasks.sync_live_market")
+    if error:
+        return f"Live sync is silently failing: {error[:150]}"
+    return None
 
 
 def stock_list(request):
@@ -223,10 +257,22 @@ def stock_detail(request, exchange: str, code: str):
     from market.services.close_learn import learn_status
     from market.services.price_format import round_to_tick
 
-    next_close_fc = (
-        NextDayCloseForecast.objects.filter(stock=stock).order_by("-target_date", "-as_of").first()
+    # Split into two distinct rows rather than one "latest of either kind"
+    # row: an unsettled forecast (target_date in the future, no actual yet)
+    # and a settled one (already resolved against a real close) answer
+    # different questions and were previously conflated — whichever had
+    # the higher target_date silently won, so a fresh "predicting
+    # tomorrow" row would hide the most recent settled comparison, or a
+    # stale settled row would hide the fact that no new prediction has
+    # been generated in days.
+    next_close_pending = (
+        NextDayCloseForecast.objects.filter(stock=stock, actual_close__isnull=True).order_by("-target_date").first()
     )
-    next_close_forecast_price = round_to_tick(next_close_fc.predicted_close) if next_close_fc else None
+    next_close_settled = (
+        NextDayCloseForecast.objects.filter(stock=stock, actual_close__isnull=False).order_by("-target_date").first()
+    )
+    next_close_pending_price = round_to_tick(next_close_pending.predicted_close) if next_close_pending else None
+    next_close_settled_price = round_to_tick(next_close_settled.predicted_close) if next_close_settled else None
     try:
         status = signal_status(stock, analysis, tech)
     except Exception:
@@ -255,8 +301,10 @@ def stock_detail(request, exchange: str, code: str):
             "history_count": len(history_rows),
             "in_watchlist": in_watchlist,
             "confidence_scale": CONFIDENCE_SCALE,
-            "next_close_forecast": next_close_fc,
-            "next_close_forecast_price": next_close_forecast_price,
+            "next_close_pending": next_close_pending,
+            "next_close_pending_price": next_close_pending_price,
+            "next_close_settled": next_close_settled,
+            "next_close_settled_price": next_close_settled_price,
             "close_learn": learn_status(),
             "status": status,
         },
@@ -521,6 +569,331 @@ def ticker_json(request):
             "indexes": list(snapshots.values()),
             "sync": get_sync_status(),
             "market_hours": both_exchanges_status(),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Portfolio
+# ---------------------------------------------------------------------------
+
+PORTFOLIO_DISCLAIMER = (
+    "Figures on this page are personal-tracking estimates computed from cached/delayed "
+    "market data — not a brokerage statement, tax document, or investment advice."
+)
+
+
+def _owned_portfolio(request, portfolio_id):
+    """Every portfolio-scoped view routes through this — a user can only
+    ever look up their own portfolio, full stop. get_object_or_404 with
+    user=request.user in the filter means a wrong/foreign id 404s exactly
+    like a nonexistent one, rather than leaking whether it belongs to
+    someone else."""
+    return get_object_or_404(Portfolio, id=portfolio_id, user=request.user)
+
+
+@login_required
+def portfolio_redirect(request):
+    from market.services.portfolio import get_or_create_default_portfolio
+
+    portfolio = get_or_create_default_portfolio(request.user)
+    return redirect("portfolio_detail", portfolio_id=portfolio.id)
+
+
+@login_required
+def portfolio_list(request):
+    from market.services.portfolio import get_or_create_default_portfolio, portfolio_summary
+
+    get_or_create_default_portfolio(request.user)
+    portfolios = list(Portfolio.objects.filter(user=request.user).order_by("-is_default", "name"))
+    summaries = [(p, portfolio_summary(p)) for p in portfolios]
+    return render(
+        request,
+        "market/portfolio_list.html",
+        {"summaries": summaries, "create_form": PortfolioForm(user=request.user)},
+    )
+
+
+@login_required
+def portfolio_detail(request, portfolio_id):
+    from market.services.market_hours import both_exchanges_status
+    from market.services.portfolio import portfolio_summary
+
+    portfolio = _owned_portfolio(request, portfolio_id)
+    all_portfolios = list(Portfolio.objects.filter(user=request.user).order_by("-is_default", "name"))
+    summary = portfolio_summary(portfolio)
+    recent_transactions = list(
+        portfolio.transactions.select_related("stock").order_by("-transaction_date", "-created_at")[:10]
+    )
+    return render(
+        request,
+        "market/portfolio_detail.html",
+        {
+            "portfolio": portfolio,
+            "portfolios": all_portfolios,
+            "summary": summary,
+            "recent_transactions": recent_transactions,
+            "rename_form": PortfolioForm(instance=portfolio, user=request.user),
+            "create_form": PortfolioForm(user=request.user),
+            "market_hours": both_exchanges_status(),
+            "disclaimer": PORTFOLIO_DISCLAIMER,
+            "today": timezone.localdate(),
+        },
+    )
+
+
+@login_required
+@require_POST
+def portfolio_create(request):
+    form = PortfolioForm(request.POST, user=request.user)
+    if form.is_valid():
+        p = form.save(commit=False)
+        p.user = request.user
+        p.is_default = not Portfolio.objects.filter(user=request.user).exists()
+        p.save()
+        messages.success(request, f'Portfolio "{p.name}" created.')
+        return redirect("portfolio_detail", portfolio_id=p.id)
+    for field_errors in form.errors.values():
+        for error in field_errors:
+            messages.error(request, error)
+    return redirect("portfolio_list")
+
+
+@login_required
+@require_POST
+def portfolio_rename(request, portfolio_id):
+    portfolio = _owned_portfolio(request, portfolio_id)
+    form = PortfolioForm(request.POST, instance=portfolio, user=request.user)
+    if form.is_valid():
+        form.save()
+        messages.success(request, "Portfolio renamed.")
+    else:
+        for field_errors in form.errors.values():
+            for error in field_errors:
+                messages.error(request, error)
+    return redirect("portfolio_detail", portfolio_id=portfolio.id)
+
+
+@login_required
+@require_POST
+def portfolio_set_default(request, portfolio_id):
+    portfolio = _owned_portfolio(request, portfolio_id)
+    with transaction.atomic():
+        Portfolio.objects.filter(user=request.user, is_default=True).exclude(id=portfolio.id).update(is_default=False)
+        portfolio.is_default = True
+        portfolio.save(update_fields=["is_default"])
+    messages.success(request, f'"{portfolio.name}" is now your default portfolio.')
+    return redirect("portfolio_detail", portfolio_id=portfolio.id)
+
+
+@login_required
+@require_POST
+def portfolio_delete(request, portfolio_id):
+    """Deleting a portfolio cascades to every transaction in it — a real
+    financial record — so this requires the user to type the portfolio's
+    exact name as a confirmation, not just a click, on top of the
+    JS-side confirm() dialog in the template."""
+    portfolio = _owned_portfolio(request, portfolio_id)
+    if request.POST.get("confirm_name") != portfolio.name:
+        messages.error(request, "Portfolio name didn't match — nothing was deleted.")
+        return redirect("portfolio_detail", portfolio_id=portfolio.id)
+    was_default = portfolio.is_default
+    name = portfolio.name
+    portfolio.delete()
+    if was_default:
+        remaining = Portfolio.objects.filter(user=request.user).order_by("id").first()
+        if remaining:
+            remaining.is_default = True
+            remaining.save(update_fields=["is_default"])
+    messages.success(request, f'Portfolio "{name}" and its transaction history were deleted.')
+    return redirect("portfolio_list")
+
+
+@login_required
+def portfolio_add_transaction(request, portfolio_id):
+    from market.services.portfolio import PortfolioValidationError, create_transaction
+
+    portfolio = _owned_portfolio(request, portfolio_id)
+    initial = {"transaction_date": timezone.localdate()}
+    stock_id = request.GET.get("stock")
+    if stock_id:
+        initial["stock"] = stock_id
+    if request.method == "POST":
+        form = TransactionForm(request.POST)
+        if form.is_valid():
+            c = form.cleaned_data
+            try:
+                create_transaction(
+                    portfolio, c["stock"], c["transaction_type"], c["quantity"],
+                    c["price_per_share"], c["fees"], c["transaction_date"], c["notes"],
+                )
+                messages.success(request, f'{c["transaction_type"].title()} recorded for {c["stock"].trading_code}.')
+                return redirect("portfolio_detail", portfolio_id=portfolio.id)
+            except PortfolioValidationError as exc:
+                form.add_error(None, str(exc))
+    else:
+        form = TransactionForm(initial=initial)
+    return render(
+        request,
+        "market/portfolio_transaction_form.html",
+        {"portfolio": portfolio, "form": form, "mode": "add", "title": "Add transaction"},
+    )
+
+
+@login_required
+def portfolio_add_holding(request, portfolio_id):
+    """Simplified first-touch flow: records a single initial BUY. Reuses
+    TransactionForm — the template just hides the transaction_type field
+    (fixed to BUY) rather than duplicating validation in a second form."""
+    from market.services.portfolio import PortfolioValidationError, create_transaction
+
+    portfolio = _owned_portfolio(request, portfolio_id)
+    if request.method == "POST":
+        data = request.POST.copy()
+        data["transaction_type"] = TransactionType.BUY
+        form = TransactionForm(data)
+        if form.is_valid():
+            c = form.cleaned_data
+            try:
+                create_transaction(
+                    portfolio, c["stock"], TransactionType.BUY, c["quantity"],
+                    c["price_per_share"], c["fees"], c["transaction_date"], c["notes"],
+                )
+                messages.success(request, f'Added {c["stock"].trading_code} to "{portfolio.name}".')
+                return redirect("portfolio_detail", portfolio_id=portfolio.id)
+            except PortfolioValidationError as exc:
+                form.add_error(None, str(exc))
+    else:
+        form = TransactionForm(initial={"transaction_type": TransactionType.BUY, "transaction_date": timezone.localdate()})
+    return render(
+        request,
+        "market/portfolio_transaction_form.html",
+        {"portfolio": portfolio, "form": form, "mode": "add_holding", "title": "Add holding"},
+    )
+
+
+@login_required
+def portfolio_edit_transaction(request, portfolio_id, txn_id):
+    from market.services.portfolio import PortfolioValidationError, update_transaction
+
+    portfolio = _owned_portfolio(request, portfolio_id)
+    txn = get_object_or_404(PortfolioTransaction, id=txn_id, portfolio=portfolio)
+    if request.method == "POST":
+        form = TransactionForm(request.POST)
+        if form.is_valid():
+            c = form.cleaned_data
+            try:
+                update_transaction(
+                    txn, c["transaction_type"], c["quantity"], c["price_per_share"],
+                    c["fees"], c["transaction_date"], c["notes"],
+                )
+                messages.success(request, "Transaction updated.")
+                return redirect("portfolio_transactions", portfolio_id=portfolio.id)
+            except PortfolioValidationError as exc:
+                form.add_error(None, str(exc))
+    else:
+        form = TransactionForm(
+            initial={
+                "stock": txn.stock_id,
+                "transaction_type": txn.transaction_type,
+                "quantity": txn.quantity,
+                "price_per_share": txn.price_per_share,
+                "fees": txn.fees,
+                "transaction_date": txn.transaction_date,
+                "notes": txn.notes,
+                "allow_fractional": txn.quantity != txn.quantity.to_integral_value(),
+            }
+        )
+    return render(
+        request,
+        "market/portfolio_transaction_form.html",
+        {"portfolio": portfolio, "form": form, "mode": "edit", "txn": txn, "title": "Edit transaction"},
+    )
+
+
+@login_required
+@require_POST
+def portfolio_delete_transaction(request, portfolio_id, txn_id):
+    from market.services.portfolio import PortfolioValidationError, delete_transaction
+
+    portfolio = _owned_portfolio(request, portfolio_id)
+    txn = get_object_or_404(PortfolioTransaction, id=txn_id, portfolio=portfolio)
+    try:
+        delete_transaction(txn)
+        messages.success(request, "Transaction deleted.")
+    except PortfolioValidationError as exc:
+        messages.error(request, f"Could not delete — {exc}")
+    return redirect("portfolio_transactions", portfolio_id=portfolio.id)
+
+
+@login_required
+def portfolio_transactions(request, portfolio_id):
+    portfolio = _owned_portfolio(request, portfolio_id)
+    qs = portfolio.transactions.select_related("stock").order_by("-transaction_date", "-created_at")
+    exchange = request.GET.get("exchange", "").strip().upper()
+    if exchange:
+        qs = qs.filter(stock__exchange=exchange)
+    stock_code = request.GET.get("stock", "").strip().upper()
+    if stock_code:
+        qs = qs.filter(stock__trading_code__icontains=stock_code)
+    txn_type = request.GET.get("type", "").strip().upper()
+    if txn_type in (TransactionType.BUY, TransactionType.SELL):
+        qs = qs.filter(transaction_type=txn_type)
+    page = Paginator(qs, 25).get_page(request.GET.get("page"))
+    return render(
+        request,
+        "market/portfolio_transactions.html",
+        {"portfolio": portfolio, "page_obj": page, "exchange": exchange, "stock_code": stock_code, "txn_type": txn_type},
+    )
+
+
+@login_required
+def portfolio_quotes_json(request, portfolio_id):
+    """Authenticated, cache/DB-only refresh for an open portfolio page —
+    like ticker_json, this must never trigger a live scrape; prices come
+    from whatever the background sync pipeline has already written.
+    Polled by static/js/portfolio.js."""
+    from market.services.market_hours import both_exchanges_status
+    from market.services.portfolio import portfolio_summary
+    from market.services.rate_limit import is_rate_limited
+
+    portfolio = _owned_portfolio(request, portfolio_id)
+    if is_rate_limited(f"portfolio_quotes:{request.user.id}", 30, 60):
+        return JsonResponse({"detail": "Too many requests."}, status=429)
+
+    summary = portfolio_summary(portfolio)
+
+    def money(v):
+        return str(v) if v is not None else None
+
+    def row_json(r):
+        return {
+            "exchange": r["exchange"],
+            "trading_code": r["trading_code"],
+            "quantity": str(r["quantity"]),
+            "average_price": money(r["average_price"]),
+            "latest_price": money(r["latest_price"]),
+            "market_value": money(r["market_value"]),
+            "unrealized_pl": money(r["unrealized_pl"]),
+            "unrealized_pl_pct": money(r["unrealized_pl_pct"]),
+            "today_pl": money(r["today_pl"]),
+            "today_pl_pct": money(r["today_pl_pct"]),
+            "allocation_pct": money(r["allocation_pct"]),
+            "quote_status": r["quote_status"],
+            "quote_label": r["quote_label"],
+            "quote_as_of": r["quote_as_of"].isoformat() if r["quote_as_of"] else None,
+        }
+
+    return JsonResponse(
+        {
+            "holdings": [row_json(r) for r in summary["holdings"]],
+            "total_cost_basis": money(summary["total_cost_basis"]),
+            "total_market_value": money(summary["total_market_value"]),
+            "total_unrealized_pl": money(summary["total_unrealized_pl"]),
+            "total_unrealized_pl_pct": money(summary["total_unrealized_pl_pct"]),
+            "today_total_pl": money(summary["today_total_pl"]),
+            "market_hours": both_exchanges_status(),
+            "generated_at": timezone.now().isoformat(),
         }
     )
 

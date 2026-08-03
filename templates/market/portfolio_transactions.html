@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% load portfolio_extras %}
+{% block title %}Transactions · {{ portfolio.name }}{% endblock %}
+{% block content %}
+<div class="section-title">
+  <h2>Transaction history — {{ portfolio.name }}</h2>
+  <a href="{% url 'portfolio_detail' portfolio.id %}">← Back to {{ portfolio.name }}</a>
+</div>
+
+<form class="filters" method="get">
+  <select name="exchange">
+    <option value="">All exchanges</option>
+    <option value="DSE" {% if exchange == "DSE" %}selected{% endif %}>DSE</option>
+    <option value="CSE" {% if exchange == "CSE" %}selected{% endif %}>CSE</option>
+  </select>
+  <select name="type">
+    <option value="">All types</option>
+    <option value="BUY" {% if txn_type == "BUY" %}selected{% endif %}>Buy</option>
+    <option value="SELL" {% if txn_type == "SELL" %}selected{% endif %}>Sell</option>
+  </select>
+  <input type="search" name="stock" value="{{ stock_code }}" placeholder="Search code">
+  <button class="btn btn-small" type="submit">Filter</button>
+</form>
+
+<div class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Date</th><th>Type</th><th>Code</th><th>Qty</th><th>Price</th><th>Fees</th><th>Total</th><th>Notes</th><th></th></tr></thead>
+      <tbody>
+        {% for t in page_obj %}
+        <tr>
+          <td>{{ t.transaction_date|date:"d M Y" }}</td>
+          <td><span class="badge {% if t.transaction_type == 'BUY' %}badge-buy{% else %}badge-sell{% endif %}">{{ t.transaction_type }}</span></td>
+          <td><a href="{% url 'stock_detail' t.stock.exchange t.stock.trading_code %}">{{ t.stock.trading_code }}</a> <span class="muted tiny">{{ t.stock.exchange }}</span></td>
+          <td>{{ t.quantity|floatformat:0 }}</td>
+          <td>{{ t.price_per_share|bdt:2 }}</td>
+          <td>{{ t.fees|bdt:2 }}</td>
+          <td>{{ t.gross_amount|bdt:2 }}</td>
+          <td class="muted">{{ t.notes|truncatechars:60 }}</td>
+          <td style="white-space:nowrap;">
+            <a class="btn btn-small btn-ghost" href="{% url 'portfolio_edit_transaction' portfolio.id t.id %}">Edit</a>
+            <form class="inline" method="post" action="{% url 'portfolio_delete_transaction' portfolio.id t.id %}"
+                  onsubmit="return confirm('Delete this transaction? This cannot be undone.');">
+              {% csrf_token %}
+              <button class="btn btn-small btn-ghost" type="submit" style="color: var(--fall);">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="9" class="muted">No transactions match these filters.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if page_obj.has_other_pages %}
+  <nav class="pagination" aria-label="Transaction pages">
+    {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}{% if exchange %}&exchange={{ exchange }}{% endif %}{% if txn_type %}&type={{ txn_type }}{% endif %}{% if stock_code %}&stock={{ stock_code }}{% endif %}">← Prev</a>{% endif %}
+    <span class="muted">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+    {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}{% if exchange %}&exchange={{ exchange }}{% endif %}{% if txn_type %}&type={{ txn_type }}{% endif %}{% if stock_code %}&stock={{ stock_code }}{% endif %}">Next →</a>{% endif %}
+  </nav>
+  {% endif %}
+</div>
+{% endblock %}

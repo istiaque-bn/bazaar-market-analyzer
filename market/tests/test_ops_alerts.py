@@ -39,6 +39,103 @@ class StaleDataAlertTests(TestCase):
         self.assertEqual(alerts[0]["severity"], "critical")
 
 
+class StaleAnalysisAlertTests(TestCase):
+    def test_fresh_analysis_raises_no_alert(self):
+        from market.services.ops_alerts import _stale_analysis_alerts
+
+        today = timezone.localdate().isoformat()
+        self.assertEqual(_stale_analysis_alerts({"latest_as_of": today}), [])
+
+    def test_stale_analysis_raises_warning(self):
+        from market.services.ops_alerts import _stale_analysis_alerts
+
+        old = (timezone.localdate() - timedelta(days=STALE_DATA_DAYS + 1)).isoformat()
+        alerts = _stale_analysis_alerts({"latest_as_of": old})
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["key"], "stale_analysis")
+        self.assertEqual(alerts[0]["severity"], "warning")
+
+    def test_very_stale_analysis_raises_critical(self):
+        from market.services.ops_alerts import _stale_analysis_alerts
+
+        old = (timezone.localdate() - timedelta(days=STALE_DATA_DAYS * 2 + 1)).isoformat()
+        alerts = _stale_analysis_alerts({"latest_as_of": old})
+        self.assertEqual(alerts[0]["severity"], "critical")
+
+    def test_no_analysis_ever_raises_critical(self):
+        from market.services.ops_alerts import _stale_analysis_alerts
+
+        alerts = _stale_analysis_alerts({"latest_as_of": None})
+        self.assertEqual(alerts[0]["severity"], "critical")
+        self.assertEqual(alerts[0]["key"], "stale_analysis")
+
+
+class SilentSyncFailureAlertTests(TestCase):
+    def test_no_runs_raises_nothing(self):
+        from market.services.ops_alerts import _silent_sync_failure_alerts
+
+        self.assertEqual(_silent_sync_failure_alerts(), [])
+
+    def test_successful_run_with_no_embedded_error_raises_nothing(self):
+        from market.services.ops_alerts import _silent_sync_failure_alerts
+
+        TaskRun.objects.create(
+            task_name=FETCH_TASK_NAMES[0],
+            status=TaskStatus.SUCCESS,
+            detail={"ok": True, "dse": {"ok": True, "count": 10}, "cse": {"ok": True, "count": 8}},
+        )
+        self.assertEqual(_silent_sync_failure_alerts(), [])
+
+    def test_success_status_with_embedded_error_raises_critical(self):
+        """The exact bug this alert exists to catch: the Celery task
+        itself didn't raise (status=SUCCESS), but the result it returned
+        recorded a real failure — e.g. autosync's own try/except caught
+        an ImportError and returned it as {"ok": False, "error": ...}."""
+        from market.services.ops_alerts import _silent_sync_failure_alerts
+
+        TaskRun.objects.create(
+            task_name=FETCH_TASK_NAMES[0],
+            status=TaskStatus.SUCCESS,
+            detail={"ok": False, "error": "cannot import name 'MarketHoliday'"},
+        )
+        alerts = _silent_sync_failure_alerts()
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["severity"], "critical")
+        self.assertIn("MarketHoliday", alerts[0]["message"])
+
+    def test_nested_last_error_in_skipped_fresh_shape_is_caught(self):
+        from market.services.ops_alerts import _silent_sync_failure_alerts
+
+        TaskRun.objects.create(
+            task_name=FETCH_TASK_NAMES[0],
+            status=TaskStatus.SUCCESS,
+            detail={"ok": True, "skipped": "fresh", "last_error": "SSL: CERTIFICATE_VERIFY_FAILED"},
+        )
+        alerts = _silent_sync_failure_alerts()
+        self.assertEqual(len(alerts), 1)
+
+    def test_nested_error_under_live_key_is_caught(self):
+        from market.services.ops_alerts import _silent_sync_failure_alerts
+
+        TaskRun.objects.create(
+            task_name="market.tasks.append_daily_bars",
+            status=TaskStatus.SUCCESS,
+            detail={"live": {"ok": False, "error": "boom"}, "analysis": None},
+        )
+        alerts = _silent_sync_failure_alerts()
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["key"], "silent_sync_failure_market.tasks.append_daily_bars")
+
+    def test_failure_status_run_is_not_double_counted(self):
+        """A run that already raised is TaskStatus.FAILURE and is covered
+        by _repeated_failure_alerts — this alert only looks at runs that
+        reported success, so the two don't overlap on the same run."""
+        from market.services.ops_alerts import _silent_sync_failure_alerts
+
+        TaskRun.objects.create(task_name=FETCH_TASK_NAMES[0], status=TaskStatus.FAILURE, error="boom")
+        self.assertEqual(_silent_sync_failure_alerts(), [])
+
+
 class RepeatedFailureAlertTests(TestCase):
     def test_below_streak_threshold_raises_nothing(self):
         from market.services.ops_alerts import _repeated_failure_alerts
@@ -143,6 +240,7 @@ class EvaluateAlertsOrderingTests(TestCase):
     def test_critical_alerts_sort_before_warnings(self):
         summary = {
             "rejected_rows": {"freshness": {"DSE": {"latest_price_date": None}}},  # critical: no data
+            "predictions": {"latest_as_of": timezone.localdate().isoformat()},
             "models": {
                 "forward_return_model": {"DSE": {"deployed": True, "skill_vs_naive": -0.1, "version": "v1"}},
                 "next_close_model": {"n": 0, "skill_vs_naive": None},

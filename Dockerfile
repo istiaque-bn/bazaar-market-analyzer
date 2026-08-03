@@ -9,6 +9,8 @@ FROM python:3.14-slim AS base
 # some transitive deps (lxml, scikit-learn/scipy/numpy) may fall back to
 # source builds if no prebuilt wheel exists yet for this Python version —
 # keep the toolchain available rather than fail obscurely mid-build.
+# libgomp1: xgboost's OpenMP-parallelized training needs it at runtime;
+# Debian slim doesn't ship it by default.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
@@ -16,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxslt1-dev \
     ca-certificates \
     curl \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # dsebd.org/dse.com.bd and cse.com.bd/www.cse.com.bd don't send their

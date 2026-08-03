@@ -43,7 +43,11 @@ class Command(BaseCommand):
 
         with exclusive_db_write(blocking=True, timeout=600):
             if do_forward:
-                fr = train_model(limit_stocks=options["limit"])
+                # force=True: running this command is an explicit, deliberate
+                # request to retrain right now, unlike the automatic paths
+                # (dashboard "Analyze" button, run_full_analysis) that should
+                # skip a redundant retrain when nothing new has arrived.
+                fr = train_model(limit_stocks=options["limit"], force=True)
                 results["forward_return_rf"] = fr
                 if options["json"]:
                     self.stdout.write(json.dumps(fr, default=str, indent=2))

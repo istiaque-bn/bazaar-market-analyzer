@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from market.models import AnalysisResult, BacktestRun, PatternHit, ReliabilityAssessment, Stock, TechnicalSnapshot
+from market.models import AnalysisResult, BacktestRun, PatternHit, Portfolio, PortfolioTransaction, ReliabilityAssessment, Stock, TechnicalSnapshot
 from notifications.models import Alert
 
 
@@ -104,3 +104,91 @@ class AlertSerializer(serializers.ModelSerializer):
     class Meta:
         model = Alert
         fields = ("id", "title", "message", "channel", "is_read", "created_at")
+
+
+class DecimalStringField(serializers.Field):
+    """Every monetary/quantity value in the portfolio API is exact Decimal
+    math (see market.services.portfolio) — rendering it as a JSON number
+    risks a client's JSON parser silently round-tripping it through a
+    float. A string is the one representation every client renders
+    byte-for-byte as computed."""
+
+    def to_representation(self, value):
+        return str(value) if value is not None else None
+
+    def to_internal_value(self, data):
+        raise NotImplementedError("read-only computed field")
+
+
+class PortfolioSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Portfolio
+        fields = ("id", "name", "currency", "is_default", "created_at", "updated_at")
+        read_only_fields = ("id", "is_default", "created_at", "updated_at")
+
+
+class PortfolioTransactionSerializer(serializers.ModelSerializer):
+    stock = StockSerializer(read_only=True)
+    stock_id = serializers.PrimaryKeyRelatedField(queryset=Stock.objects.filter(is_active=True), source="stock", write_only=True)
+
+    class Meta:
+        model = PortfolioTransaction
+        fields = (
+            "id", "portfolio", "stock", "stock_id", "transaction_type", "quantity",
+            "price_per_share", "fees", "transaction_date", "notes", "created_at", "updated_at",
+        )
+        read_only_fields = ("id", "portfolio", "created_at", "updated_at")
+
+
+class HoldingSerializer(serializers.Serializer):
+    """Mirrors market.services.portfolio.holding_row's dict shape exactly
+    — holdings are computed, not a model, so this is a plain Serializer
+    rather than a ModelSerializer."""
+
+    exchange = serializers.CharField()
+    trading_code = serializers.CharField()
+    company_name = serializers.CharField(allow_blank=True)
+    sector = serializers.CharField(allow_blank=True)
+    quantity = DecimalStringField()
+    average_price = DecimalStringField()
+    purchase_cost = DecimalStringField()
+    fees_in_basis = DecimalStringField()
+    cost_basis = DecimalStringField()
+    latest_price = DecimalStringField()
+    market_value = DecimalStringField()
+    unrealized_pl = DecimalStringField()
+    unrealized_pl_pct = DecimalStringField()
+    today_pl = DecimalStringField()
+    today_pl_pct = DecimalStringField()
+    realized_pl = DecimalStringField()
+    allocation_pct = DecimalStringField()
+    quote_status = serializers.CharField()
+    quote_label = serializers.CharField()
+    quote_as_of = serializers.DateTimeField(allow_null=True)
+    data_warning = serializers.CharField(allow_null=True)
+
+
+class AllocationSliceSerializer(serializers.Serializer):
+    label = serializers.CharField()
+    exchange = serializers.CharField(required=False)
+    value = DecimalStringField()
+    pct = DecimalStringField()
+
+
+class PortfolioSummarySerializer(serializers.Serializer):
+    """Mirrors market.services.portfolio.portfolio_summary's dict shape."""
+
+    open_holdings_count = serializers.IntegerField()
+    total_cost_basis = DecimalStringField()
+    total_market_value = DecimalStringField()
+    total_unrealized_pl = DecimalStringField()
+    total_unrealized_pl_pct = DecimalStringField()
+    total_realized_pl = DecimalStringField()
+    today_total_pl = DecimalStringField()
+    best_holding = HoldingSerializer(allow_null=True)
+    worst_holding = HoldingSerializer(allow_null=True)
+    holdings = HoldingSerializer(many=True)
+    allocation_by_stock = AllocationSliceSerializer(many=True)
+    allocation_by_exchange = AllocationSliceSerializer(many=True)
+    allocation_by_sector = AllocationSliceSerializer(many=True)
+    has_any_data_warning = serializers.BooleanField()

@@ -125,22 +125,29 @@
     </div>
     <div class="panel">
       <h3>Next-day close (learn loop)</h3>
-      {% if not next_close_forecast %}
+      {% if not next_close_pending and not next_close_settled %}
         <p class="muted">Empty — no next-day close forecast yet. Runs automatically at 14:45 Dhaka after close.</p>
       {% else %}
-        <p>
-          <strong>Target {{ next_close_forecast.target_date|date:"Y-m-d" }}:</strong>
-          predicted {{ next_close_forecast_price|floatformat:2 }}
-          {% if next_close_forecast.actual_close %}
-            · actual {{ next_close_forecast.actual_close|floatformat:2 }}
-            · error {% if next_close_forecast.pct_error %}{{ next_close_forecast.pct_error|floatformat:2 }}%{% else %}—{% endif %}
-          {% else %}
+        {% if next_close_pending %}
+          <p>
+            <strong>Prediction for {{ next_close_pending.target_date|date:"Y-m-d" }}:</strong>
+            predicted {{ next_close_pending_price|floatformat:2 }}
             <span class="muted">(awaiting settle)</span>
+          </p>
+          <p class="muted">Forecast after close on {{ next_close_pending.as_of|date:"Y-m-d" }} · {{ next_close_pending.method }}</p>
+          {% if next_close_pending.features.stock_bias %}
+            <p class="muted">Stock bias {{ next_close_pending.features.stock_bias }} · global {{ next_close_pending.features.global_bias }}</p>
           {% endif %}
-        </p>
-        <p class="muted">Forecast after close on {{ next_close_forecast.as_of|date:"Y-m-d" }} · {{ next_close_forecast.method }}</p>
-        {% if next_close_forecast.features.stock_bias %}
-          <p class="muted">Stock bias {{ next_close_forecast.features.stock_bias }} · global {{ next_close_forecast.features.global_bias }}</p>
+        {% else %}
+          <p class="muted">No pending prediction yet for the next session.</p>
+        {% endif %}
+        {% if next_close_settled %}
+          <p style="margin-top:0.55rem;">
+            <strong>{{ next_close_settled.as_of|date:"Y-m-d" }} forecast for {{ next_close_settled.target_date|date:"Y-m-d" }}:</strong>
+            predicted {{ next_close_settled_price|floatformat:2 }}
+            · actual {{ next_close_settled.actual_close|floatformat:2 }}
+            · error {% if next_close_settled.pct_error %}{{ next_close_settled.pct_error|floatformat:2 }}%{% else %}—{% endif %}
+          </p>
         {% endif %}
       {% endif %}
       {% if status %}
@@ -410,9 +417,8 @@ function drawOverviewChart(data) {
   const errorEl = document.getElementById('predictError');
   const urlBase = root.dataset.url;
 
-  // Default: ~30 calendar days ahead
+  // Default: today
   const d = new Date();
-  d.setDate(d.getDate() + 30);
   input.value = d.toISOString().slice(0, 10);
   const max = new Date();
   max.setDate(max.getDate() + 180);
