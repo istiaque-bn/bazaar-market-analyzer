@@ -1149,9 +1149,9 @@ HTTP endpoints, a staff page, and CLI commands). Summary:
   model version(s)", the manual override for a degrading model — see
   the runbook's "Incident: model degradation").
 - **Backups**: `python manage.py backup_bazaar --prune-keep 14` writes a
-  timestamped `backups/<ts>/` (db + ML model artifacts +
+  timestamped `data/backups/<ts>/` (db + ML model artifacts +
   `SHA256SUMS.txt` + `manifest.json` with a row-count snapshot).
-  `python manage.py verify_backup backups/<ts>` performs an **isolated**
+  `python manage.py verify_backup data/backups/<ts>` performs an **isolated**
   test restore (never touches the real db/model files) — SHA256 +
   `PRAGMA integrity_check` + row-count comparison against the manifest —
   and only this can honestly claim `RESTORE VERIFIED`. Both were run

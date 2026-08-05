@@ -1,0 +1,45 @@
+# Never send local secrets, credentials, databases, or operator state to
+# Docker. Git ignore rules do not apply to Docker build contexts.
+.env
+.env.*
+!.env.example
+!.env.docker.example
+!.env.production.example
+.git
+.github
+.claude
+.agents
+.codex
+
+# Local interpreters, caches, test output, and generated artifacts.
+.venv
+env
+__pycache__
+**/__pycache__
+*.py[cod]
+.coverage
+htmlcov
+.pytest_cache
+*.egg-info
+build
+dist
+
+# Runtime state is mounted or generated at deployment time.
+data
+backups
+media
+staticfiles
+db.sqlite3
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+celerybeat-schedule
+celerybeat.pid
+*.log
+*.pkl
+
+# Editor/OS state and the unrelated nested checkout documented in .gitignore.
+.DS_Store
+.idea
+.vscode
+Trial

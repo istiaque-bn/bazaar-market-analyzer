@@ -199,6 +199,11 @@ unless `CELERY_BROKER_ALLOW_PLAINTEXT=True` is set (only appropriate if
 the broker is reachable exclusively over a private network you control
 — e.g. same-VPC-only security groups).
 
+The self-hosted Compose Redis service enables AOF with `appendfsync
+everysec` and stores `/data` in the `redis_data` named volume. This makes
+broker restarts substantially less likely to lose queued tasks, but it is
+not a zero-loss guarantee. Task idempotency remains required.
+
 Worker/timeout settings (overridable via env, see
 `.env.production.example`): `CELERY_TASK_TIME_LIMIT` (hard kill),
 `CELERY_TASK_SOFT_TIME_LIMIT` (raises inside the task first),
@@ -277,6 +282,11 @@ process (`whitenoise.middleware.WhiteNoiseMiddleware`,
 or object storage service is introduced. Media (`MEDIA_ROOT`) stays on
 local disk; the app currently has no user-uploaded file fields, so this
 is unused today but is configured consistently with `STATIC_ROOT`.
+
+A repository-wide model and request-handler inspection found no
+`FileField`, `ImageField`, or upload handler. The Compose stack therefore
+does not add an otherwise-unused media volume. Add one before introducing
+the first upload-backed model or endpoint.
 
 Deploy step (run once per deploy, before starting gunicorn):
 
@@ -414,10 +424,13 @@ Cloudflare's edge). Set up 2026-08-01 for domain `sma.is`.
 **Data persistence:** `./data` is bind-mounted into `web`/`celery-worker`
 at `/app/data`, so ML model artifacts (`data/cache/*.pkl`, only ever
 read/written by the worker — web only reads precomputed DB rows) and
-`data/backups/` survive container rebuilds. Postgres data lives in the
-named volume `postgres_data`, and `celery-beat`'s own schedule-state file
-lives in the named volume `beat_data` (`/app/beat/celerybeat-schedule`) —
-all three independent of the containers themselves. Exactly one
+`data/backups/` survive container rebuilds. `backup_bazaar` defaults to
+that persistent path (`/app/data/backups`) and the image includes matching
+PostgreSQL 16 `pg_dump`/`pg_restore` tools. Postgres data lives in the named volume
+`postgres_data`, Redis AOF data in `redis_data`, and `celery-beat`'s own
+schedule-state file lives in the named volume `beat_data`
+(`/app/beat/celerybeat-schedule`) — all are independent of the containers
+themselves. Exactly one
 `celery-beat` container is ever defined in `docker-compose.yml`; don't scale
 that service beyond `1` replica, or the schedule fires more than once per
 tick.
@@ -438,11 +451,17 @@ tick.
      (or `www.sma.is`), service type `HTTP`, URL `web:8000` (the Docker
      Compose service name/port — cloudflared reaches it over the compose
      network, not localhost).
+   - Compose runs this named tunnel by default and refuses to interpolate
+     without `CLOUDFLARE_TUNNEL_TOKEN`. Quick Tunnels are development-only;
+     if needed, run cloudflared separately rather than weakening the
+     production Compose service.
 3. `docker compose --env-file .env.docker up -d --build` — first build
    compiles some Python dependencies from source (this project targets a
    very new Python version; not every package has a prebuilt wheel for it
    yet), so it can take a while the first time.
 4. Verify: `curl -I https://sma.is/health/live/` should return `200`.
+   For Oracle Ampere A1 and encrypted off-site backup operations, also see
+   [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md).
 5. **Auto-start on boot/login:**
    ```bash
    mkdir -p ~/Library/Logs/bazaar-docker

@@ -1,6 +1,7 @@
 """Phase 9: scripted, recoverable backup of the database + trained ML
-model artifacts. Writes a timestamped directory under backups/ (matching
-the existing manual-backup convention already in this repo) containing
+model artifacts. Writes a timestamped directory under data/backups/ (the
+application's persistent data tree, matching the existing manual-backup
+convention) containing
 the data, a SHA256SUMS.txt for integrity checking, and a manifest.json
 recording row counts at backup time — the reference verify_backup later
 compares a restored copy against.
@@ -53,7 +54,7 @@ class Command(BaseCommand):
     help = "Back up the database and ML model artifacts to a timestamped directory. Run verify_backup on the result before trusting it."
 
     def add_arguments(self, parser):
-        parser.add_argument("--dest", default=None, help="Backup root directory (default: BASE_DIR/backups)")
+        parser.add_argument("--dest", default=None, help="Backup root directory (default: BASE_DIR/data/backups)")
         parser.add_argument("--sqlite-path", default=None, help="Override which sqlite file to copy (mainly for tests)")
         parser.add_argument(
             "--prune-keep",
@@ -65,7 +66,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         engine = settings.DATABASES["default"]["ENGINE"]
         timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
-        dest_root = Path(options["dest"] or (settings.BASE_DIR / "backups"))
+        dest_root = Path(options["dest"] or (settings.BASE_DIR / "data" / "backups"))
         dest_root.mkdir(parents=True, exist_ok=True)
         backup_dir = dest_root / timestamp
         backup_dir.mkdir(parents=True, exist_ok=False)  # never silently merge into an existing timestamp

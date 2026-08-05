@@ -19,6 +19,9 @@ services:
   redis:
     image: redis:7
     restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -129,18 +132,16 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    # Quick Tunnel: no Cloudflare login/domain needed, assigns a random
-    # https://<words>.trycloudflare.com address on every start (check this
-    # container's logs for the current URL). Swap to the commented-out
-    # named-tunnel command below once a real domain is ready — that one
-    # gives a stable hostname instead.
-    command: ["tunnel", "--no-autoupdate", "--url", "http://web:8000"]
-    # command: ["tunnel", "run"]
-    # environment:
-    #   TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?CLOUDFLARE_TUNNEL_TOKEN must be set in .env}
+    # Production uses a named tunnel with a stable hostname configured in
+    # Cloudflare Zero Trust. The token is supplied only at runtime and the
+    # required-variable expression makes a missing token fail immediately.
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?CLOUDFLARE_TUNNEL_TOKEN must be set in the Compose environment file}
     depends_on:
       - web
 
 volumes:
   postgres_data:
+  redis_data:
   beat_data:

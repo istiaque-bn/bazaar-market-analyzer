@@ -110,6 +110,38 @@ class BackupBazaarCommandTests(TestCase):
 
             self.assertIn("NOT yet verified", out.getvalue())
 
+    def test_default_destination_is_under_persistent_data_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            src_db = tmp / "source.sqlite3"
+            _make_fake_sqlite_db(src_db, stocks=1, prices=1, analyses=1)
+
+            with self.settings(BASE_DIR=tmp):
+                call_command("backup_bazaar", sqlite_path=str(src_db), stdout=StringIO())
+
+            backup_root = tmp / "data" / "backups"
+            backup_dirs = list(backup_root.iterdir())
+            self.assertEqual(len(backup_dirs), 1)
+            self.assertTrue((backup_dirs[0] / "manifest.json").exists())
+
+    def test_custom_destination_override_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            src_db = tmp / "source.sqlite3"
+            custom_root = tmp / "operator-selected-backups"
+            _make_fake_sqlite_db(src_db, stocks=1, prices=1, analyses=1)
+
+            call_command(
+                "backup_bazaar",
+                sqlite_path=str(src_db),
+                dest=str(custom_root),
+                stdout=StringIO(),
+            )
+
+            backup_dirs = list(custom_root.iterdir())
+            self.assertEqual(len(backup_dirs), 1)
+            self.assertTrue((backup_dirs[0] / "manifest.json").exists())
+
     def test_refuses_to_overwrite_an_existing_timestamp_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)

@@ -272,7 +272,7 @@ production case. For "restore from a Phase 9 backup" specifically:
 1. **Never restore directly over the live database.** Always verify in
    isolation first:
    ```bash
-   python manage.py verify_backup backups/<timestamp>
+   python manage.py verify_backup data/backups/<timestamp>
    ```
    This must print `RESTORE VERIFIED` — checks SHA256 integrity, restores
    the sqlite file into a throwaway scratch directory (never the real
@@ -300,11 +300,11 @@ production case. For "restore from a Phase 9 backup" specifically:
 python manage.py backup_bazaar --prune-keep 14
 ```
 
-Writes a timestamped directory under `backups/` (db + ML model
+Writes a timestamped directory under `data/backups/` (db + ML model
 artifacts + SHA256SUMS.txt + manifest.json), then deletes backup
 directories beyond the most recent 14 **that were themselves produced by
 this command** (identified by having both `manifest.json` and
-`SHA256SUMS.txt` — an unrelated directory a human left in `backups/` is
+`SHA256SUMS.txt` — an unrelated directory a human left in `data/backups/` is
 never touched). Pruning is opt-in (`--prune-keep`); without it, nothing
 is ever deleted.
 
@@ -315,7 +315,7 @@ actions with real infrastructure consequences. Recommended cadence:
 daily via cron/systemd-timer outside the app process, e.g.:
 
 ```cron
-0 3 * * * cd /path/to/bazaar && /path/to/venv/bin/python manage.py backup_bazaar --prune-keep 14 && /path/to/venv/bin/python manage.py verify_backup "$(ls -td backups/*/ | head -1)"
+0 3 * * * cd /path/to/bazaar && /path/to/venv/bin/python manage.py backup_bazaar --prune-keep 14 && /path/to/venv/bin/python manage.py verify_backup "$(ls -td data/backups/*/ | head -1)"
 ```
 
 **Never claim a backup works until `verify_backup` has actually been run
@@ -331,8 +331,9 @@ treating "the copy command didn't error" as sufficient.
   tool's "run this, alert on non-zero exit" pattern, but nothing here
   does that wiring — explicit authorization needed before connecting
   any paid or third-party service, per this phase's instructions.
-- **Backup off-siting**: `backups/` is local disk only. Copying backups
-  off the app host (S3, another machine, etc.) is not done here.
+- **Backup off-siting**: local backups remain under `data/backups/`. See
+  [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md#encrypted-google-drive-backups-with-rclone)
+  for the operator-run encrypted Google Drive procedure.
 - **Postgres backup verification**: `verify_backup` can only structurally
   check a `pg_dump` file (`pg_restore --list`) without a live Postgres
   instance to restore into — full row-count verification for the
