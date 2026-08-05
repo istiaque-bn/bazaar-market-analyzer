@@ -1,4 +1,6 @@
-"""The staff-only /ml-reliability/ dashboard page."""
+"""The Admin-only /ml-reliability/ dashboard page (see accounts/roles.py
+— ML Reliability + pipeline/training controls are Admin capabilities,
+not Staff's)."""
 from datetime import date
 
 from django.contrib.auth.models import User
@@ -18,19 +20,25 @@ class MlReliabilityViewAccessTests(TestCase):
     def test_anonymous_is_redirected_to_login(self):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/admin/login/", response.url)
+        self.assertIn("/accounts/login/", response.url)
 
-    def test_ordinary_authenticated_user_is_redirected(self):
+    def test_ordinary_authenticated_user_is_forbidden(self):
         User.objects.create_user(username="bob", password="Correct-Horse-Battery-Staple-42")
         self.client.login(username="bob", password="Correct-Horse-Battery-Staple-42")
         response = self.client.get(self.url)
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 403)
 
-    def test_staff_can_view_the_page_with_no_assessments_yet(self):
+    def test_plain_staff_is_forbidden(self):
         staff = User.objects.create_user(username="staffer", password="Correct-Horse-Battery-Staple-42")
         staff.is_staff = True
         staff.save(update_fields=["is_staff"])
         self.client.login(username="staffer", password="Correct-Horse-Battery-Staple-42")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_can_view_the_page_with_no_assessments_yet(self):
+        User.objects.create_superuser(username="admin1", password="Correct-Horse-Battery-Staple-42")
+        self.client.login(username="admin1", password="Correct-Horse-Battery-Staple-42")
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"ML Reliability Monitor", response.content)
@@ -51,10 +59,8 @@ class MlReliabilityViewContentTests(TestCase):
         )
         run_reliability_assessment(families=[PredictionSnapshot.ModelFamily.FORWARD_RETURN_RF], windows=[MIN_SAMPLES_WATCH])
 
-        staff = User.objects.create_user(username="staffer2", password="Correct-Horse-Battery-Staple-42")
-        staff.is_staff = True
-        staff.save(update_fields=["is_staff"])
-        self.client.login(username="staffer2", password="Correct-Horse-Battery-Staple-42")
+        User.objects.create_superuser(username="admin2", password="Correct-Horse-Battery-Staple-42")
+        self.client.login(username="admin2", password="Correct-Horse-Battery-Staple-42")
 
     def test_shows_status_badge_and_recommendations(self):
         response = self.client.get(reverse("ml_reliability"))

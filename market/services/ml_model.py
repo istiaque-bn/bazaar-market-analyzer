@@ -347,8 +347,16 @@ def train_model(limit_stocks: int = 120, force: bool = False) -> dict:
     structurally lags raw price data by that much and would never match
     it. Pass force=True to retrain regardless, e.g. after a feature/code
     change."""
-    dse_panel = build_training_panel(Exchange.DSE, limit_stocks=limit_stocks)
-    cse_panel = build_training_panel(Exchange.CSE, limit_stocks=limit_stocks)
+    from market.services.exchange_config import enabled_exchanges
+
+    enabled = enabled_exchanges()
+    # A disabled exchange never enters training at all — not just "not
+    # deployed" but never evaluated, never pooled into a combined panel.
+    # An empty DataFrame here flows through the existing insufficient-rows
+    # path below exactly like "not enough real data yet" would, so no
+    # further special-casing is needed downstream.
+    dse_panel = build_training_panel(Exchange.DSE, limit_stocks=limit_stocks) if Exchange.DSE in enabled else pd.DataFrame()
+    cse_panel = build_training_panel(Exchange.CSE, limit_stocks=limit_stocks) if Exchange.CSE in enabled else pd.DataFrame()
 
     if dse_panel.empty and cse_panel.empty:
         return {"ok": False, "error": "Not enough data to train"}
@@ -414,8 +422,24 @@ def load_model(exchange: str | None = None) -> dict | None:
     to a per-exchange model if that one is active. A bundle with an
     unrecognized/missing status (e.g. a stale pre-Phase-4 artifact) is
     treated as not-active — fail closed rather than silently serving an
-    unverified model."""
-    combined = _load_bundle(MODEL_PATH)
+    unverified model.
+
+    A "combined" bundle is skipped entirely (not deleted, not deactivated
+    in the DB — just bypassed for serving) whenever any exchange is
+    currently disabled: it was necessarily trained on pooled DSE+CSE data
+    (see train_model's _justify_combining), and that provenance conflicts
+    with a DSE-only deployment's guarantee that CSE data never influences
+    what gets served. The next successful train_model() run naturally
+    produces a fresh DSE-scoped artifact instead (CSE panels build empty
+    while disabled, so _justify_combining can never re-justify pooling) —
+    this bypass just covers the gap between disabling CSE and that next
+    scheduled retrain."""
+    from market.services.exchange_config import enabled_exchanges
+
+    from market.models import Exchange
+
+    combined_is_safe_to_serve = set(enabled_exchanges()) >= {Exchange.DSE, Exchange.CSE}
+    combined = _load_bundle(MODEL_PATH) if combined_is_safe_to_serve else None
     if combined is not None and _is_deployable(combined, "combined"):
         return combined
     if exchange and exchange in MODEL_PATH_BY_EXCHANGE:

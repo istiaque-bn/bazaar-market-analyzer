@@ -7,8 +7,8 @@
     <h2>{{ portfolio.name }}{% if portfolio.is_default %} <span class="badge badge-watch">Default</span>{% endif %}</h2>
     <p class="muted" id="portfolioLastUpdated">
       Last updated <span id="portfolioLastUpdatedTime">just now</span> (Asia/Dhaka) ·
-      DSE <span class="{% if market_hours.dse.is_open %}up{% else %}muted{% endif %}">{{ market_hours.dse.status }}</span> ·
-      CSE <span class="{% if market_hours.cse.is_open %}up{% else %}muted{% endif %}">{{ market_hours.cse.status }}</span>
+      DSE <span class="{% if market_hours.dse.is_open %}up{% else %}muted{% endif %}">{{ market_hours.dse.status }}</span>
+      {% if cse_enabled %}· CSE <span class="{% if market_hours.cse.is_open %}up{% else %}muted{% endif %}">{{ market_hours.cse.status }}</span>{% endif %}
     </p>
   </div>
   <div class="portfolio-actions">
@@ -33,6 +33,15 @@
 <div class="disclaimer" style="border-color: var(--fall); color: var(--fall);">
   ⚠ One or more holdings have an inconsistent transaction history (a sale appears to exceed shares held at that
   date). Figures below may be incomplete for that stock — check its transaction history.
+</div>
+{% endif %}
+
+{% if summary.has_disabled_exchange_holdings %}
+<div class="disclaimer">
+  CSE support is temporarily disabled for this deployment. Your existing CSE holdings and transaction history
+  below are preserved and remain fully visible — prices are frozen at their last known value (not refreshed)
+  and are never shown as live. New CSE purchases can't be recorded right now, but you can still record a SELL
+  or close out a position.
 </div>
 {% endif %}
 
@@ -73,7 +82,7 @@
     <div class="label">Best performer</div>
     <div class="value" style="font-size:1.2rem;">
       {% if summary.best_holding %}
-        <a href="{% url 'stock_detail' summary.best_holding.exchange summary.best_holding.trading_code %}">{{ summary.best_holding.trading_code }}</a>
+        {% if summary.best_holding.exchange in enabled_exchanges %}<a href="{% url 'stock_detail' summary.best_holding.exchange summary.best_holding.trading_code %}">{{ summary.best_holding.trading_code }}</a>{% else %}{{ summary.best_holding.trading_code }}{% endif %}
         <span class="up tiny">+{{ summary.best_holding.unrealized_pl_pct }}%</span>
       {% else %}—{% endif %}
     </div>
@@ -82,7 +91,7 @@
     <div class="label">Worst performer</div>
     <div class="value" style="font-size:1.2rem;">
       {% if summary.worst_holding %}
-        <a href="{% url 'stock_detail' summary.worst_holding.exchange summary.worst_holding.trading_code %}">{{ summary.worst_holding.trading_code }}</a>
+        {% if summary.worst_holding.exchange in enabled_exchanges %}<a href="{% url 'stock_detail' summary.worst_holding.exchange summary.worst_holding.trading_code %}">{{ summary.worst_holding.trading_code }}</a>{% else %}{{ summary.worst_holding.trading_code }}{% endif %}
         <span class="{{ summary.worst_holding.unrealized_pl_pct|pl_class }} tiny">{{ summary.worst_holding.unrealized_pl_pct }}%</span>
       {% else %}—{% endif %}
     </div>
@@ -94,7 +103,7 @@
 {% if not summary.holdings %}
 <div class="panel empty-state">
   <p><strong>No open holdings yet.</strong></p>
-  <p class="muted">Add your first holding to start tracking cost basis and profit/loss against live DSE/CSE prices.</p>
+  <p class="muted">Add your first holding to start tracking cost basis and profit/loss against live {% if cse_enabled %}DSE/CSE{% else %}DSE{% endif %} prices.</p>
   <a class="btn btn-gold" href="{% url 'portfolio_add_holding' portfolio.id %}">+ Add your first holding</a>
 </div>
 {% else %}
@@ -134,7 +143,7 @@
         <tr data-exchange="{{ r.exchange }}" data-code="{{ r.trading_code }}" data-company="{{ r.company_name|lower }}"
             data-pl-sign="{{ r.unrealized_pl|pl_class }}"
             data-quote-row="{{ r.exchange }}:{{ r.trading_code }}">
-          <td><a href="{% url 'stock_detail' r.exchange r.trading_code %}">{{ r.trading_code }}</a> <span class="muted tiny">{{ r.exchange }}</span></td>
+          <td>{% if r.exchange in enabled_exchanges %}<a href="{% url 'stock_detail' r.exchange r.trading_code %}">{{ r.trading_code }}</a>{% else %}{{ r.trading_code }}{% endif %} <span class="muted tiny">{{ r.exchange }}</span></td>
           <td><span class="badge quote-badge quote-{{ r.quote_status }}" title="{% if r.quote_as_of %}as of {{ r.quote_as_of|date:'d M, h:i A' }}{% endif %}">{{ r.quote_label }}</span></td>
           <td data-field="quantity">{{ r.quantity|floatformat:0 }}</td>
           <td data-field="average_price">{{ r.average_price|bdt:4 }}</td>
@@ -192,7 +201,7 @@
         <tr>
           <td>{{ t.transaction_date|date:"d M Y" }}{% if t.transaction_date > today %} <span class="badge badge-watch tiny" title="Not yet applied to current holdings">Future</span>{% endif %}</td>
           <td><span class="badge {% if t.transaction_type == 'BUY' %}badge-buy{% else %}badge-sell{% endif %}">{{ t.transaction_type }}</span></td>
-          <td><a href="{% url 'stock_detail' t.stock.exchange t.stock.trading_code %}">{{ t.stock.trading_code }}</a></td>
+          <td>{% if t.stock.exchange in enabled_exchanges %}<a href="{% url 'stock_detail' t.stock.exchange t.stock.trading_code %}">{{ t.stock.trading_code }}</a>{% else %}{{ t.stock.trading_code }}{% endif %}</td>
           <td>{{ t.quantity|floatformat:0 }}</td>
           <td>{{ t.price_per_share|bdt:2 }}</td>
           <td>{{ t.fees|bdt:2 }}</td>

@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Staff Panel{% endblock %}
+{% block content %}
+<div class="role-hero">
+  <div>
+    <h2>Welcome, {{ user.first_name|default:user.username }}</h2>
+    <p class="muted">Staff Panel — support regular Users and review market operations.</p>
+  </div>
+</div>
+
+<div class="quick-actions">
+  <a class="btn btn-small" href="{% url 'account_create_user' %}">Create User</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'account_list' %}">Manage Users</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'stock_list' %}">Browse Stocks</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'alerts' %}">View Alerts</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'data_quality' %}">Data QA</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'ops_report' %}">Operations</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'feedback_triage_list' %}">Feedback</a>
+</div>
+
+<div class="grid-2" style="align-items:start;">
+  <div class="panel">
+    <h3>DSE market status</h3>
+    <div class="market-status-chip {% if market_hours.dse.is_open %}is-open{% else %}is-closed{% endif %}" data-ex="DSE">
+      <span class="ms-ex">DSE</span>
+      <span class="ms-state">{{ market_hours.dse.status }}</span>
+      <span class="ms-next">{% if market_hours.dse.is_open %}closes{% else %}opens{% endif %} {{ market_hours.dse.next_when }}</span>
+    </div>
+    {% if cse_enabled %}
+    <div class="market-status-chip {% if market_hours.cse.is_open %}is-open{% else %}is-closed{% endif %}" data-ex="CSE" style="margin-top:0.5rem;">
+      <span class="ms-ex">CSE</span>
+      <span class="ms-state">{{ market_hours.cse.status }}</span>
+      <span class="ms-next">{% if market_hours.cse.is_open %}closes{% else %}opens{% endif %} {{ market_hours.cse.next_when }}</span>
+    </div>
+    {% endif %}
+
+    <h3 style="margin-top:1.2rem;">Operational alerts</h3>
+    {% if ops_alerts %}
+      <ul>
+        {% for a in ops_alerts %}
+          <li><span class="badge {% if a.severity == 'critical' %}badge-sell{% else %}badge-watch{% endif %}">{{ a.severity }}</span> {{ a.message }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No alerts firing.</p>
+    {% endif %}
+
+    <h3 style="margin-top:1.2rem;">Recent task status</h3>
+    {% if recent_tasks %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Task</th><th>Status</th><th>Started</th></tr></thead>
+          <tbody>
+          {% for t in recent_tasks %}
+            <tr><td>{{ t.task_name }}</td><td>{{ t.status }}</td><td>{{ t.started_at|date:"d M, H:i" }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">No task runs recorded yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="stat"><div class="label">Regular Users</div><div class="value">{{ user_count }}</div></div>
+    <h3 style="margin-top:1.2rem;">Recently created Users</h3>
+    {% if recent_users %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Username</th><th>Joined</th></tr></thead>
+          <tbody>
+          {% for u in recent_users %}
+            <tr><td><a href="{% url 'account_detail' u.id %}">{{ u.username }}</a></td><td>{{ u.date_joined|date:"d M Y" }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="empty-state">No Users created yet — use "Create User" to add the first one.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

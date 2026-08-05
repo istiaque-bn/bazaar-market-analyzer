@@ -1,5 +1,4 @@
 from django.contrib import messages
-from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import transaction
@@ -10,6 +9,8 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 from datetime import datetime
 
+from accounts.decorators import admin_required, staff_or_admin_required
+from accounts.roles import role_home_url
 from market.forms import PortfolioForm, TransactionForm
 from market.models import (
     AnalysisResult,
@@ -33,18 +34,26 @@ from notifications.models import Alert
 
 
 def home(request):
+    """Anonymous visitors get only Login (+ static assets); there is no
+    public marketing page any more — see accounts/roles.py for why
+    authenticated users land on their role panel rather than a fixed
+    page."""
     if request.user.is_authenticated:
-        return redirect("dashboard")
-    return render(request, "market/home.html")
+        return redirect(role_home_url(request.user))
+    return redirect("login")
 
 
+@login_required
 def dashboard(request):
+    from market.services.exchange_config import enabled_exchanges
+
+    enabled = enabled_exchanges()
     summary = screen_summary()
     potentials = list(potential_shares(12))
     safes = list(safe_buys(6))
     sells = list(sell_candidates(6))
-    snapshots = MarketSnapshot.objects.order_by("-as_of")[:4]
-    backtests = BacktestRun.objects.order_by("-created_at")[:4]
+    snapshots = MarketSnapshot.objects.filter(exchange__in=enabled).order_by("-as_of")[:4]
+    backtests = BacktestRun.objects.filter(Q(exchange__in=enabled) | Q(exchange="") | Q(exchange__isnull=True)).order_by("-created_at")[:4]
     sectors = top_by_sector(2)
     alerts = []
     if request.user.is_authenticated:
@@ -97,11 +106,35 @@ def _dashboard_health_issue(as_of) -> str | None:
     return None
 
 
+def _get_stock_for_public_route(exchange: str, code: str) -> Stock:
+    """Shared lookup for every *public-discovery* stock route (detail page,
+    prediction/analysis requests, and their API equivalents) — 404s for a
+    stock on a currently-disabled exchange exactly the same way it 404s
+    for a stock that plain doesn't exist, so a disabled exchange's pages
+    simply aren't part of the site right now rather than existing in some
+    intermediate "found but blocked" state. This is deliberately a
+    different (more permissive) lookup than watchlist/portfolio access to
+    an *already-owned* record — see toggle_watchlist and
+    market.services.portfolio, where existing user data must stay
+    readable regardless of this check."""
+    from django.http import Http404
+
+    from market.services.exchange_config import is_exchange_enabled
+
+    stock = get_object_or_404(Stock, exchange=exchange.upper(), trading_code=code.upper())
+    if not is_exchange_enabled(stock.exchange):
+        raise Http404("Stock not found.")
+    return stock
+
+
+@login_required
 def stock_list(request):
+    from market.services.exchange_config import enabled_exchanges
+
     exchange = request.GET.get("exchange", "")
     q = request.GET.get("q", "").strip()
     action = request.GET.get("action", "")
-    stocks = Stock.objects.filter(is_active=True)
+    stocks = Stock.objects.filter(is_active=True, exchange__in=enabled_exchanges())
     if exchange:
         stocks = stocks.filter(exchange=exchange)
     if q:
@@ -224,8 +257,9 @@ def _history_rows_for_stock(stock, range_key: str = "30d"):
     return range_key, meta["label"], table_rows, chart
 
 
+@login_required
 def stock_detail(request, exchange: str, code: str):
-    stock = get_object_or_404(Stock, exchange=exchange.upper(), trading_code=code.upper())
+    stock = _get_stock_for_public_route(exchange, code)
     analysis = AnalysisResult.objects.filter(stock=stock).order_by("-as_of").first()
     tech = TechnicalSnapshot.objects.filter(stock=stock).order_by("-as_of").first()
     patterns = PatternHit.objects.filter(stock=stock).order_by("-as_of", "-strength")[:12]
@@ -311,9 +345,12 @@ def stock_detail(request, exchange: str, code: str):
     )
 
 
+@login_required
 def predict_price_view(request, exchange: str, code: str):
-    """JSON: probable close on a selected date + confidence."""
-    stock = get_object_or_404(Stock, exchange=exchange.upper(), trading_code=code.upper())
+    """JSON: probable close on a selected date + confidence. A new
+    prediction request for a disabled exchange 404s the same as the
+    stock-detail page — see _get_stock_for_public_route."""
+    stock = _get_stock_for_public_route(exchange, code)
     date_str = (request.GET.get("date") or "").strip()
     if not date_str:
         return JsonResponse({"ok": False, "error": "Pass ?date=YYYY-MM-DD", "confidence_scale": CONFIDENCE_SCALE}, status=400)
@@ -332,13 +369,31 @@ def predict_price_view(request, exchange: str, code: str):
 @login_required
 @require_POST
 def toggle_watchlist(request, exchange: str, code: str):
+    """Looked up directly (not via _get_stock_for_public_route) since
+    removing an existing watchlist entry must keep working even for a
+    stock whose exchange has since been disabled — only *adding* a new
+    disabled-exchange stock is refused. In practice a disabled exchange's
+    stock-detail "add" button is itself unreachable (that page 404s), so
+    the add-while-disabled branch below only matters as a server-side
+    guard against a stale link or a direct POST."""
+    from market.services.exchange_config import is_exchange_enabled
+
     stock = get_object_or_404(Stock, exchange=exchange.upper(), trading_code=code.upper())
     wl, _ = Watchlist.objects.get_or_create(user=request.user, name="Default")
-    if wl.stocks.filter(id=stock.id).exists():
+    already_watching = wl.stocks.filter(id=stock.id).exists()
+    if already_watching:
         wl.stocks.remove(stock)
+    elif not is_exchange_enabled(stock.exchange):
+        messages.error(
+            request,
+            f"{stock.exchange} is currently disabled for this deployment — new watchlist additions aren't available.",
+        )
+        return redirect("watchlist")
     else:
         wl.stocks.add(stock)
-    return redirect("stock_detail", exchange=exchange.upper(), code=code.upper())
+    if is_exchange_enabled(stock.exchange):
+        return redirect("stock_detail", exchange=exchange.upper(), code=code.upper())
+    return redirect("watchlist")
 
 
 @login_required
@@ -352,11 +407,21 @@ def watchlist_view(request):
     return render(request, "market/watchlist.html", {"rows": rows})
 
 
+@login_required
 def backtests_view(request):
-    # Latest run only per strategy + exchange (avoid stacked duplicate cards)
+    from market.services.exchange_config import enabled_exchanges
+
+    # Latest run only per strategy + exchange (avoid stacked duplicate cards).
+    # A run with no exchange (blank/None) is a non-exchange-specific backtest
+    # and always shown; an exchange-scoped run only shows if that exchange
+    # is currently enabled — a disabled exchange's ranking/summary content
+    # stays hidden from this public results page, same as the dashboard.
+    enabled = enabled_exchanges()
     seen = set()
     runs = []
     for b in BacktestRun.objects.order_by("-created_at"):
+        if b.exchange and b.exchange not in enabled:
+            continue
         key = (b.strategy, b.exchange or "", b.name)
         if key in seen:
             continue
@@ -367,26 +432,26 @@ def backtests_view(request):
     return render(request, "market/backtests.html", {"runs": runs})
 
 
+@login_required
 def alerts_view(request):
-    if request.user.is_authenticated:
-        alerts = Alert.objects.filter(Q(user=request.user) | Q(user__isnull=True))[:50]
-    else:
-        alerts = Alert.objects.filter(user__isnull=True)[:50]
+    alerts = Alert.objects.filter(Q(user=request.user) | Q(user__isnull=True))[:50]
     return render(request, "market/alerts.html", {"alerts": alerts})
 
 
-@staff_member_required
+@staff_or_admin_required
 def data_quality_view(request):
-    """Staff-only data-quality report: provenance breakdown, freshness per
-    exchange, flagged-row counts, and recent import batch health."""
+    """Admin + Staff data-quality report: provenance breakdown, freshness
+    per exchange, flagged-row counts, and recent import batch health —
+    this is exactly the "DSE freshness ... task status" content Staff
+    are explicitly granted (see accounts/roles.py's role hierarchy)."""
     from market.services.data_quality import provenance_report
 
     return render(request, "market/data_quality.html", {"report": provenance_report()})
 
 
-@staff_member_required
+@staff_or_admin_required
 def ops_report_view(request):
-    """Staff-only operational readiness report (Phase 9): task health,
+    """Admin + Staff operational readiness report (Phase 9): task health,
     prediction volume, rejected-row/freshness summary, model drift, and
     any currently-firing alert-threshold breaches."""
     from market.services.ops_alerts import evaluate_alerts
@@ -402,9 +467,9 @@ def ops_report_view(request):
     )
 
 
-@staff_member_required
+@admin_required
 def ml_reliability_view(request):
-    """Staff-only ML Reliability Monitor dashboard: current status per
+    """Admin-only: ML Reliability Monitor dashboard: current status per
     deployed model/exchange/horizon/window, skill vs. baseline,
     calibration, drift warnings, economic diagnostics, recommendations,
     and assessment history."""
@@ -420,10 +485,12 @@ def ml_reliability_view(request):
     return render(request, "market/ml_reliability.html", {"groups": groups})
 
 
-@staff_member_required
+@admin_required
 @require_POST
 def run_pipeline_view(request):
-    """Enqueue a pipeline job — staff-only, POST + CSRF protected.
+    """Enqueue a pipeline job — Admin-only ("Manage DSE pipeline and
+    training controls" is an Admin capability, not Staff's — see
+    accounts/roles.py), POST + CSRF protected.
 
     Fetch/analysis/training jobs hit external upstreams and can retrain
     the ML model, so ordinary users must not be able to trigger them, and
@@ -436,6 +503,12 @@ def run_pipeline_view(request):
     from market.services.audit import record_admin_action
     from market.tasks import fetch_all_market_data, run_full_analysis_task, seed_demo_and_analyze
 
+    from market.tasks import (
+        run_end_of_day_pipeline,
+        run_intraday_analysis,
+        train_ml_model,
+    )
+
     mode = request.POST.get("mode", "analyze")
     try:
         if mode == "demo":
@@ -444,6 +517,22 @@ def run_pipeline_view(request):
         elif mode == "fetch":
             chain(fetch_all_market_data.s(include_history=True), run_full_analysis_task.si(train_ml=True)).delay()
             messages.success(request, "Live + history fetch, then analysis, queued.")
+        elif mode == "quote":
+            fetch_all_market_data.delay(include_history=False)
+            messages.success(request, "Live quote fetch queued.")
+        elif mode == "intraday":
+            run_intraday_analysis.delay()
+            messages.success(request, "Lightweight intraday analysis queued.")
+        elif mode == "eod":
+            run_end_of_day_pipeline.delay()
+            messages.success(request, "End-of-day pipeline queued.")
+        elif mode == "train":
+            if request.POST.get("confirm") != "yes":
+                messages.error(request, "Training a new model is an expensive operation — confirmation is required.")
+                record_admin_action(request, AdminAuditAction.PIPELINE_TRIGGERED, {"mode": mode, "error": "not confirmed"})
+                return redirect("admin_panel")
+            train_ml_model.delay()
+            messages.success(request, "ML model training queued.")
         else:
             run_full_analysis_task.delay(train_ml=True)
             messages.success(request, "Re-analysis queued.")
@@ -451,7 +540,111 @@ def run_pipeline_view(request):
     except Exception as exc:
         messages.error(request, f"Could not queue pipeline job: {exc}")
         record_admin_action(request, AdminAuditAction.PIPELINE_TRIGGERED, {"mode": mode, "error": str(exc)[:500]})
-    return redirect("dashboard")
+    # Fixed, not user-supplied: the new automation-control modes are only
+    # ever submitted from the Admin panel and should return there; the
+    # original modes (demo/fetch/analyze) keep their pre-existing
+    # dashboard redirect so existing behavior/tests are unaffected.
+    return redirect("admin_panel" if mode in ("intraday", "eod", "train") else "dashboard")
+
+
+_RETRYABLE_TASKS = (
+    "market.tasks.sync_live_market",
+    "market.tasks.run_intraday_analysis",
+    "market.tasks.fetch_all_market_data",
+    "market.tasks.run_full_analysis",
+    "market.tasks.append_daily_bars",
+    "market.tasks.close_learn_settlement",
+    "market.tasks.train_ml_model",
+    "market.tasks.assess_ml_reliability",
+    "market.tasks.run_end_of_day_pipeline",
+    "market.tasks.sync_pe_ratios",
+    "market.tasks.sync_holiday_calendar",
+    "notifications.tasks.send_daily_digest",
+)
+
+
+@admin_required
+@require_POST
+def retry_task_view(request, run_id):
+    """Re-enqueue the same underlying task a failed TaskRun row recorded —
+    Admin-only. Deliberately re-runs by *task name* (looked up against a
+    fixed allow-list, not an arbitrary string from the row) rather than
+    replaying stored arguments, so this can never be used to re-trigger
+    something with attacker-controlled parameters. The retried task uses
+    its own normal locking (see market/tasks.py), so clicking retry
+    twice, or retrying a task that's already been picked up by the
+    schedule again on its own, is Skipped, not duplicated."""
+    from market.models import AdminAuditAction, TaskRun, TaskStatus
+    from market.services.audit import record_admin_action
+
+    run = get_object_or_404(TaskRun, id=run_id)
+    if run.status != TaskStatus.FAILURE:
+        messages.error(request, "Only a failed task run can be retried.")
+        return redirect("admin_panel")
+    if run.task_name not in _RETRYABLE_TASKS:
+        messages.error(request, f"{run.task_name} is not retryable from here.")
+        return redirect("admin_panel")
+
+    import importlib
+
+    module_name, _, attr = run.task_name.rpartition(".")
+    # task names are "market.tasks.foo" / "notifications.tasks.foo" —
+    # the Celery task attribute lives on the *tasks* module, not a
+    # dotted path all the way down to a class, so this is a plain
+    # module.attr lookup, not arbitrary code execution from user input:
+    # run.task_name is already constrained to _RETRYABLE_TASKS above.
+    try:
+        task = getattr(importlib.import_module(module_name), attr)
+        task.delay()
+        messages.success(request, f"Retry queued for {run.task_name}.")
+        record_admin_action(
+            request,
+            AdminAuditAction.PIPELINE_TRIGGERED,
+            {"mode": "retry", "task_name": run.task_name, "original_run_id": run.id},
+        )
+    except Exception as exc:
+        messages.error(request, f"Could not queue retry: {exc}")
+    return redirect("admin_panel")
+
+
+@admin_required
+def telegram_report_preview(request):
+    """Render today's Telegram ML report without sending it — Admin-only,
+    read-only, no Celery involved (cheap enough to run synchronously in
+    the request). Uses the exact same rendering + "what changed" logic
+    the real send uses, so the preview always matches what would
+    actually go out."""
+    from notifications.tasks import _compare_with_previous, _report_date_in_configured_tz
+
+    from market.services.ml_daily_report import build_report_context, render_report_sections
+
+    report_date = _report_date_in_configured_tz()
+    context = build_report_context(as_of=report_date)
+    comparison = _compare_with_previous(report_date, context)
+    sections = render_report_sections(context, comparison=comparison)
+    return render(request, "market/telegram_report_preview.html", {"sections": sections, "report_date": report_date})
+
+
+@admin_required
+@require_POST
+def telegram_report_send(request):
+    """Send (or retry, or force-resend) today's Telegram ML daily report —
+    Admin-only, POST + CSRF. A plain send/retry respects the
+    already-sent-today idempotency guard automatically (see
+    notifications.tasks.send_ml_daily_report); force=yes explicitly
+    bypasses it to resend a confirmed duplicate, and is audited."""
+    from market.models import AdminAuditAction
+    from market.services.audit import record_admin_action
+    from notifications.tasks import send_ml_daily_report
+
+    force = request.POST.get("force") == "yes"
+    send_ml_daily_report.delay(manual=True, force=force)
+    if force:
+        messages.success(request, "Force resend of today's Telegram ML report queued.")
+        record_admin_action(request, AdminAuditAction.TELEGRAM_REPORT_FORCED, {"force": True})
+    else:
+        messages.success(request, "Telegram ML report send/retry queued.")
+    return redirect("admin_panel")
 
 
 def health(request):
@@ -495,17 +688,20 @@ def readiness_view(request):
     return JsonResponse({"status": "ready" if ready else "not_ready", "checks": checks}, status=200 if ready else 503)
 
 
+@login_required
 def ticker_json(request):
-    """Lightweight, public, read-only payload for the top market scroll bars.
-
-    Serves cached/DB state only. It must never start a sync thread or force
-    a network refresh — that would let any anonymous visitor trigger a live
-    fetch on every page load. Freshness is handled solely by the server-side
-    autosync loop (market.services.autosync). Any `refresh`/similar query
-    param is intentionally ignored."""
+    """Lightweight, read-only payload for the top market scroll bars —
+    authenticated only, like every other market-data view now (see
+    accounts/roles.py). Serves cached/DB state only; it must never start
+    a sync thread or force a network refresh — that would let any
+    visitor trigger a live fetch on every page load. Freshness is
+    handled solely by the server-side autosync loop
+    (market.services.autosync). Any `refresh`/similar query param is
+    intentionally ignored."""
     from django.conf import settings
 
     from market.services.autosync import get_sync_status
+    from market.services.exchange_config import enabled_exchanges
     from market.services.market_hours import both_exchanges_status
     from market.services.rate_limit import is_rate_limited
 
@@ -532,19 +728,20 @@ def ticker_json(request):
             )
         return out
 
-    dse = list(
-        Stock.objects.filter(exchange="DSE", is_active=True, last_price__isnull=False).order_by(
-            "-last_volume"
-        )[:70]
+    enabled = enabled_exchanges()
+    dse = (
+        list(Stock.objects.filter(exchange="DSE", is_active=True, last_price__isnull=False).order_by("-last_volume")[:70])
+        if "DSE" in enabled
+        else []
     )
-    cse = list(
-        Stock.objects.filter(exchange="CSE", is_active=True, last_price__isnull=False).order_by(
-            "-last_volume"
-        )[:70]
+    cse = (
+        list(Stock.objects.filter(exchange="CSE", is_active=True, last_price__isnull=False).order_by("-last_volume")[:70])
+        if "CSE" in enabled
+        else []
     )
 
     snapshots = {}
-    for snap in MarketSnapshot.objects.order_by("-as_of"):
+    for snap in MarketSnapshot.objects.filter(exchange__in=enabled).order_by("-as_of"):
         if snap.exchange in snapshots:
             continue
         snapshots[snap.exchange] = {
@@ -569,6 +766,7 @@ def ticker_json(request):
             "indexes": list(snapshots.values()),
             "sync": get_sync_status(),
             "market_hours": both_exchanges_status(),
+            "enabled_exchanges": enabled,
         }
     )
 
@@ -719,7 +917,7 @@ def portfolio_add_transaction(request, portfolio_id):
     if stock_id:
         initial["stock"] = stock_id
     if request.method == "POST":
-        form = TransactionForm(request.POST)
+        form = TransactionForm(request.POST, portfolio=portfolio)
         if form.is_valid():
             c = form.cleaned_data
             try:
@@ -732,7 +930,7 @@ def portfolio_add_transaction(request, portfolio_id):
             except PortfolioValidationError as exc:
                 form.add_error(None, str(exc))
     else:
-        form = TransactionForm(initial=initial)
+        form = TransactionForm(initial=initial, portfolio=portfolio)
     return render(
         request,
         "market/portfolio_transaction_form.html",
@@ -779,7 +977,7 @@ def portfolio_edit_transaction(request, portfolio_id, txn_id):
     portfolio = _owned_portfolio(request, portfolio_id)
     txn = get_object_or_404(PortfolioTransaction, id=txn_id, portfolio=portfolio)
     if request.method == "POST":
-        form = TransactionForm(request.POST)
+        form = TransactionForm(request.POST, portfolio=portfolio)
         if form.is_valid():
             c = form.cleaned_data
             try:
@@ -802,7 +1000,8 @@ def portfolio_edit_transaction(request, portfolio_id, txn_id):
                 "transaction_date": txn.transaction_date,
                 "notes": txn.notes,
                 "allow_fractional": txn.quantity != txn.quantity.to_integral_value(),
-            }
+            },
+            portfolio=portfolio,
         )
     return render(
         request,

@@ -4,7 +4,10 @@
   const badgeDse = document.getElementById("tickerLiveBadgeDse");
   const badgeCse = document.getElementById("tickerLiveBadgeCse");
   const statusBox = document.getElementById("marketStatus");
-  if (!trackDse || !trackCse) return;
+  // trackCse/badgeCse are absent whenever CSE is disabled for this
+  // deployment (base.html omits that markup entirely server-side) — only
+  // DSE's track is required for the ticker to be worth running at all.
+  if (!trackDse) return;
 
   function formatPct(v) {
     if (v === null || v === undefined || Number.isNaN(Number(v))) return "";
@@ -70,6 +73,7 @@
   }
 
   function fillTrack(track, html) {
+    if (!track) return;
     track.innerHTML = html;
     const n = Math.max(1, track.children.length / 2);
     track.style.setProperty("--ticker-duration", `${Math.max(40, n * 2.2)}s`);
@@ -105,6 +109,7 @@
   }
 
   function duplicateInitial(track) {
+    if (!track) return;
     if (track.children.length > 0 && !track.dataset.duplicated) {
       track.innerHTML = track.innerHTML + track.innerHTML;
       track.dataset.duplicated = "1";

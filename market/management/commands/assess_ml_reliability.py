@@ -2,7 +2,6 @@ import json
 
 from django.core.management.base import BaseCommand
 
-from market.models import Exchange
 from market.services.autosync import exclusive_db_write
 from market.services.reliability_report import run_reliability_assessment
 
@@ -31,7 +30,11 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         families = [options["model"]] if options["model"] else None
-        exchanges = [options["exchange"]] if options["exchange"] else [Exchange.DSE, Exchange.CSE]
+        # None here (not a hardcoded [DSE, CSE]) lets run_reliability_assessment
+        # apply its own default of enabled_exchanges() — an explicit
+        # --exchange still overrides it either way, since assessing
+        # existing historical predictions is a read-only diagnostic.
+        exchanges = [options["exchange"]] if options["exchange"] else None
         windows = [options["window"]] if options["window"] else None
 
         with exclusive_db_write(blocking=True, timeout=300):

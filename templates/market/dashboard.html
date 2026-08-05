@@ -15,7 +15,7 @@
   </div>
 </div>
 
-{% if user.is_staff %}
+{% if is_admin_role %}
 <div class="pipeline-bar">
   <p class="muted" style="margin:0; flex:1 1 220px;">
     Auto-appends at <strong>10:05</strong> &amp; <strong>14:05</strong> (Asia/Dhaka) on trading days.
@@ -28,7 +28,7 @@
   </form>
 </div>
 {% else %}
-<p class="muted">Daily append runs automatically at 10:05 &amp; 14:05. Fetch/analysis controls are staff-only.</p>
+<p class="muted">Daily append runs automatically at 10:05 &amp; 14:05. Fetch/analysis controls are Admin-only.</p>
 {% endif %}
 
 <div class="grid-4">

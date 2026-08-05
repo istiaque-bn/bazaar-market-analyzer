@@ -6,7 +6,7 @@
   <select name="exchange">
     <option value="">All exchanges</option>
     <option value="DSE" {% if exchange == "DSE" %}selected{% endif %}>DSE</option>
-    <option value="CSE" {% if exchange == "CSE" %}selected{% endif %}>CSE</option>
+    {% if cse_enabled %}<option value="CSE" {% if exchange == "CSE" %}selected{% endif %}>CSE</option>{% endif %}
   </select>
   <select name="action">
     <option value="">All actions</option>

@@ -1,6 +1,3 @@
-from django.contrib.auth.models import User
-from django.core.exceptions import ValidationError
-from django.contrib.auth.password_validation import validate_password
 from rest_framework import generics, permissions, status
 from rest_framework.authtoken.models import Token
 from rest_framework.authtoken.views import ObtainAuthToken
@@ -8,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from api.permissions import IsBazaarAdmin
 from api.serializers import (
     AlertSerializer,
     AnalysisSerializer,
@@ -44,10 +42,12 @@ def _signal_status_context() -> dict:
 
 class StockListAPI(generics.ListAPIView):
     serializer_class = StockSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        qs = Stock.objects.filter(is_active=True)
+        from market.services.exchange_config import enabled_exchanges
+
+        qs = Stock.objects.filter(is_active=True, exchange__in=enabled_exchanges())
         exchange = self.request.query_params.get("exchange")
         if exchange:
             qs = qs.filter(exchange=exchange.upper())
@@ -59,20 +59,29 @@ class StockListAPI(generics.ListAPIView):
 
 class StockDetailAPI(generics.RetrieveAPIView):
     serializer_class = StockSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
     lookup_field = "trading_code"
 
     def get_queryset(self):
+        from market.services.exchange_config import enabled_exchanges
+
         exchange = self.kwargs.get("exchange", "DSE").upper()
+        # A disabled exchange 404s here the same way an unknown exchange
+        # code would — see market.views._get_stock_for_public_route for
+        # the equivalent web-route policy this mirrors.
+        if exchange not in enabled_exchanges():
+            return Stock.objects.none()
         return Stock.objects.filter(exchange=exchange)
 
 
 class AnalysisListAPI(generics.ListAPIView):
     serializer_class = AnalysisSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        qs = AnalysisResult.objects.select_related("stock").order_by("-as_of", "-score")
+        from market.services.exchange_config import enabled_exchanges
+
+        qs = AnalysisResult.objects.filter(stock__exchange__in=enabled_exchanges()).select_related("stock").order_by("-as_of", "-score")
         exchange = self.request.query_params.get("exchange")
         action = self.request.query_params.get("action")
         if exchange:
@@ -86,9 +95,11 @@ class AnalysisListAPI(generics.ListAPIView):
 
 
 class ScreenerAPI(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
+        from market.services.exchange_config import enabled_exchanges
+
         ctx = _signal_status_context()
         return Response(
             {
@@ -97,14 +108,19 @@ class ScreenerAPI(APIView):
                 "potential": AnalysisSerializer(potential_shares(20), many=True, context=ctx).data,
                 "research_candidates": AnalysisSerializer(safe_buys(10), many=True, context=ctx).data,
                 "sells": AnalysisSerializer(sell_candidates(10), many=True, context=ctx).data,
+                "enabled_exchanges": enabled_exchanges(),
             }
         )
 
 
 class StockAnalysisAPI(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, exchange, code):
+        from market.services.exchange_config import is_exchange_enabled
+
+        if not is_exchange_enabled(exchange.upper()):
+            return Response({"detail": "Not found"}, status=404)
         stock = Stock.objects.filter(exchange=exchange.upper(), trading_code=code.upper()).first()
         if not stock:
             return Response({"detail": "Not found"}, status=404)
@@ -123,11 +139,15 @@ class StockAnalysisAPI(APIView):
 
 
 class PredictPriceAPI(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "predict"
 
     def get(self, request, exchange, code):
+        from market.services.exchange_config import is_exchange_enabled
+
+        if not is_exchange_enabled(exchange.upper()):
+            return Response({"ok": False, "error": "Not found", "confidence_scale": CONFIDENCE_SCALE}, status=404)
         stock = Stock.objects.filter(exchange=exchange.upper(), trading_code=code.upper()).first()
         if not stock:
             return Response({"ok": False, "error": "Not found", "confidence_scale": CONFIDENCE_SCALE}, status=404)
@@ -146,9 +166,16 @@ class PredictPriceAPI(APIView):
 
 
 class BacktestListAPI(generics.ListAPIView):
-    queryset = BacktestRun.objects.all()[:20]
     serializer_class = BacktestSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        from django.db.models import Q
+
+        from market.services.exchange_config import enabled_exchanges
+
+        enabled = enabled_exchanges()
+        return BacktestRun.objects.filter(Q(exchange__in=enabled) | Q(exchange="") | Q(exchange__isnull=True)).order_by("-created_at")[:20]
 
 
 class AlertListAPI(generics.ListAPIView):
@@ -160,10 +187,14 @@ class AlertListAPI(generics.ListAPIView):
 
 
 class MLReliabilityAPI(APIView):
-    """Staff-only read-only view of the latest ML Reliability Monitor
-    assessments — see market.services.reliability_report."""
+    """Admin-only read-only view of the latest ML Reliability Monitor
+    assessments — see market.services.reliability_report. Tightened from
+    plain `IsAdminUser` (which is just `is_staff`, so it would also admit
+    Staff accounts) to IsBazaarAdmin: ML Reliability is an Admin-only
+    tool per the role hierarchy (accounts/roles.py) — Staff's explicitly
+    granted visibility stops at DSE freshness/alerts/task status."""
 
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [IsBazaarAdmin]
 
     def get(self, request):
         from market.services.reliability_report import latest_assessments
@@ -172,25 +203,18 @@ class MLReliabilityAPI(APIView):
 
 
 class RegisterAPI(APIView):
+    """Tombstone for the old public self-registration endpoint — public
+    registration has been removed project-wide (see accounts.views.
+    signup_disabled for the web equivalent). Always refuses and never
+    creates an account, regardless of payload or auth state."""
+
     permission_classes = [permissions.AllowAny]
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "register"
 
     def post(self, request):
-        username = request.data.get("username")
-        password = request.data.get("password")
-        email = request.data.get("email", "")
-        if not username or not password:
-            return Response({"detail": "username and password required"}, status=400)
-        if User.objects.filter(username=username).exists():
-            return Response({"detail": "username taken"}, status=400)
-        try:
-            validate_password(password)
-        except ValidationError as exc:
-            return Response({"password": exc.messages}, status=400)
-        user = User.objects.create_user(username=username, password=password, email=email)
-        token, _ = Token.objects.get_or_create(user=user)
-        return Response({"token": token.key, "username": user.username}, status=status.HTTP_201_CREATED)
+        return Response(
+            {"detail": "Public registration is disabled. Contact an administrator to request an account."},
+            status=403,
+        )
 
 
 class CustomAuthToken(ObtainAuthToken):

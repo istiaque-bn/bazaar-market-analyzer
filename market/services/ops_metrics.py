@@ -106,10 +106,13 @@ def model_evaluation_summary() -> dict:
 def ops_summary() -> dict:
     """Everything the staff ops report page and the alert-threshold scan
     need, gathered once."""
+    from market.services.exchange_config import enabled_exchanges
+
     return {
         "generated_at": timezone.now().isoformat(),
         "tasks": task_health(),
         "predictions": prediction_volume(),
         "rejected_rows": rejected_rows_summary(),
         "models": model_evaluation_summary(),
+        "enabled_exchanges": enabled_exchanges(),
     }

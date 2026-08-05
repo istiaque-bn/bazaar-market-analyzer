@@ -1,0 +1,16 @@
+{% extends "base_bare.html" %}
+{% block title %}Sign-up disabled{% endblock %}
+{% block content %}
+<div class="auth-shell">
+  <section class="auth-card">
+    <div class="auth-brand">
+      <span class="brand-mark" aria-hidden="true">বা</span>
+      <span class="brand-text">Bazaar</span>
+    </div>
+    <h1 class="auth-title">Public sign-up is disabled</h1>
+    <p>Bazaar accounts are created by an Admin or Staff member — there's no self-service registration.</p>
+    <p class="muted">If you were expecting access, contact whoever invited you.</p>
+    <a class="btn auth-submit" href="{% url 'login' %}">Back to sign in</a>
+  </section>
+</div>
+{% endblock %}

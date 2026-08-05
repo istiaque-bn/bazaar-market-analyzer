@@ -10,6 +10,7 @@ start with `from .base import *`.
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -49,6 +50,7 @@ INSTALLED_APPS = [
     "accounts.apps.AccountsConfig",
     "market.apps.MarketConfig",
     "notifications",
+    "feedback.apps.FeedbackConfig",
     "api",
 ]
 
@@ -62,6 +64,10 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # After AuthenticationMiddleware (needs request.user): promptly logs
+    # out a deactivated account's live session and forces a
+    # temporary-password holder through the password-change screen.
+    "accounts.middleware.AccountStateMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -79,6 +85,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "market.context_processors.market_nav",
+                "accounts.context_processors.role_context",
             ],
         },
     },
@@ -118,8 +125,13 @@ MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 LOGIN_URL = "login"
-LOGIN_REDIRECT_URL = "dashboard"
-LOGOUT_REDIRECT_URL = "home"
+# Fallback only — accounts.views.BazaarLoginView.get_default_redirect_url()
+# routes each role to its own panel (Admin/Staff/User) instead of always
+# using this fixed value; kept for anything that calls the plain
+# `django.contrib.auth.views.LoginView`/reverse("login") machinery
+# directly (e.g. the admin's "you're not staff" bounce).
+LOGIN_REDIRECT_URL = "login"
+LOGOUT_REDIRECT_URL = "login"
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -190,8 +202,48 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
 CELERY_TASK_TIME_LIMIT = int(os.getenv("CELERY_TASK_TIME_LIMIT", "600"))
 CELERY_TASK_SOFT_TIME_LIMIT = int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT", "540"))
 CELERY_WORKER_MAX_TASKS_PER_CHILD = int(os.getenv("CELERY_WORKER_MAX_TASKS_PER_CHILD", "200"))
-CELERY_WORKER_PREFETCH_MULTIPLIER = int(os.getenv("CELERY_WORKER_PREFETCH_MULTIPLIER", "4"))
+# Conservative defaults for a small VM (documented target: Oracle A1, 2
+# OCPUs, ~20 users) — a worker that only prefetches one task at a time
+# can't hoard several quote-fetch jobs behind one slow ML-training run,
+# and a single OS-level worker process keeps memory bounded. Both are
+# still overridable via env for a beefier deployment.
+CELERY_WORKER_PREFETCH_MULTIPLIER = int(os.getenv("CELERY_WORKER_PREFETCH_MULTIPLIER", "1"))
+CELERY_WORKER_CONCURRENCY = int(os.getenv("CELERY_WORKER_CONCURRENCY", "1"))
 CELERY_TASK_ACKS_LATE = os.getenv("CELERY_TASK_ACKS_LATE", "True").lower() in ("1", "true", "yes")
+
+# --- Task queues ---------------------------------------------------------
+# Named so a heavy job (ML training, full analysis) can be isolated to
+# its own worker later without touching task code — a worker not yet
+# split off just listens to all of them (see config/celery.py's
+# task_routes and docker-compose.yml's celery-worker `-Q` flag).
+CELERY_TASK_DEFAULT_QUEUE = "market-fast"
+QUEUE_MARKET_FAST = "market-fast"  # quote sync, freshness checks — must never queue behind heavy work
+QUEUE_MARKET_ANALYSIS = "market-analysis"  # intraday lightweight analysis, daily append
+QUEUE_MARKET_HEAVY = "market-heavy"  # full analysis, ML training, reliability assessment
+QUEUE_NOTIFICATIONS = "notifications"  # digests, feedback notifications
+
+# Explicit per-task routing. Anything not listed falls back to
+# CELERY_TASK_DEFAULT_QUEUE (market-fast) — deliberately the *cheapest*
+# default so an unrouted new task doesn't accidentally land in front of
+# quote fetching; every task with real cost is named here instead.
+CELERY_TASK_ROUTES = {
+    "market.tasks.sync_live_market": {"queue": QUEUE_MARKET_FAST},
+    "market.tasks.sync_pe_ratios": {"queue": QUEUE_MARKET_FAST},
+    "market.tasks.run_intraday_analysis": {"queue": QUEUE_MARKET_ANALYSIS},
+    "market.tasks.append_daily_bars": {"queue": QUEUE_MARKET_ANALYSIS},
+    "market.tasks.sync_holiday_calendar": {"queue": QUEUE_MARKET_ANALYSIS},
+    "market.tasks.fetch_all_market_data": {"queue": QUEUE_MARKET_HEAVY},
+    "market.tasks.run_full_analysis": {"queue": QUEUE_MARKET_HEAVY},
+    "market.tasks.run_end_of_day_pipeline": {"queue": QUEUE_MARKET_HEAVY},
+    "market.tasks.seed_demo_and_analyze": {"queue": QUEUE_MARKET_HEAVY},
+    "market.tasks.train_ml_model": {"queue": QUEUE_MARKET_HEAVY},
+    "market.tasks.close_learn_settlement": {"queue": QUEUE_MARKET_HEAVY},
+    "market.tasks.assess_ml_reliability": {"queue": QUEUE_MARKET_HEAVY},
+    "market.tasks.analyze_and_notify": {"queue": QUEUE_MARKET_HEAVY},
+    "notifications.tasks.send_daily_digest": {"queue": QUEUE_NOTIFICATIONS},
+    "notifications.tasks.send_ml_daily_report": {"queue": QUEUE_NOTIFICATIONS},
+    "feedback.tasks.notify_reporter": {"queue": QUEUE_NOTIFICATIONS},
+}
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -212,14 +264,138 @@ MIN_HISTORY_DAYS = 60
 CACHE_DIR = BASE_DIR / "data" / "cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Automatic live market sync (ticker) — no Redis required
-AUTO_MARKET_SYNC = os.getenv("AUTO_MARKET_SYNC", "True").lower() in ("1", "true", "yes")
-AUTO_SYNC_INTERVAL_MARKET = int(os.getenv("AUTO_SYNC_INTERVAL_MARKET", "60"))  # seconds while market open
-AUTO_SYNC_INTERVAL_OFF = int(os.getenv("AUTO_SYNC_INTERVAL_OFF", "900"))  # seconds after hours
-AUTO_DAILY_APPEND = os.getenv("AUTO_DAILY_APPEND", "True").lower() in ("1", "true", "yes")
-AUTO_ANALYZE_AFTER_APPEND = os.getenv("AUTO_ANALYZE_AFTER_APPEND", "True").lower() in ("1", "true", "yes")
-AUTO_CLOSE_LEARN = os.getenv("AUTO_CLOSE_LEARN", "True").lower() in ("1", "true", "yes")
+# --- Hybrid automation (Celery Beat + feature-flagged scheduled tasks) --
+# Every AUTO_* toggle below can be disabled independently; every interval
+# is in seconds unless its name says otherwise, and is validated here
+# (not at task-run time) so a typo'd .env fails at process startup, the
+# same "fail fast, fail loud" rule production.py already applies to
+# required secrets — see _positive_int().
+
+
+def _bool_env(name: str, default: str) -> bool:
+    return os.getenv(name, default).strip().lower() in ("1", "true", "yes")
+
+
+def _positive_int(name: str, default: str) -> int:
+    raw = os.getenv(name, default)
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ImproperlyConfigured(f"{name}={raw!r} is not a valid integer.")
+    if value <= 0:
+        raise ImproperlyConfigured(f"{name}={raw!r} must be a positive number of seconds (got {value}).")
+    return value
+
+
+# --- Telegram ML daily report --------------------------------------------
+# One consolidated, plain-language ML status report sent to a single
+# configured Admin recipient once a day. Independently configurable from
+# TELEGRAM_CHAT_ID/the daily digest above — disabling one never disables
+# the other. TELEGRAM_ADMIN_CHAT_ID is deliberately its own setting (never
+# taken from a browser request) so only whoever controls deployment
+# config decides who receives it — see market/services/ml_daily_report.py
+# and notifications/tasks.py send_ml_daily_report.
+TELEGRAM_ML_DAILY_REPORT = _bool_env("TELEGRAM_ML_DAILY_REPORT", "True")
+TELEGRAM_ML_REPORT_TIME = os.getenv("TELEGRAM_ML_REPORT_TIME", "17:00").strip()
+TELEGRAM_ML_REPORT_TIMEZONE = os.getenv("TELEGRAM_ML_REPORT_TIMEZONE", "Asia/Dhaka").strip()
+TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip()
+
+try:
+    _ml_report_hour, _ml_report_minute = (int(p) for p in TELEGRAM_ML_REPORT_TIME.split(":", 1))
+    if not (0 <= _ml_report_hour <= 23 and 0 <= _ml_report_minute <= 59):
+        raise ValueError
+except ValueError:
+    raise ImproperlyConfigured(f"TELEGRAM_ML_REPORT_TIME={TELEGRAM_ML_REPORT_TIME!r} must be 24-hour 'HH:MM'.")
+
+try:
+    from zoneinfo import ZoneInfo
+
+    ZoneInfo(TELEGRAM_ML_REPORT_TIMEZONE)
+except Exception as _tz_exc:
+    raise ImproperlyConfigured(
+        f"TELEGRAM_ML_REPORT_TIMEZONE={TELEGRAM_ML_REPORT_TIMEZONE!r} is not a valid IANA timezone name."
+    ) from _tz_exc
+
+# TELEGRAM_ML_DAILY_REPORT above just means "this feature is turned on" —
+# it can still be effectively inert without credentials (same
+# graceful-degradation pattern as TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID:
+# never crash startup for missing secrets, since most dev/test
+# environments won't have a real bot token). Whether a real send is
+# actually attempted is computed at call time as
+# `bool(settings.TELEGRAM_BOT_TOKEN) and bool(settings.TELEGRAM_ADMIN_CHAT_ID)`
+# — deliberately NOT precomputed into a settings constant here, since
+# that would freeze at settings-import time and silently stop tracking
+# override_settings()/runtime credential changes.
+
+
+# Automatic live market sync (ticker + portfolio quotes) — no Redis
+# required to run the app, but Celery Beat drives the actual cadence.
+AUTO_MARKET_SYNC = _bool_env("AUTO_MARKET_SYNC", "True")
+AUTO_SYNC_INTERVAL_MARKET = _positive_int("AUTO_SYNC_INTERVAL_MARKET", "200")  # seconds, while DSE is open
+# Outside-hours freshness check — set AUTO_SYNC_INTERVAL_OFF high (or
+# AUTO_MARKET_SYNC=False) to disable the off-hours cadence entirely;
+# there's no separate on/off switch for just this half since the
+# interval-based check already self-throttles to "never" for any
+# interval longer than the gap between trading sessions.
+AUTO_SYNC_INTERVAL_OFF = _positive_int("AUTO_SYNC_INTERVAL_OFF", "3600")  # seconds, while DSE is closed
+
+# Lightweight intraday analysis (technical snapshot refresh only — no
+# predictor/pattern/ML recompute, no new AnalysisResult rows; see
+# market/services/intraday_analysis.py) between full end-of-day passes.
+AUTO_INTRADAY_ANALYSIS = _bool_env("AUTO_INTRADAY_ANALYSIS", "True")
+AUTO_INTRADAY_ANALYSIS_INTERVAL = _positive_int("AUTO_INTRADAY_ANALYSIS_INTERVAL", "900")  # seconds
+
+AUTO_DAILY_APPEND = _bool_env("AUTO_DAILY_APPEND", "True")
+AUTO_ANALYZE_AFTER_APPEND = _bool_env("AUTO_ANALYZE_AFTER_APPEND", "True")
+AUTO_CLOSE_LEARN = _bool_env("AUTO_CLOSE_LEARN", "True")
+
+# Daily ML training — retrains once a day at a fixed off-hours time
+# (well before the 10:00 Asia/Dhaka market open, so it never collides
+# with market hours or the daily end-of-day pipeline regardless of which
+# calendar day it lands on). market.tasks.train_ml_model itself is a
+# no-op when there's no new label-resolvable data since the last train,
+# so a quiet day just logs "skipped: no new data" rather than doing
+# wasted work.
+AUTO_ML_TRAINING = _bool_env("AUTO_ML_TRAINING", "True")
+AUTO_ML_TRAINING_TIME = os.getenv("AUTO_ML_TRAINING_TIME", "00:30").strip()
+
+try:
+    _ml_hour, _ml_minute = (int(p) for p in AUTO_ML_TRAINING_TIME.split(":", 1))
+    if not (0 <= _ml_hour <= 23 and 0 <= _ml_minute <= 59):
+        raise ValueError
+except ValueError:
+    raise ImproperlyConfigured(f"AUTO_ML_TRAINING_TIME={AUTO_ML_TRAINING_TIME!r} must be 24-hour 'HH:MM'.")
+
 DSE_SSL_VERIFY = os.getenv("DSE_SSL_VERIFY", "True").lower() not in ("0", "false", "no")
+
+# --- Exchange feature flags ---------------------------------------------
+# Which exchanges this deployment actively fetches, analyzes, trains
+# models for, and exposes to public discovery. Disabling an exchange is a
+# purely operational toggle: it never deletes, mutates, or relabels any
+# row, and is reversible by flipping the flag back and restarting
+# services (see README.md's "Exchange feature flags" section). Every
+# other module is expected to read market.services.exchange_config's
+# enabled_exchanges()/is_exchange_enabled() rather than these two settings
+# or os.environ directly, so this is the one place the raw env vars are
+# parsed. development.py/test.py deliberately re-enable CSE on top of
+# this default so the existing local-dev/test-suite behavior (which
+# predates this flag and exercises CSE broadly) is unaffected unless a
+# developer opts into DSE-only locally via their own .env.
+ENABLE_DSE = os.getenv("ENABLE_DSE", "True").strip().lower() in ("1", "true", "yes")
+ENABLE_CSE = os.getenv("ENABLE_CSE", "False").strip().lower() in ("1", "true", "yes")
+# Escape hatch for a deliberate full-outage window (e.g. planned database
+# maintenance) — lets ops take every exchange offline at once without the
+# startup check below treating that as a misconfiguration.
+MAINTENANCE_MODE = os.getenv("MAINTENANCE_MODE", "False").strip().lower() in ("1", "true", "yes")
+
+if not ENABLE_DSE and not ENABLE_CSE and not MAINTENANCE_MODE:
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured(
+        "ENABLE_DSE and ENABLE_CSE are both false — this deployment would serve no market data at "
+        "all. If this is intentional (e.g. planned maintenance), set MAINTENANCE_MODE=True to "
+        "acknowledge it explicitly; otherwise enable at least one exchange."
+    )
 
 # --- Structured logging (Phase 9) --------------------------------------
 # Every environment gets the same correlation-id + redaction pipeline

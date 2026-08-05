@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Feedback triage{% endblock %}
+{% block content %}
+<div class="section-title">
+  <div>
+    <h2>Feedback triage</h2>
+    <p class="muted">{{ page_obj.paginator.count }} report{{ page_obj.paginator.count|pluralize }}</p>
+  </div>
+</div>
+{% if is_admin_role %}<div class="quick-actions"><a class="btn btn-small btn-ghost" href="{% url 'feedback_admin_dashboard' %}">Dashboard</a><a class="btn btn-small btn-ghost" href="{% url 'feedback_export' %}">Export CSV</a></div>{% endif %}
+
+<form method="get" class="filters">
+  <input type="text" name="q" placeholder="Reference, title, description, reporter" value="{{ q }}">
+  <select name="category">
+    <option value="">All categories</option>
+    {% for value, label in categories %}<option value="{{ value }}" {% if category == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+  </select>
+  <select name="status">
+    <option value="">All statuses</option>
+    {% for value, label in statuses %}<option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+  </select>
+  <select name="reporter_priority">
+    <option value="">Any reporter priority</option>
+    <option value="low" {% if reporter_priority == "low" %}selected{% endif %}>Low</option>
+    <option value="normal" {% if reporter_priority == "normal" %}selected{% endif %}>Normal</option>
+    <option value="high" {% if reporter_priority == "high" %}selected{% endif %}>High</option>
+    <option value="urgent" {% if reporter_priority == "urgent" %}selected{% endif %}>Urgent</option>
+  </select>
+  <select name="assigned">
+    <option value="">Anyone</option>
+    <option value="me" {% if assigned == "me" %}selected{% endif %}>Assigned to me</option>
+    <option value="unassigned" {% if assigned == "unassigned" %}selected{% endif %}>Unassigned</option>
+  </select>
+  <input type="date" name="date_from" value="{{ date_from }}">
+  <input type="date" name="date_to" value="{{ date_to }}">
+  <button class="btn btn-small" type="submit">Filter</button>
+</form>
+
+{% if page_obj.object_list %}
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Reference</th><th>Title</th><th>Category</th><th>Reporter</th><th>Priority</th><th>Status</th><th>Assigned</th><th>Submitted</th></tr></thead>
+    <tbody>
+      {% for fb in page_obj %}
+        <tr>
+          <td><a href="{% url 'feedback_detail' fb.pk %}">{{ fb.reference_number }}</a></td>
+          <td>{{ fb.title }}</td>
+          <td>{{ fb.get_category_display }}</td>
+          <td>{{ fb.reporter_username_snapshot }}</td>
+          <td>{{ fb.get_reporter_priority_display }}{% if fb.admin_priority %} / <strong>{{ fb.get_admin_priority_display }}</strong>{% endif %}</td>
+          <td><span class="badge badge-hold">{{ fb.get_status_display }}</span></td>
+          <td>{{ fb.assigned_to.username|default:"—" }}</td>
+          <td>{{ fb.created_at|date:"d M Y" }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if page_obj.paginator.num_pages > 1 %}
+<div class="pagination">
+  {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}">&larr; Prev</a>{% endif %}
+  <span class="muted">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+  {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}">Next &rarr;</a>{% endif %}
+</div>
+{% endif %}
+{% else %}
+  <p class="empty-state">No feedback matches these filters.</p>
+{% endif %}
+{% endblock %}

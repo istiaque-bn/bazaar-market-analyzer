@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}{{ target.username }}{% endblock %}
+{% block content %}
+<div class="section-title">
+  <div>
+    <h2>{{ target.username }} <span class="badge badge-role-{{ target_role|lower }}">{{ target_role }}</span>
+      <span class="badge {% if target.is_active %}badge-active{% else %}badge-inactive{% endif %}">{% if target.is_active %}Active{% else %}Inactive{% endif %}</span>
+    </h2>
+    <p class="muted">{{ target.get_full_name|default:"No name on file" }} · {{ target.email|default:"No email on file" }}</p>
+  </div>
+</div>
+
+<div class="grid-2" style="align-items:start;">
+  <div class="panel">
+    <h3>Account details</h3>
+    <p><strong>Joined:</strong> {{ target.date_joined|date:"d M Y, H:i" }}</p>
+    <p><strong>Last login:</strong> {{ target.last_login|date:"d M Y, H:i"|default:"Never" }}</p>
+    <p><strong>Created by:</strong> {{ target.profile.created_by.username|default:"—" }}</p>
+
+    <h3 style="margin-top:1.2rem;">Actions</h3>
+    {% if is_last_active_admin %}
+      <p class="muted">This is the last active Admin account — it can't be deactivated.</p>
+    {% endif %}
+    <div class="account-actions">
+      {% if target.is_active %}
+        {% if not is_last_active_admin %}
+        <form method="post" action="{% url 'account_deactivate' target.id %}" class="confirm-inline" onsubmit="return confirm('Deactivate {{ target.username }}? They will be signed out immediately.');">
+          {% csrf_token %}
+          <input type="text" name="confirm_username" placeholder="Type &quot;{{ target.username }}&quot; to confirm" required>
+          <button class="btn btn-small btn-ghost" type="submit">Deactivate</button>
+        </form>
+        {% endif %}
+      {% else %}
+        <form method="post" action="{% url 'account_activate' target.id %}">
+          {% csrf_token %}
+          <button class="btn btn-small" type="submit">Activate</button>
+        </form>
+      {% endif %}
+
+      <form method="post" action="{% url 'account_reset_password' target.id %}" onsubmit="return confirm('Assign a new temporary password to {{ target.username }}?');">
+        {% csrf_token %}
+        <button class="btn btn-small btn-ghost" type="submit">Reset password</button>
+      </form>
+
+      {% if can_change_role %}
+        {% if target_role == "User" %}
+        <form method="post" action="{% url 'account_promote' target.id %}" class="confirm-inline" onsubmit="return confirm('Promote {{ target.username }} to Staff?');">
+          {% csrf_token %}
+          <input type="text" name="confirm_username" placeholder="Type &quot;{{ target.username }}&quot; to confirm" required>
+          <button class="btn btn-small btn-gold" type="submit">Promote to Staff</button>
+        </form>
+        {% elif target_role == "Staff" %}
+        <form method="post" action="{% url 'account_demote' target.id %}" class="confirm-inline" onsubmit="return confirm('Demote {{ target.username }} to User?');">
+          {% csrf_token %}
+          <input type="text" name="confirm_username" placeholder="Type &quot;{{ target.username }}&quot; to confirm" required>
+          <button class="btn btn-small btn-ghost" type="submit">Demote to User</button>
+        </form>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Account-management history</h3>
+    {% if events %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Event</th><th>By</th><th>When</th></tr></thead>
+          <tbody>
+          {% for e in events %}
+            <tr><td>{{ e.get_action_display }}</td><td>{{ e.username_snapshot|default:"system" }}</td><td>{{ e.created_at|date:"d M Y, H:i" }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="empty-state">No account-management events recorded for this account.</p>
+    {% endif %}
+  </div>
+</div>
+
+<p style="margin-top:1rem;"><a href="{% url 'account_list' %}">&larr; Back to accounts</a></p>
+{% endblock %}

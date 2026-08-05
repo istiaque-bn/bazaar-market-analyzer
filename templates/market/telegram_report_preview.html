@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Telegram ML report preview{% endblock %}
+{% block content %}
+<div class="section-title">
+  <div>
+    <h2>Telegram ML report preview</h2>
+    <p class="muted">Report date {{ report_date }} · rendered now, not sent · Admin-only.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <p class="muted">This is exactly what "Send now" would deliver to the configured Admin Telegram recipient right now — nothing here has been sent.</p>
+  {% for section in sections %}
+    <pre style="white-space:pre-wrap; font-family:inherit; margin:0 0 1rem;">{{ section }}</pre>
+    {% if not forloop.last %}<hr>{% endif %}
+  {% endfor %}
+</div>
+
+<p style="margin-top:1rem;"><a href="{% url 'admin_panel' %}">&larr; Back to Admin Panel</a></p>
+{% endblock %}

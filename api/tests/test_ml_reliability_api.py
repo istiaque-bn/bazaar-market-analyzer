@@ -1,4 +1,6 @@
-"""Staff-only read-only /api/ml-reliability/ endpoint."""
+"""Admin-only read-only /api/ml-reliability/ endpoint (see
+api.permissions.IsBazaarAdmin / accounts/roles.py — ML Reliability is an
+Admin capability, not Staff's)."""
 from datetime import date
 
 from django.contrib.auth.models import User
@@ -25,11 +27,17 @@ class MlReliabilityApiAccessTests(TestCase):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 403)
 
-    def test_staff_user_can_access(self):
+    def test_plain_staff_user_is_forbidden(self):
         staff = User.objects.create_user(username="staffapi", password="Correct-Horse-Battery-Staple-42")
         staff.is_staff = True
         staff.save(update_fields=["is_staff"])
         self.client.login(username="staffapi", password="Correct-Horse-Battery-Staple-42")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_user_can_access(self):
+        User.objects.create_superuser(username="adminapi", password="Correct-Horse-Battery-Staple-42")
+        self.client.login(username="adminapi", password="Correct-Horse-Battery-Staple-42")
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
 
@@ -48,10 +56,8 @@ class MlReliabilityApiContentTests(TestCase):
         )
         run_reliability_assessment(families=[PredictionSnapshot.ModelFamily.FORWARD_RETURN_RF], windows=[MIN_SAMPLES_WATCH])
 
-        staff = User.objects.create_user(username="staffapi2", password="Correct-Horse-Battery-Staple-42")
-        staff.is_staff = True
-        staff.save(update_fields=["is_staff"])
-        self.client.login(username="staffapi2", password="Correct-Horse-Battery-Staple-42")
+        User.objects.create_superuser(username="adminapi2", password="Correct-Horse-Battery-Staple-42")
+        self.client.login(username="adminapi2", password="Correct-Horse-Battery-Staple-42")
 
     def test_response_is_json_serializable_and_contains_assessments(self):
         response = self.client.get(reverse("api_ml_reliability"))

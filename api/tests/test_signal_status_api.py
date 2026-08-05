@@ -1,3 +1,4 @@
+from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -10,6 +11,8 @@ class AnalysisSerializerSignalStatusTests(TestCase):
     edge information the web UI shows, not a bare score."""
 
     def setUp(self):
+        user = User.objects.create_user(username="api_signal_user", password="Correct-Horse-Battery-Staple-42")
+        self.client.force_login(user)
         self.stock = Stock.objects.create(exchange=Exchange.DSE, trading_code="APIX1", company_name="API Test Co")
         self.analysis = AnalysisResult.objects.create(
             stock=self.stock,
@@ -72,6 +75,10 @@ class AnalysisListPerformanceTests(TestCase):
     serializer context), not once per row — otherwise a 100-row list
     response would re-run the next-close skill scan (a DB scan over up
     to 8000 rows) once per row instead of once total."""
+
+    def setUp(self):
+        user = User.objects.create_user(username="api_perf_user", password="Correct-Horse-Battery-Staple-42")
+        self.client.force_login(user)
 
     def _make_stocks(self, n, prefix):
         for i in range(n):

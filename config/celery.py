@@ -10,7 +10,6 @@ app = Celery("bazaar")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
 
-
 @task_prerun.connect
 def _tag_task_logging_context(task_id=None, task=None, **kwargs):
     """Phase 9: so every log line a task emits is tagged with its task_id/
@@ -38,12 +37,39 @@ app.conf.beat_schedule = {
     # (market.services.autosync.maybe_sync) no-ops unless
     # AUTO_SYNC_INTERVAL_MARKET/_OFF has actually elapsed, so this one
     # fixed-interval entry covers both market-hours and off-hours cadence
-    # without separate schedules per session state.
+    # without separate schedules per session state. AUTO_MARKET_SYNC=False
+    # is honored inside the task itself (maybe_sync), not by removing this
+    # entry — same self-throttling pattern as run-intraday-analysis below.
     "sync-live-market": {
         "task": "market.tasks.sync_live_market",
         "schedule": 60.0,
     },
-    # Automatic daily append — no dashboard Fetch button required
+    # Lightweight intraday analysis. Ticks every 60s; the task itself
+    # (market.services.intraday_analysis.maybe_run_intraday_analysis)
+    # no-ops unless AUTO_INTRADAY_ANALYSIS is on, the market is open,
+    # AUTO_INTRADAY_ANALYSIS_INTERVAL has elapsed, and there's newer data
+    # to refresh — see that module's docstring.
+    "run-intraday-analysis": {
+        "task": "market.tasks.run_intraday_analysis",
+        "schedule": 60.0,
+    },
+    # Telegram ML daily report. Ticks every 60s, every day (weekends and
+    # holidays included — the report itself explains "no new evidence" on
+    # a quiet day rather than skipping). The task
+    # (notifications.services.send_ml_daily_report) self-throttles: it
+    # no-ops until the current time in TELEGRAM_ML_REPORT_TIMEZONE has
+    # reached TELEGRAM_ML_REPORT_TIME, then sends at most once per
+    # Asia/Dhaka calendar date via its own idempotency key — same
+    # self-throttling pattern as run-intraday-analysis above, chosen
+    # specifically because TELEGRAM_ML_REPORT_TIMEZONE is independently
+    # configurable from CELERY_TIMEZONE and Celery's crontab schedule in
+    # this version has no per-entry timezone of its own.
+    "send-ml-daily-report": {
+        "task": "notifications.tasks.send_ml_daily_report",
+        "schedule": 60.0,
+    },
+    # Automatic daily append — no dashboard Fetch button required. The
+    # task itself (run_scheduled_append) honors AUTO_DAILY_APPEND.
     "append-market-1005": {
         "task": "market.tasks.append_daily_bars",
         "schedule": crontab(hour=10, minute=5, day_of_week=_BD_WEEK),
@@ -54,14 +80,10 @@ app.conf.beat_schedule = {
     },
     # After-close settlement: settle due next-day-close forecasts, retrain
     # the close-learn model if anything settled, generate new forecasts.
+    # The task itself honors AUTO_CLOSE_LEARN.
     "close-learn-settlement-1445": {
         "task": "market.tasks.close_learn_settlement",
         "schedule": crontab(hour=14, minute=45, day_of_week=_BD_WEEK),
-    },
-    # Standalone forward-return model retrain (independent of analysis).
-    "train-ml-model-1450": {
-        "task": "market.tasks.train_ml_model",
-        "schedule": crontab(hour=14, minute=50, day_of_week=_BD_WEEK),
     },
     "send-daily-digest": {
         "task": "notifications.tasks.send_daily_digest",
@@ -74,8 +96,8 @@ app.conf.beat_schedule = {
     },
     # ML Reliability Monitor: capture today's predictions, settle due
     # outcomes, assess both model families against rolling windows. Runs
-    # after train-ml-model/close-learn-settlement/digest so the day's
-    # AnalysisResult/NextDayCloseForecast rows already exist to capture from.
+    # after close-learn-settlement/digest so the day's AnalysisResult/
+    # NextDayCloseForecast rows already exist to capture from.
     "assess-ml-reliability-1520": {
         "task": "market.tasks.assess_ml_reliability",
         "schedule": crontab(hour=15, minute=20, day_of_week=_BD_WEEK),
@@ -90,3 +112,20 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=23, minute=30, day_of_month="28-31"),
     },
 }
+
+# Standalone forward-return model retrain — daily, at a fixed off-hours
+# time (AUTO_ML_TRAINING_TIME, default 00:30, config/settings/base.py —
+# validated there for format), well before the 10:00 Asia/Dhaka market
+# open so it never collides with market hours or the end-of-day pipeline
+# regardless of the day of week. Only added to the schedule at all when
+# AUTO_ML_TRAINING is on — the task also self-checks the flag (defense in
+# depth against a manual .delay() call), but leaving a disabled entry out
+# of beat_schedule entirely means it never even logs a "skipped" tick.
+from django.conf import settings  # noqa: E402
+
+if getattr(settings, "AUTO_ML_TRAINING", True):
+    _ml_hour, _ml_minute = (int(p) for p in getattr(settings, "AUTO_ML_TRAINING_TIME", "00:30").split(":", 1))
+    app.conf.beat_schedule["train-ml-model-daily"] = {
+        "task": "market.tasks.train_ml_model",
+        "schedule": crontab(hour=_ml_hour, minute=_ml_minute),
+    }

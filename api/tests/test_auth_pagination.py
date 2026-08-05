@@ -52,6 +52,8 @@ class PaginationTests(TestCase):
     """DEFAULT_PAGINATION_CLASS=PageNumberPagination, PAGE_SIZE=50."""
 
     def setUp(self):
+        user = User.objects.create_user(username="pagination_user", password="Correct-Horse-Battery-Staple-42")
+        self.client.force_login(user)
         for i in range(60):
             Stock.objects.create(exchange=Exchange.DSE, trading_code=f"CODE{i:03d}", company_name=f"Co {i}")
 
@@ -74,6 +76,8 @@ class PaginationTests(TestCase):
 
 class ErrorResponseTests(TestCase):
     def setUp(self):
+        user = User.objects.create_user(username="error_resp_user", password="Correct-Horse-Battery-Staple-42")
+        self.client.force_login(user)
         self.stock = Stock.objects.create(exchange=Exchange.DSE, trading_code="REAL", company_name="Real Co")
 
     def test_stock_detail_404_for_unknown_code(self):
@@ -108,6 +112,8 @@ class AnalysisListFilterTests(TestCase):
     def setUp(self):
         from market.models import AnalysisResult, SignalAction
 
+        user = User.objects.create_user(username="analysis_filter_user", password="Correct-Horse-Battery-Staple-42")
+        self.client.force_login(user)
         self.dse = Stock.objects.create(exchange=Exchange.DSE, trading_code="D1", company_name="D1")
         self.cse = Stock.objects.create(exchange=Exchange.CSE, trading_code="C1", company_name="C1")
         AnalysisResult.objects.create(stock=self.dse, as_of="2026-01-01", action=SignalAction.BUY, score=50)

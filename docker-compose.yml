@@ -46,6 +46,17 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_BROKER_ALLOW_PLAINTEXT: "True" # never leaves the docker-compose network
       DJANGO_LOG_LEVEL: INFO
+      AUTO_ML_TRAINING: ${AUTO_ML_TRAINING:-True}
+      AUTO_ML_TRAINING_TIME: ${AUTO_ML_TRAINING_TIME:-00:30}
+      # Telegram ML daily report — see README.md's "Telegram ML daily
+      # report" section. Effectively inert (generates/previews fine,
+      # never sends) until both TELEGRAM_BOT_TOKEN and
+      # TELEGRAM_ADMIN_CHAT_ID are set in .env.docker.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ADMIN_CHAT_ID: ${TELEGRAM_ADMIN_CHAT_ID:-}
+      TELEGRAM_ML_DAILY_REPORT: ${TELEGRAM_ML_DAILY_REPORT:-True}
+      TELEGRAM_ML_REPORT_TIME: ${TELEGRAM_ML_REPORT_TIME:-17:00}
+      TELEGRAM_ML_REPORT_TIMEZONE: ${TELEGRAM_ML_REPORT_TIMEZONE:-Asia/Dhaka}
     volumes:
       - ./data:/app/data
     ports:
@@ -59,10 +70,27 @@ services:
   celery-worker:
     build: .
     restart: unless-stopped
-    command: ["celery", "-A", "config", "worker", "--loglevel=info"]
+    # -Q is required, not cosmetic: config/settings/base.py sets
+    # CELERY_TASK_DEFAULT_QUEUE=market-fast, and a Celery worker only
+    # ever consumes the queue(s) named here — a single worker MUST list
+    # all four (see config/settings/base.py's CELERY_TASK_ROUTES) or
+    # everything routed to market-analysis/market-heavy/notifications
+    # (daily append, full analysis, ML training, digests, feedback
+    # notifications) would silently never run. Concurrency/prefetch come
+    # from CELERY_WORKER_CONCURRENCY / CELERY_WORKER_PREFETCH_MULTIPLIER
+    # in the shared env below (Celery reads them from app.conf; no CLI
+    # flag needed) — conservative defaults (1/1) for a small VM, see
+    # README's "Worker recommendations".
+    command:
+      [
+        "celery", "-A", "config", "worker", "--loglevel=info",
+        "-Q", "market-fast,market-analysis,market-heavy,notifications,celery",
+      ]
     environment:
       <<: *django_env
       SERVICE_ROLE: worker
+      CELERY_WORKER_CONCURRENCY: ${CELERY_WORKER_CONCURRENCY:-1}
+      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
     volumes:
       - ./data:/app/data
     depends_on:
@@ -74,10 +102,24 @@ services:
   celery-beat:
     build: .
     restart: unless-stopped
-    command: ["celery", "-A", "config", "beat", "--loglevel=info"]
+    # --schedule points at a volume-backed path so beat's own "have I
+    # already fired this tick" state survives a container restart —
+    # combined with docker-compose only ever running one celery-beat
+    # container for this service, this is what "exactly one Beat
+    # instance, no duplicate scheduler on restart" means in practice
+    # here (see README's "Deployment behavior" section for the fuller
+    # explanation, incl. why django_celery_beat's DatabaseScheduler
+    # isn't used).
+    command:
+      [
+        "celery", "-A", "config", "beat", "--loglevel=info",
+        "--schedule=/app/beat/celerybeat-schedule",
+      ]
     environment:
       <<: *django_env
       SERVICE_ROLE: beat
+    volumes:
+      - beat_data:/app/beat
     depends_on:
       db:
         condition: service_healthy
@@ -101,3 +143,4 @@ services:
 
 volumes:
   postgres_data:
+  beat_data:

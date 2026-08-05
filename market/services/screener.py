@@ -1,10 +1,11 @@
-"""Daily screener — ranks potential shares across DSE/CSE."""
+"""Daily screener — ranks potential shares across currently-enabled exchanges."""
 from __future__ import annotations
 
 from django.db.models import QuerySet
 from django.utils import timezone
 
 from market.models import AnalysisResult, SignalAction, Stock
+from market.services.exchange_config import enabled_exchanges
 
 
 def _latest_as_of():
@@ -16,7 +17,12 @@ def _latest_as_of():
 
 def potential_shares(limit: int = 20, exchange: str | None = None, min_score: float = 25) -> QuerySet:
     as_of = _latest_as_of()
-    qs = AnalysisResult.objects.filter(as_of=as_of, score__gte=min_score).select_related("stock")
+    # Always intersected with enabled_exchanges() — a disabled exchange
+    # never appears in ranking/discovery output, even if a caller (e.g. a
+    # stock-list page's own ?exchange= query param) explicitly asks for it.
+    qs = AnalysisResult.objects.filter(
+        as_of=as_of, score__gte=min_score, stock__exchange__in=enabled_exchanges()
+    ).select_related("stock")
     if exchange:
         qs = qs.filter(stock__exchange=exchange)
     return qs.order_by("-score", "-confidence")[:limit]
@@ -25,7 +31,7 @@ def potential_shares(limit: int = 20, exchange: str | None = None, min_score: fl
 def safe_buys(limit: int = 10, exchange: str | None = None) -> QuerySet:
     as_of = _latest_as_of()
     qs = AnalysisResult.objects.filter(
-        as_of=as_of, is_safe_buy=True, action=SignalAction.BUY
+        as_of=as_of, is_safe_buy=True, action=SignalAction.BUY, stock__exchange__in=enabled_exchanges()
     ).select_related("stock")
     if exchange:
         qs = qs.filter(stock__exchange=exchange)
@@ -34,7 +40,9 @@ def safe_buys(limit: int = 10, exchange: str | None = None) -> QuerySet:
 
 def sell_candidates(limit: int = 10, exchange: str | None = None) -> QuerySet:
     as_of = _latest_as_of()
-    qs = AnalysisResult.objects.filter(as_of=as_of, action=SignalAction.SELL).select_related("stock")
+    qs = AnalysisResult.objects.filter(
+        as_of=as_of, action=SignalAction.SELL, stock__exchange__in=enabled_exchanges()
+    ).select_related("stock")
     if exchange:
         qs = qs.filter(stock__exchange=exchange)
     return qs.order_by("score")[:limit]
@@ -42,7 +50,7 @@ def sell_candidates(limit: int = 10, exchange: str | None = None) -> QuerySet:
 
 def screen_summary() -> dict:
     as_of = _latest_as_of()
-    qs = AnalysisResult.objects.filter(as_of=as_of)
+    qs = AnalysisResult.objects.filter(as_of=as_of, stock__exchange__in=enabled_exchanges())
     return {
         "as_of": as_of,
         "total": qs.count(),
@@ -59,7 +67,7 @@ def screen_summary() -> dict:
 def top_by_sector(limit_per_sector: int = 3) -> dict[str, list]:
     as_of = _latest_as_of()
     results = (
-        AnalysisResult.objects.filter(as_of=as_of, score__gte=20)
+        AnalysisResult.objects.filter(as_of=as_of, score__gte=20, stock__exchange__in=enabled_exchanges())
         .select_related("stock")
         .order_by("stock__sector", "-score")
     )

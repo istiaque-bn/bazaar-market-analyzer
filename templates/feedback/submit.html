@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Submit feedback{% endblock %}
+{% block content %}
+<section class="panel" style="max-width:640px;margin:1rem auto;">
+  <h2>Submit feedback</h2>
+  <p class="muted">Report a bug, a data or prediction problem, or suggest an improvement. Admin reviews every report and sets its final priority — your priority below is a suggestion.</p>
+  <form method="post" class="form">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    <label>Category{{ form.category }}{{ form.category.errors }}</label>
+    <label>Title{{ form.title }}{{ form.title.errors }}</label>
+    <label>Description{{ form.description }}{{ form.description.errors }}</label>
+    <label>Your priority{{ form.reporter_priority }}{{ form.reporter_priority.errors }}</label>
+    <label>Page or feature involved (optional){{ form.page_path }}</label>
+    <div class="grid-2">
+      <label>Stock exchange, if relevant (DSE/CSE){{ form.meta_exchange }}</label>
+      <label>Trading code, if relevant{{ form.meta_trading_code }}</label>
+    </div>
+    <label>Steps to reproduce (optional){{ form.steps_to_reproduce }}</label>
+    <label>Expected behavior (optional){{ form.expected_behavior }}</label>
+    <label>Actual behavior (optional){{ form.actual_behavior }}</label>
+    <label style="display:flex;flex-direction:row;align-items:center;gap:0.5rem;">{{ form.contact_allowed }} You may contact me about this report</label>
+    <button class="btn" type="submit">Submit report</button>
+  </form>
+</section>
+{% endblock %}

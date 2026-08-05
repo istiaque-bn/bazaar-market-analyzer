@@ -31,7 +31,7 @@
         <tr>
           <td>{{ t.transaction_date|date:"d M Y" }}</td>
           <td><span class="badge {% if t.transaction_type == 'BUY' %}badge-buy{% else %}badge-sell{% endif %}">{{ t.transaction_type }}</span></td>
-          <td><a href="{% url 'stock_detail' t.stock.exchange t.stock.trading_code %}">{{ t.stock.trading_code }}</a> <span class="muted tiny">{{ t.stock.exchange }}</span></td>
+          <td>{% if t.stock.exchange in enabled_exchanges %}<a href="{% url 'stock_detail' t.stock.exchange t.stock.trading_code %}">{{ t.stock.trading_code }}</a>{% else %}{{ t.stock.trading_code }}{% endif %} <span class="muted tiny">{{ t.stock.exchange }}</span></td>
           <td>{{ t.quantity|floatformat:0 }}</td>
           <td>{{ t.price_per_share|bdt:2 }}</td>
           <td>{{ t.fees|bdt:2 }}</td>

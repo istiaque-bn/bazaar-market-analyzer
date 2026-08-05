@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Bazaar{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/bazaar.css">
+  {% block extra_head %}{% endblock %}
+</head>
+<body class="bare-body">
+  <div class="bg-atmosphere" aria-hidden="true"></div>
+  {% if messages %}
+  <div class="flash-wrap">
+    {% for message in messages %}
+      <div class="flash">{{ message }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <main class="bare-main">
+    {% block content %}{% endblock %}
+  </main>
+  {% block extra_js %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Feedback dashboard{% endblock %}
+{% block content %}
+<div class="section-title">
+  <div>
+    <h2>Feedback dashboard</h2>
+    <p class="muted">Upgrade-planning overview — see the full list to act on individual reports.</p>
+  </div>
+</div>
+<div class="quick-actions">
+  <a class="btn btn-small" href="{% url 'feedback_triage_list' %}">Browse / triage feedback</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'feedback_export' %}">Export safe summary (CSV)</a>
+</div>
+
+<div class="grid-4">
+  <div class="stat"><div class="label">New</div><div class="value">{{ summary.new_count }}</div></div>
+  <div class="stat"><div class="label">Awaiting review</div><div class="value">{{ summary.awaiting_review_count }}</div></div>
+  <div class="stat"><div class="label">Urgent (open)</div><div class="value">{{ summary.urgent_count }}</div></div>
+  <div class="stat"><div class="label">In progress</div><div class="value">{{ summary.in_progress_count }}</div></div>
+</div>
+<div class="grid-4" style="margin-top:0.75rem;">
+  <div class="stat"><div class="label">Bugs (open)</div><div class="value">{{ summary.bugs_count }}</div></div>
+  <div class="stat"><div class="label">Feature requests (open)</div><div class="value">{{ summary.feature_requests_count }}</div></div>
+  <div class="stat"><div class="label">Data/prediction issues (open)</div><div class="value">{{ summary.data_prediction_count }}</div></div>
+  <div class="stat"><div class="label">Resolved (last 14d)</div><div class="value">{{ summary.recently_resolved_count }}</div></div>
+</div>
+
+<div class="grid-2" style="margin-top:1.5rem; align-items:start;">
+  <div class="panel">
+    <h3>Average time to first review</h3>
+    {% if summary.avg_review_hours != None %}
+      <div class="stat"><div class="value">{{ summary.avg_review_hours }}h</div></div>
+    {% else %}
+      <p class="empty-state">No reviewed items yet.</p>
+    {% endif %}
+
+    <h3 style="margin-top:1.2rem;">Volume, last 30 days</h3>
+    {% if summary.volume_by_day %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Day</th><th>Submitted</th></tr></thead>
+          <tbody>
+            {% for row in summary.volume_by_day %}<tr><td>{{ row.day }}</td><td>{{ row.count }}</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="empty-state">No feedback in the last 30 days.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h3>Frequently reported pages/features</h3>
+    {% if summary.top_pages %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Page/feature</th><th>Reports</th></tr></thead>
+          <tbody>
+            {% for row in summary.top_pages %}<tr><td>{{ row.page_path }}</td><td>{{ row.count }}</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="empty-state">No page/feature tags recorded yet.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

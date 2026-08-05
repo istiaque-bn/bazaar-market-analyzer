@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}My feedback{% endblock %}
+{% block content %}
+<div class="section-title">
+  <div>
+    <h2>My feedback</h2>
+    <p class="muted">{{ page_obj.paginator.count }} report{{ page_obj.paginator.count|pluralize }}</p>
+  </div>
+</div>
+<div class="quick-actions"><a class="btn btn-small" href="{% url 'feedback_submit' %}">Submit feedback</a></div>
+
+{% if page_obj.object_list %}
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Reference</th><th>Title</th><th>Category</th><th>Status</th><th>Submitted</th></tr></thead>
+    <tbody>
+      {% for fb in page_obj %}
+        <tr>
+          <td><a href="{% url 'feedback_detail' fb.pk %}">{{ fb.reference_number }}</a></td>
+          <td>{{ fb.title }}</td>
+          <td>{{ fb.get_category_display }}</td>
+          <td><span class="badge badge-hold">{{ fb.get_status_display }}</span></td>
+          <td>{{ fb.created_at|date:"d M Y" }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if page_obj.paginator.num_pages > 1 %}
+<div class="pagination">
+  {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}">&larr; Prev</a>{% endif %}
+  <span class="muted">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+  {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}">Next &rarr;</a>{% endif %}
+</div>
+{% endif %}
+{% else %}
+  <p class="empty-state">You haven't submitted any feedback yet. <a href="{% url 'feedback_submit' %}">Submit your first report</a>.</p>
+{% endif %}
+{% endblock %}

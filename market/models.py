@@ -460,6 +460,8 @@ class MLModelVersion(models.Model):
 class TaskStatus(models.TextChoices):
     STARTED = "started", "Started"
     SUCCESS = "success", "Success"
+    PARTIAL = "partial", "Partial success"
+    SKIPPED = "skipped", "Skipped"
     FAILURE = "failure", "Failure"
 
 
@@ -619,35 +621,57 @@ class AdminAuditAction(models.TextChoices):
     PIPELINE_TRIGGERED = "pipeline_triggered", "Pipeline triggered"
     MODEL_ACTIVATED = "model_activated", "Model activated"
     MODEL_DEACTIVATED = "model_deactivated", "Model deactivated"
+    # --- Account management (role-management system) ---------------------
+    ACCOUNT_CREATED = "account_created", "Account created"
+    ACCOUNT_ACTIVATED = "account_activated", "Account activated"
+    ACCOUNT_DEACTIVATED = "account_deactivated", "Account deactivated"
+    ROLE_PROMOTED = "role_promoted", "Role promoted"
+    ROLE_DEMOTED = "role_demoted", "Role demoted"
+    PASSWORD_RESET_INITIATED = "password_reset_initiated", "Password reset initiated"
+    TEMP_PASSWORD_ASSIGNED = "temp_password_assigned", "Temporary password assigned"
+    FIRST_LOGIN_PASSWORD_CHANGED = "first_login_password_changed", "First-login password changed"
+    TELEGRAM_REPORT_FORCED = "telegram_report_forced", "Telegram ML report force-resent"
 
 
 class AdminAuditLog(models.Model):
     """Who did what, staff-side, for actions with real operational
     consequence (enqueuing a fetch/retrain job that hits external
-    upstreams and rewrites data, or manually flipping which trained
-    model version is live). Append-only by convention — see
-    AdminAuditLogAdmin, which denies delete/change permission entirely.
+    upstreams and rewrites data, manually flipping which trained model
+    version is live, or an account-management event such as creating,
+    activating, or changing the role of another account). Append-only by
+    convention — see AdminAuditLogAdmin, which denies delete/change
+    permission entirely.
 
-    `username_snapshot` is captured at write time (not just the `user`
-    FK) so the record stays legible even if the account is later
-    deleted — `user` uses SET_NULL, not CASCADE, for the same reason:
-    the audit trail must outlive the account it describes.
+    `username_snapshot` / `target_username_snapshot` are captured at
+    write time (not just the FKs) so the record stays legible even if
+    either account is later deleted — both FKs use SET_NULL, not
+    CASCADE, for the same reason: the audit trail must outlive the
+    accounts it describes. `detail` never carries a plaintext password,
+    password hash, complete reset token, session cookie, authorization
+    header, or secret environment value — see market.services.audit.
     """
 
     user = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="admin_audit_logs"
     )
     username_snapshot = models.CharField(max_length=150, blank=True)
+    target_user = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="admin_audit_logs_received"
+    )
+    target_username_snapshot = models.CharField(max_length=150, blank=True)
     action = models.CharField(max_length=32, choices=AdminAuditAction.choices, db_index=True)
     detail = models.JSONField(default=dict, blank=True)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
+    request_id = models.CharField(max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"{self.username_snapshot or 'system'} {self.action} @ {self.created_at:%Y-%m-%d %H:%M}"
+        who = self.username_snapshot or "system"
+        target = f" -> {self.target_username_snapshot}" if self.target_username_snapshot else ""
+        return f"{who} {self.action}{target} @ {self.created_at:%Y-%m-%d %H:%M}"
 
 
 class Portfolio(models.Model):

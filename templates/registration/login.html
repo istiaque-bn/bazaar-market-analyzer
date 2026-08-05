@@ -1,13 +1,86 @@
-{% extends "base.html" %}
-{% block title %}Login{% endblock %}
+{% extends "base_bare.html" %}
+{% block title %}Sign in{% endblock %}
 {% block content %}
-<section class="panel" style="max-width:460px;margin:2rem auto;">
-  <h2>Login</h2>
-  <form method="post" class="form">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <button class="btn" type="submit">Sign in</button>
-  </form>
-  <p class="muted">No account? <a href="{% url 'signup' %}">Sign up</a></p>
-</section>
+<div class="auth-shell">
+  <section class="auth-card" aria-labelledby="authTitle">
+    <div class="auth-brand">
+      <span class="brand-mark" aria-hidden="true">বা</span>
+      <span class="brand-text">Bazaar</span>
+    </div>
+    <p class="auth-tagline">DSE market research &amp; portfolio tracking for invited members.</p>
+
+    <h1 id="authTitle" class="auth-title">Sign in</h1>
+
+    {% if form.non_field_errors %}
+      <div class="auth-error" role="alert">
+        {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
+      </div>
+    {% endif %}
+
+    <form method="post" class="auth-form" novalidate>
+      {% csrf_token %}
+      <label class="auth-field" for="{{ form.username.id_for_label }}">
+        <span>Username</span>
+        {{ form.username }}
+        {% for error in form.username.errors %}<span class="auth-field-error">{{ error }}</span>{% endfor %}
+      </label>
+      <label class="auth-field" for="{{ form.password.id_for_label }}">
+        <span>Password</span>
+        <span class="auth-password-wrap">
+          {{ form.password }}
+          <button type="button" class="auth-password-toggle" id="authPasswordToggle" aria-pressed="false">
+            <span id="authPasswordToggleText">Show</span>
+          </button>
+        </span>
+        {% for error in form.password.errors %}<span class="auth-field-error">{{ error }}</span>{% endfor %}
+      </label>
+
+      <input type="hidden" name="next" value="{{ next }}">
+
+      <button type="submit" class="btn auth-submit" id="authSubmit">
+        <span id="authSubmitText">Sign in</span>
+      </button>
+    </form>
+
+    {% if password_reset_url %}
+      <p class="auth-secondary"><a href="{{ password_reset_url }}">Forgot your password?</a></p>
+    {% else %}
+      <p class="auth-secondary muted">Forgot your password? Contact an administrator to reset it.</p>
+    {% endif %}
+
+    <div class="auth-notes">
+      <p><strong>Invite-only.</strong> Public sign-up is disabled — accounts are created by an Admin or Staff member.</p>
+      <p>Your credentials are transmitted over an encrypted connection and never shared with third parties.</p>
+      <p class="muted">Bazaar is an educational research tool. Nothing shown after sign-in is financial advice.</p>
+    </div>
+  </section>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+(function () {
+  "use strict";
+  var toggle = document.getElementById("authPasswordToggle");
+  var toggleText = document.getElementById("authPasswordToggleText");
+  var pwInput = document.querySelector('input[name="password"]');
+  if (toggle && pwInput) {
+    toggle.addEventListener("click", function () {
+      var showing = pwInput.type === "text";
+      pwInput.type = showing ? "password" : "text";
+      toggle.setAttribute("aria-pressed", String(!showing));
+      toggleText.textContent = showing ? "Show" : "Hide";
+    });
+  }
+  var form = document.querySelector(".auth-form");
+  var submit = document.getElementById("authSubmit");
+  var submitText = document.getElementById("authSubmitText");
+  if (form && submit) {
+    form.addEventListener("submit", function () {
+      submit.disabled = true;
+      submit.classList.add("is-loading");
+      if (submitText) submitText.textContent = "Signing in…";
+    });
+  }
+})();
+</script>
 {% endblock %}

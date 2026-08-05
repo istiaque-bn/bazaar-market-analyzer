@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Bazaar{% endblock %} · DSE & CSE Analysis</title>
+  <title>{% block title %}Bazaar{% endblock %} · {% if cse_enabled %}DSE & CSE{% else %}DSE{% endif %} Analysis</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -49,6 +49,7 @@
       </div>
     </div>
 
+    {% if cse_enabled %}
     <div class="market-ticker ticker-cse" aria-label="CSE running prices">
       <div class="ticker-rail">
         <div class="ticker-label ticker-sync ticker-sync-cse" id="tickerLiveBadgeCse" title="CSE live sync">AUTO</div>
@@ -83,13 +84,15 @@
         </div>
       </div>
     </div>
+    {% endif %}
 
     <header class="site-header">
       <div class="brand-block">
-        <a class="brand" href="{% url 'home' %}">
+        <a class="brand" href="{% if user.is_authenticated %}{% url role_home_url_name %}{% else %}{% url 'login' %}{% endif %}">
           <span class="brand-mark">বা</span>
           <span class="brand-text">Bazaar</span>
         </a>
+        {% if user.is_authenticated %}
         <div class="market-status" id="marketStatus" aria-live="polite">
           <div class="local-clock" title="Project timezone: {{ project_timezone }}">
             <span class="local-clock-tz">{{ project_timezone }}</span>
@@ -100,12 +103,15 @@
             <span class="ms-state">{{ market_hours.dse.status }}</span>
             <span class="ms-next">{% if market_hours.dse.is_open %}closes{% else %}opens{% endif %} {{ market_hours.dse.next_when }}</span>
           </div>
+          {% if cse_enabled %}
           <div class="market-status-chip {% if market_hours.cse.is_open %}is-open{% else %}is-closed{% endif %}" data-ex="CSE">
             <span class="ms-ex">CSE</span>
             <span class="ms-state">{{ market_hours.cse.status }}</span>
             <span class="ms-next">{% if market_hours.cse.is_open %}closes{% else %}opens{% endif %} {{ market_hours.cse.next_when }}</span>
           </div>
+          {% endif %}
         </div>
+        {% endif %}
       </div>
       <button type="button" class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="siteNav" aria-label="Open navigation menu">
         <span class="nav-toggle-bars" aria-hidden="true"><span></span><span></span><span></span></span>
@@ -122,59 +128,61 @@
             </button>
           </div>
 
+          {% if user.is_authenticated %}
           <ul class="nav-links">
-            <li>
-              <a href="{% url 'dashboard' %}" class="{% if active_nav == 'dashboard' %}active{% endif %}"{% if active_nav == 'dashboard' %} aria-current="page"{% endif %}>
-                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-                <span>Dashboard</span>
-              </a>
-            </li>
+            {% if is_admin_role %}
+              <li><a href="{% url 'admin_panel' %}" class="{% if active_nav == 'panel' %}active{% endif %}"{% if active_nav == 'panel' %} aria-current="page"{% endif %}><span>Admin Panel</span></a></li>
+            {% elif is_staff_role %}
+              <li><a href="{% url 'staff_panel' %}" class="{% if active_nav == 'panel' %}active{% endif %}"{% if active_nav == 'panel' %} aria-current="page"{% endif %}><span>Staff Panel</span></a></li>
+            {% else %}
+              <li><a href="{% url 'user_panel' %}" class="{% if active_nav == 'panel' %}active{% endif %}"{% if active_nav == 'panel' %} aria-current="page"{% endif %}><span>My Panel</span></a></li>
+            {% endif %}
+
             <li>
               <a href="{% url 'stock_list' %}" class="{% if active_nav == 'stocks' %}active{% endif %}"{% if active_nav == 'stocks' %} aria-current="page"{% endif %}>
-                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
                 <span>Stocks</span>
               </a>
             </li>
-            {% if user.is_authenticated %}
-              <li>
-                <a href="{% url 'portfolio_redirect' %}" class="{% if active_nav == 'portfolio' %}active{% endif %}"{% if active_nav == 'portfolio' %} aria-current="page"{% endif %}>
-                  <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
-                  <span>Portfolio</span>
-                </a>
-              </li>
-              <li>
-                <a href="{% url 'watchlist' %}" class="{% if active_nav == 'watchlist' %}active{% endif %}"{% if active_nav == 'watchlist' %} aria-current="page"{% endif %}>
-                  <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-                  <span>Watchlist</span>
-                </a>
-              </li>
+
+            {% if is_admin_role %}
+              <li><a href="{% url 'account_list' %}" class="{% if active_nav == 'accounts' %}active{% endif %}"{% if active_nav == 'accounts' %} aria-current="page"{% endif %}><span>Accounts</span></a></li>
+            {% elif is_staff_role %}
+              <li><a href="{% url 'account_list' %}" class="{% if active_nav == 'accounts' %}active{% endif %}"{% if active_nav == 'accounts' %} aria-current="page"{% endif %}><span>Users</span></a></li>
+              <li><a href="{% url 'feedback_triage_list' %}" class="{% if active_nav == 'feedback' %}active{% endif %}"{% if active_nav == 'feedback' %} aria-current="page"{% endif %}><span>Feedback</span></a></li>
+            {% else %}
+              <li><a href="{% url 'portfolio_redirect' %}" class="{% if active_nav == 'portfolio' %}active{% endif %}"{% if active_nav == 'portfolio' %} aria-current="page"{% endif %}><span>Portfolio</span></a></li>
+              <li><a href="{% url 'watchlist' %}" class="{% if active_nav == 'watchlist' %}active{% endif %}"{% if active_nav == 'watchlist' %} aria-current="page"{% endif %}><span>Watchlist</span></a></li>
+              <li><a href="{% url 'feedback_my_list' %}" class="{% if active_nav == 'feedback' %}active{% endif %}"{% if active_nav == 'feedback' %} aria-current="page"{% endif %}><span>Feedback</span></a></li>
             {% endif %}
+
             <li class="nav-dropdown">
               <button type="button" class="nav-dropdown-btn{% if active_nav == 'tools' %} active{% endif %}" aria-haspopup="true" aria-expanded="false" aria-controls="toolsMenu"{% if active_nav == 'tools' %} aria-current="true"{% endif %}>
-                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
-                <span>Tools</span>
+                <span>{% if is_admin_role %}Tools{% elif is_staff_role %}Approved Tools{% else %}Tools{% endif %}</span>
                 <svg class="nav-icon nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="6 9 12 15 18 9"/></svg>
               </button>
               <div class="nav-dropdown-menu" id="toolsMenu">
+                <a href="{% url 'dashboard' %}">Market screener</a>
                 <a href="{% url 'backtests' %}">Backtests</a>
                 <a href="{% url 'alerts' %}">Alerts</a>
               </div>
             </li>
-            {% if user.is_staff %}
+
+            {% if is_admin_role or is_staff_role %}
               <li class="nav-dropdown">
                 <button type="button" class="nav-dropdown-btn{% if active_nav == 'admin' %} active{% endif %}" aria-haspopup="true" aria-expanded="false" aria-controls="staffMenu"{% if active_nav == 'admin' %} aria-current="true"{% endif %}>
-                  <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 2 3 7v6c0 5 4 9 9 9s9-4 9-9V7l-9-5Z"/></svg>
-                  <span>Admin</span>
+                  <span>Operations</span>
                   <svg class="nav-icon nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="6 9 12 15 18 9"/></svg>
                 </button>
                 <div class="nav-dropdown-menu" id="staffMenu">
                   <a href="{% url 'data_quality' %}">Data QA</a>
                   <a href="{% url 'ops_report' %}">Operations</a>
-                  <a href="{% url 'ml_reliability' %}">ML Reliability</a>
+                  {% if is_admin_role %}<a href="{% url 'ml_reliability' %}">ML Reliability</a>{% endif %}
+                  {% if is_admin_role %}<a href="/admin/">Django Admin</a>{% endif %}
                 </div>
               </li>
             {% endif %}
           </ul>
+          {% endif %}
 
           <div class="nav-account">
             {% if user.is_authenticated %}
@@ -191,10 +199,8 @@
               </div>
             {% else %}
               <a class="nav-login" href="{% url 'login' %}">
-                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
                 <span>Login</span>
               </a>
-              <a class="btn btn-small btn-gold" href="{% url 'signup' %}">Sign up</a>
             {% endif %}
           </div>
         </div>
@@ -215,7 +221,7 @@
   </main>
 
   <footer class="site-footer">
-    <p><strong>Bazaar</strong> analyses DSE &amp; CSE using ~1 year of price history. Signals are probabilistic estimates — not financial advice.</p>
+    <p><strong>Bazaar</strong> analyses {% if cse_enabled %}DSE &amp; CSE{% else %}DSE{% endif %} using ~1 year of price history. Signals are probabilistic estimates — not financial advice.</p>
   </footer>
   <script src="/static/js/ticker.js" defer></script>
   <script src="/static/js/nav.js" defer></script>

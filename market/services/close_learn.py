@@ -343,8 +343,17 @@ def load_next_close_model(exchange: str | None = None) -> dict | None:
     per-exchange model if that one is active. Fails closed (returns None)
     for missing/unrecognized status, matching market.services.ml_model's
     gate — an unverified or non-positive-skill model must never
-    influence the next-close forecast."""
-    combined = _load_next_close_bundle(MODEL_PATH)
+    influence the next-close forecast.
+
+    Like ml_model.load_model(), a "combined" bundle is bypassed (never
+    deleted/deactivated) whenever any exchange is disabled, since it was
+    necessarily trained on pooled DSE+CSE data — see that function's
+    docstring for the full rationale."""
+    from market.models import Exchange
+    from market.services.exchange_config import enabled_exchanges
+
+    combined_is_safe_to_serve = set(enabled_exchanges()) >= {Exchange.DSE, Exchange.CSE}
+    combined = _load_next_close_bundle(MODEL_PATH) if combined_is_safe_to_serve else None
     if combined is not None and _is_deployable(combined, "combined"):
         return combined
     if exchange and exchange in MODEL_PATH_BY_EXCHANGE:
@@ -529,11 +538,13 @@ def _maybe_downgrade_on_live_skill(skill: dict) -> None:
 def generate_forecasts_for_as_of(as_of: date | None = None, limit: int | None = None) -> dict:
     """After close on `as_of`, write next-day close forecasts for active stocks."""
     as_of = as_of or timezone.localdate()
+    from market.services.exchange_config import enabled_exchanges
+
     target = next_trading_day(as_of)
     liquid = liquid_stock_ids()
     _clear_context_cache()
 
-    qs = Stock.objects.filter(is_active=True).order_by("trading_code")
+    qs = Stock.objects.filter(is_active=True, exchange__in=enabled_exchanges()).order_by("trading_code")
     if limit:
         qs = qs[:limit]
 
@@ -979,9 +990,12 @@ def train_next_close_model(limit_stocks: int = 80) -> dict:
     evaluates DSE and CSE separately via chronological walk-forward CV;
     only pools them into one deployed model when
     _justify_combining_next_close() supports it."""
+    from market.services.exchange_config import enabled_exchanges
+
+    enabled = enabled_exchanges()
     _clear_context_cache()
-    dse_panel = _build_next_close_panel(Exchange.DSE, limit_stocks=limit_stocks)
-    cse_panel = _build_next_close_panel(Exchange.CSE, limit_stocks=limit_stocks)
+    dse_panel = _build_next_close_panel(Exchange.DSE, limit_stocks=limit_stocks) if Exchange.DSE in enabled else pd.DataFrame()
+    cse_panel = _build_next_close_panel(Exchange.CSE, limit_stocks=limit_stocks) if Exchange.CSE in enabled else pd.DataFrame()
 
     if dse_panel.empty and cse_panel.empty:
         return {"ok": False, "error": "Not enough data to train next-close model"}

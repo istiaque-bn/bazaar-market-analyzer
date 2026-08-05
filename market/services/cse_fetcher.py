@@ -281,6 +281,12 @@ def fetch_cse_live_scrape() -> pd.DataFrame | None:
 
 
 def sync_cse_live() -> dict:
+    from market.services.exchange_config import is_exchange_enabled
+
+    if not is_exchange_enabled(Exchange.CSE):
+        logger.info("CSE fetch skipped — CSE is disabled for this deployment (ENABLE_CSE=False).")
+        return {"ok": True, "skipped": "exchange_disabled", "source": None, "count": 0}
+
     batch = create_import_batch(DataSource.CSE_LIVE, exchange=Exchange.CSE)
     df = fetch_cse_live_via_bdshare()
     sub_source = "bdshare"
@@ -361,12 +367,24 @@ def sync_cse_history(
     use_synthetic_fallback: bool = False,
     limit: int | None = None,
     _prefetched_bulk: pd.DataFrame | None = None,
+    force: bool = False,
 ) -> dict:
     """
     Fetch real CSE OHLC via the public bulk Excel export and merge into PriceHistory.
 
     Public CSE feeds typically expose ~2 years of day-end history.
+
+    `force=True` is a deliberate, explicit override (see
+    management.commands.fetch_history's --force-disabled) for fetching a
+    currently-disabled exchange anyway. Every other/automatic caller
+    leaves this False.
     """
+    from market.services.exchange_config import is_exchange_enabled
+
+    if not force and not is_exchange_enabled(Exchange.CSE):
+        logger.info("CSE history fetch skipped — CSE is disabled for this deployment (ENABLE_CSE=False).")
+        return {"ok": 0, "failed_or_fallback": 0, "skipped": 0, "codes": 0, "source": None, "exchange_disabled": True}
+
     lookback = lookback_days or settings.LOOKBACK_DAYS
     end = timezone.localdate()
     start = end - timedelta(days=lookback)

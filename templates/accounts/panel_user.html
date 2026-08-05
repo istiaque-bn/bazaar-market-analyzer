@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}My Panel{% endblock %}
+{% block content %}
+<div class="role-hero">
+  <div>
+    <h2>Welcome, {{ user.first_name|default:user.username }}</h2>
+    <p class="muted">Your portfolio, watchlist, and alerts at a glance.</p>
+  </div>
+</div>
+
+<div class="quick-actions">
+  <a class="btn btn-small" href="{% url 'portfolio_detail' portfolio.id %}">Open Portfolio</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'portfolio_add_holding' portfolio.id %}">Add Holding</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'portfolio_add_transaction' portfolio.id %}">Add Transaction</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'watchlist' %}">Open Watchlist</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'stock_list' %}">Browse Stocks</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'profile' %}">View Profile</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'feedback_submit' %}">Send Feedback</a>
+</div>
+
+<div class="grid-4">
+  <div class="stat"><div class="label">Market value</div><div class="value">{{ summary.total_market_value|default:"—"|floatformat:2 }}</div></div>
+  <div class="stat"><div class="label">Unrealized P/L</div><div class="value {% if summary.total_unrealized_pl >= 0 %}up{% else %}down{% endif %}">{{ summary.total_unrealized_pl|default:"—"|floatformat:2 }}</div></div>
+  <div class="stat"><div class="label">Today's P/L</div><div class="value {% if summary.today_total_pl >= 0 %}up{% else %}down{% endif %}">{{ summary.today_total_pl|default:"—"|floatformat:2 }}</div></div>
+  <div class="stat"><div class="label">Watchlist</div><div class="value">{{ watchlist_count }}</div></div>
+</div>
+
+<div class="grid-2" style="margin-top:1.5rem; align-items:start;">
+  <div class="panel">
+    <h3>DSE market status</h3>
+    <div class="market-status-chip {% if market_hours.dse.is_open %}is-open{% else %}is-closed{% endif %}" data-ex="DSE">
+      <span class="ms-ex">DSE</span>
+      <span class="ms-state">{{ market_hours.dse.status }}</span>
+      <span class="ms-next">{% if market_hours.dse.is_open %}closes{% else %}opens{% endif %} {{ market_hours.dse.next_when }}</span>
+    </div>
+    {% if cse_enabled %}
+    <div class="market-status-chip {% if market_hours.cse.is_open %}is-open{% else %}is-closed{% endif %}" data-ex="CSE" style="margin-top:0.5rem;">
+      <span class="ms-ex">CSE</span>
+      <span class="ms-state">{{ market_hours.cse.status }}</span>
+      <span class="ms-next">{% if market_hours.cse.is_open %}closes{% else %}opens{% endif %} {{ market_hours.cse.next_when }}</span>
+    </div>
+    {% endif %}
+
+    <h3 style="margin-top:1.2rem;">Your alerts</h3>
+    {% if alerts %}
+      <ul>
+        {% for a in alerts %}<li>{{ a.title }} <span class="muted">— {{ a.created_at|date:"d M, H:i" }}</span></li>{% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty-state">No alerts yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h3>Recent transactions</h3>
+    {% if recent_transactions %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Stock</th><th>Type</th><th>Qty</th><th>Price</th><th>Date</th></tr></thead>
+          <tbody>
+          {% for t in recent_transactions %}
+            <tr>
+              <td>{{ t.stock.trading_code }}</td>
+              <td><span class="badge {% if t.transaction_type == 'BUY' %}badge-buy{% else %}badge-sell{% endif %}">{{ t.transaction_type }}</span></td>
+              <td>{{ t.quantity }}</td>
+              <td>{{ t.price_per_share }}</td>
+              <td>{{ t.transaction_date }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="empty-state">No transactions yet — use "Add Holding" to record your first position.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

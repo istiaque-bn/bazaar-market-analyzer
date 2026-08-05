@@ -41,6 +41,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from market.models import Portfolio, PortfolioTransaction, PriceHistory, Stock, TransactionType
+from market.services.exchange_config import is_exchange_enabled
 from market.services.market_hours import session_status
 from market.services.ops_alerts import STALE_DATA_DAYS
 
@@ -53,6 +54,7 @@ QUOTE_STALE = "stale"
 QUOTE_MARKET_CLOSED = "market_closed"
 QUOTE_SYNTHETIC = "synthetic"
 QUOTE_UNAVAILABLE = "unavailable"
+QUOTE_EXCHANGE_DISABLED = "exchange_disabled"
 
 QUOTE_LABELS = {
     QUOTE_LIVE: "Live",
@@ -61,6 +63,7 @@ QUOTE_LABELS = {
     QUOTE_MARKET_CLOSED: "Market closed",
     QUOTE_SYNTHETIC: "Demo/Synthetic",
     QUOTE_UNAVAILABLE: "Unavailable",
+    QUOTE_EXCHANGE_DISABLED: "Exchange disabled",
 }
 
 LIVE_FRESHNESS_MINUTES = 5  # matches static/js/ticker.js's own LIVE threshold
@@ -146,7 +149,15 @@ def bulk_recent_bars(stocks, today: date) -> dict:
     return grouped
 
 
-def quote_status(stock: Stock, now=None, recent_bars=None) -> dict:
+def bulk_market_hours(stocks, now) -> dict:
+    """session_status() for every exchange actually present among `stocks`,
+    computed once each — not once per stock. Only DSE/CSE exist today, so
+    this is at most 2 calls no matter how many holdings a portfolio has."""
+    exchanges = {s.exchange for s in stocks}
+    return {exchange: session_status(exchange, now=now) for exchange in exchanges}
+
+
+def quote_status(stock: Stock, now=None, recent_bars=None, market_hours=None) -> dict:
     """Honest label for what stock.last_price actually represents right
     now. Never says "Live" just because the page was recently loaded —
     it's purely a function of the quote's own timestamp, source, and the
@@ -163,11 +174,32 @@ def quote_status(stock: Stock, now=None, recent_bars=None) -> dict:
     `recent_bars` (a stock_id -> [PriceHistory, ...] map from
     bulk_recent_bars, newest first) lets a caller iterating many stocks
     avoid a per-stock query; falls back to one query for a single-stock
-    caller (e.g. the stock detail page) when omitted."""
+    caller (e.g. the stock detail page) when omitted.
+
+    `market_hours` (an exchange -> session_status() dict, from
+    bulk_market_hours) likewise lets a caller iterating many stocks reuse
+    one session_status() call per exchange instead of one per stock —
+    session_status() only varies by (exchange, now), never by the
+    individual stock, so recomputing it per row is pure waste, and when
+    the market is closed it's an expensive query fan-out too (each call
+    walks the holiday calendar forward to find the next open session)."""
     now = now or timezone.now()
     price = quantize_money(to_decimal(stock.last_price, default=None))
     if price is None:
         return {"status": QUOTE_UNAVAILABLE, "label": QUOTE_LABELS[QUOTE_UNAVAILABLE], "price": None, "as_of": None}
+
+    # Checked before synthetic/stale/live — a disabled exchange's price is
+    # frozen (no fetch pipeline is running for it at all), so whatever the
+    # freshness/session-hours checks below would otherwise conclude is
+    # beside the point: this can never be "Live"/"Delayed"/"Market closed"
+    # right now, only "last known before support was disabled".
+    if not is_exchange_enabled(stock.exchange):
+        return {
+            "status": QUOTE_EXCHANGE_DISABLED,
+            "label": QUOTE_LABELS[QUOTE_EXCHANGE_DISABLED],
+            "price": price,
+            "as_of": stock.updated_at,
+        }
 
     if recent_bars is not None:
         bars = recent_bars.get(stock.id, [])
@@ -187,7 +219,7 @@ def quote_status(stock: Stock, now=None, recent_bars=None) -> dict:
     if age is not None and age.days > STALE_DATA_DAYS:
         return {"status": QUOTE_STALE, "label": QUOTE_LABELS[QUOTE_STALE], "price": price, "as_of": as_of}
 
-    hours = session_status(stock.exchange, now=now)
+    hours = (market_hours or {}).get(stock.exchange) or session_status(stock.exchange, now=now)
     if hours.get("is_open"):
         if age is not None and age.total_seconds() <= LIVE_FRESHNESS_MINUTES * 60:
             return {"status": QUOTE_LIVE, "label": QUOTE_LABELS[QUOTE_LIVE], "price": price, "as_of": as_of}
@@ -323,9 +355,9 @@ def compute_holdings(portfolio: Portfolio, as_of: date | None = None, include_cl
 # ---------------------------------------------------------------------------
 
 
-def holding_row(calc: HoldingCalc, now=None, recent_bars=None) -> dict:
+def holding_row(calc: HoldingCalc, now=None, recent_bars=None, market_hours=None) -> dict:
     stock = calc.stock
-    q = quote_status(stock, now=now, recent_bars=recent_bars)
+    q = quote_status(stock, now=now, recent_bars=recent_bars, market_hours=market_hours)
     price = q["price"]
 
     market_value = quantize_money(price * calc.quantity) if price is not None else None
@@ -338,7 +370,12 @@ def holding_row(calc: HoldingCalc, now=None, recent_bars=None) -> dict:
     today = (now or timezone.now()).date() if now else timezone.localdate()
     prev_close = _previous_close(stock, today, recent_bars=recent_bars)
     today_pl = today_pl_pct = None
-    if price is not None and prev_close is not None and prev_close > ZERO and calc.quantity > ZERO:
+    # "Today's" P/L is meaningless once the fetch pipeline for this
+    # exchange has stopped running — no new bar is arriving to compare
+    # against, so any two old bars found here wouldn't actually be about
+    # today. Suppressing it (rather than computing a stale comparison) is
+    # part of "never present a disabled exchange's figures as current".
+    if q["status"] != QUOTE_EXCHANGE_DISABLED and price is not None and prev_close is not None and prev_close > ZERO and calc.quantity > ZERO:
         per_share = price - prev_close
         today_pl = quantize_money(per_share * calc.quantity)
         today_pl_pct = (per_share / prev_close * 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -382,8 +419,10 @@ def portfolio_summary(portfolio: Portfolio, as_of: date | None = None, now=None)
     open_calcs = [c for c in all_calcs if c.is_open]
 
     today = (now or timezone.now()).date() if now else timezone.localdate()
-    recent_bars = bulk_recent_bars([c.stock for c in open_calcs], today)
-    rows = [holding_row(c, now=now, recent_bars=recent_bars) for c in open_calcs]
+    open_stocks = [c.stock for c in open_calcs]
+    recent_bars = bulk_recent_bars(open_stocks, today)
+    market_hours = bulk_market_hours(open_stocks, now)
+    rows = [holding_row(c, now=now, recent_bars=recent_bars, market_hours=market_hours) for c in open_calcs]
 
     total_cost_basis = sum((r["cost_basis"] for r in rows), ZERO)
     total_market_value = sum((r["market_value"] for r in rows if r["market_value"] is not None), ZERO)
@@ -450,6 +489,7 @@ def portfolio_summary(portfolio: Portfolio, as_of: date | None = None, now=None)
         "allocation_by_exchange": _as_pct_breakdown(allocation_by_exchange),
         "allocation_by_sector": _as_pct_breakdown(allocation_by_sector),
         "has_any_data_warning": any(r["data_warning"] for r in rows),
+        "has_disabled_exchange_holdings": any(r["quote_status"] == QUOTE_EXCHANGE_DISABLED for r in rows),
     }
 
 
@@ -482,6 +522,19 @@ def validate_transaction(
         raise PortfolioValidationError("Fees/charges cannot be negative.")
     if transaction_date is None:
         raise PortfolioValidationError("Transaction date is required.")
+
+    if transaction_type == TransactionType.BUY and not is_exchange_enabled(stock.exchange):
+        # New exposure to a disabled exchange is refused outright — this
+        # app isn't fetching/pricing it right now, so it can't respons-
+        # ibly record you as having bought more of it. A SELL is still
+        # allowed below (closing out / correcting an existing position
+        # doesn't need live market access), and deleting a transaction
+        # (delete_transaction) never routes through this check at all.
+        raise PortfolioValidationError(
+            f"{stock.exchange} trading is currently disabled for this deployment — new {stock.exchange} "
+            f"purchases can't be recorded right now. Existing {stock.exchange} holdings and transaction "
+            f"history are preserved; you can still record a SELL or close out the position."
+        )
 
     if transaction_type == TransactionType.SELL:
         # Replay every transaction for this (portfolio, stock) up to and

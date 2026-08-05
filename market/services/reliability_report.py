@@ -177,9 +177,18 @@ def run_reliability_assessment(
     dry_run: bool = False,
     as_of: date | None = None,
 ) -> dict:
+    from market.services.exchange_config import enabled_exchanges
+
     as_of = as_of or timezone.localdate()
     families = families or list(FAMILY_HORIZONS.keys())
-    exchanges = exchanges or [Exchange.DSE, Exchange.CSE]
+    # A disabled exchange is never assessed by default (no new predictions
+    # were captured for it — see analyzer.run_full_analysis/close_learn's
+    # own exchange gating — so there'd be nothing new to assess anyway).
+    # An explicit `exchanges=` argument (from the management command's
+    # --exchange, a staff-triggered diagnostic) still overrides this,
+    # since assessing existing historical predictions for a disabled
+    # exchange is a read-only diagnostic, not new market-data processing.
+    exchanges = exchanges or enabled_exchanges()
     windows = windows or WINDOW_SIZES
 
     result: dict = {"ok": True, "as_of": as_of.isoformat(), "dry_run": dry_run}

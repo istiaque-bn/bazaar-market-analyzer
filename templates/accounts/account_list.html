@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}{% if is_admin_role %}Accounts{% else %}Users{% endif %}{% endblock %}
+{% block content %}
+<div class="section-title">
+  <div>
+    <h2>{% if is_admin_role %}Accounts{% else %}Users{% endif %}</h2>
+    <p class="muted">{{ page_obj.paginator.count }} account{{ page_obj.paginator.count|pluralize }}</p>
+  </div>
+</div>
+
+<div class="quick-actions">
+  <a class="btn btn-small" href="{% url 'account_create_user' %}">Create User</a>
+  {% if is_admin_role %}<a class="btn btn-small btn-ghost" href="{% url 'account_create_staff' %}">Create Staff</a>{% endif %}
+</div>
+
+<form method="get" class="filters">
+  <input type="text" name="q" placeholder="Username, name, or email" value="{{ q }}">
+  {% if is_admin_role %}
+  <select name="role">
+    <option value="">All roles</option>
+    <option value="admin" {% if role == 'admin' %}selected{% endif %}>Admin</option>
+    <option value="staff" {% if role == 'staff' %}selected{% endif %}>Staff</option>
+    <option value="user" {% if role == 'user' %}selected{% endif %}>User</option>
+  </select>
+  {% endif %}
+  <select name="status">
+    <option value="">Active &amp; inactive</option>
+    <option value="active" {% if status == 'active' %}selected{% endif %}>Active only</option>
+    <option value="inactive" {% if status == 'inactive' %}selected{% endif %}>Inactive only</option>
+  </select>
+  <button class="btn btn-small" type="submit">Filter</button>
+</form>
+
+{% if rows %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Joined</th></tr>
+    </thead>
+    <tbody>
+      {% for u, r in rows %}
+        <tr>
+          <td><a href="{% url 'account_detail' u.id %}">{{ u.username }}</a></td>
+          <td>{{ u.get_full_name|default:"—" }}</td>
+          <td>{{ u.email|default:"—" }}</td>
+          <td><span class="badge badge-role-{{ r|lower }}">{{ r }}</span></td>
+          <td><span class="badge {% if u.is_active %}badge-active{% else %}badge-inactive{% endif %}">{% if u.is_active %}Active{% else %}Inactive{% endif %}</span></td>
+          <td>{{ u.date_joined|date:"d M Y" }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if page_obj.paginator.num_pages > 1 %}
+<div class="pagination">
+  {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}&q={{ q }}&role={{ role }}&status={{ status }}">&larr; Prev</a>{% endif %}
+  <span class="muted">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+  {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}&q={{ q }}&role={{ role }}&status={{ status }}">Next &rarr;</a>{% endif %}
+</div>
+{% endif %}
+{% else %}
+  <p class="empty-state">No accounts match these filters.</p>
+{% endif %}
+{% endblock %}

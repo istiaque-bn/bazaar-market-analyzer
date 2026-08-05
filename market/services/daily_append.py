@@ -28,6 +28,8 @@ def append_today_bars_unlocked() -> dict:
 
 def run_scheduled_append() -> dict:
     """Append today's live bars, then refresh analysis."""
+    if not getattr(settings, "AUTO_DAILY_APPEND", True):
+        return {"ok": True, "skipped": "disabled"}
     close_old_connections()
     try:
         with exclusive_db_write(blocking=True, timeout=300):

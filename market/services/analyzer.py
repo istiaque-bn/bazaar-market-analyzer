@@ -137,6 +137,11 @@ def analyze_stock(stock: Stock, use_ml: bool = True, include_demo: bool = False)
 
 
 def run_full_analysis(train_ml: bool = True, include_demo: bool = False) -> dict:
+    from market.models import Exchange
+    from market.services.exchange_config import enabled_exchanges
+
+    enabled = enabled_exchanges()
+
     if train_ml:
         ml_info = train_model()
     else:
@@ -144,7 +149,10 @@ def run_full_analysis(train_ml: bool = True, include_demo: bool = False) -> dict
 
     analyzed = 0
     errors = 0
-    for stock in Stock.objects.filter(is_active=True):
+    # Only currently-enabled exchanges get new AnalysisResult rows — a
+    # disabled exchange's existing rows are simply not refreshed, same
+    # treatment as its price data.
+    for stock in Stock.objects.filter(is_active=True, exchange__in=enabled):
         try:
             analyze_stock(stock, use_ml=True, include_demo=include_demo)
             analyzed += 1
@@ -152,11 +160,15 @@ def run_full_analysis(train_ml: bool = True, include_demo: bool = False) -> dict
             logger.exception("Analyze failed for %s: %s", stock, exc)
             errors += 1
 
-    bt_dse = run_backtest(name="DSE RSI/MACD 1Y", exchange="DSE")
-    bt_cse = run_backtest(name="CSE RSI/MACD 1Y", exchange="CSE")
+    backtests = {}
+    if Exchange.DSE in enabled:
+        backtests["DSE"] = run_backtest(name="DSE RSI/MACD 1Y", exchange="DSE").id
+    if Exchange.CSE in enabled:
+        backtests["CSE"] = run_backtest(name="CSE RSI/MACD 1Y", exchange="CSE").id
     return {
         "analyzed": analyzed,
         "errors": errors,
         "ml": ml_info,
-        "backtests": [bt_dse.id, bt_cse.id],
+        "backtests": backtests,
+        "enabled_exchanges": enabled,
     }

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<section class="panel" style="max-width:520px;margin:1rem auto;">
+  <h2>{{ title }}</h2>
+  <p class="muted">
+    {% if target_role == "staff" %}
+      New Staff accounts can support and create regular Users, but cannot manage roles or access Admin-only tools.
+    {% else %}
+      New User accounts can browse stocks, track a portfolio, and manage their own watchlist and alerts.
+    {% endif %}
+    A temporary password is generated automatically and shown once after creation — the new account must change it at first login.
+  </p>
+  <form method="post" class="form" id="accountCreateForm">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    <label>Username{{ form.username }}{{ form.username.errors }}</label>
+    <label>First name{{ form.first_name }}{{ form.first_name.errors }}</label>
+    <label>Last name{{ form.last_name }}{{ form.last_name.errors }}</label>
+    <label>Email{{ form.email }}{{ form.email.errors }}</label>
+    <label style="display:flex;flex-direction:row;align-items:center;gap:0.5rem;">{{ form.is_active }} Active immediately</label>
+    <button class="btn" type="submit" id="accountCreateSubmit">Create account</button>
+  </form>
+</section>
+{% endblock %}
+{% block extra_js %}
+<script>
+(function () {
+  var form = document.getElementById("accountCreateForm");
+  var submit = document.getElementById("accountCreateSubmit");
+  if (form && submit) {
+    form.addEventListener("submit", function () {
+      // Prevent duplicate submissions (e.g. a double click) — the button
+      // is disabled synchronously so only one POST ever leaves the page.
+      submit.disabled = true;
+      submit.textContent = "Creating…";
+    });
+  }
+})();
+</script>
+{% endblock %}

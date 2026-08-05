@@ -26,8 +26,10 @@
       Stock {{ form.stock.errors }}
       {{ form.stock }}
     </label>
+    {% if cse_enabled %}
     <p class="muted tiny">DSE and CSE stocks with the same trading code are listed separately — check the exchange
     tag next to the code.</p>
+    {% endif %}
 
     {% if mode != "add_holding" %}
     <fieldset style="border:none; padding:0; margin:0;">

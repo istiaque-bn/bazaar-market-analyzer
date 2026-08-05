@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+{% block title %}Admin Panel{% endblock %}
+{% block content %}
+<div class="role-hero">
+  <div>
+    <h2>Welcome, {{ user.first_name|default:user.username }}</h2>
+    <p class="muted">Admin Panel — full account, operations, automation, and feedback control.</p>
+  </div>
+</div>
+
+<div class="quick-actions">
+  <a class="btn btn-small" href="{% url 'account_create_user' %}">Create User</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'account_create_staff' %}">Create Staff</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'account_list' %}">Manage Accounts</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'data_quality' %}">Data QA</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'ops_report' %}">Operations</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'ml_reliability' %}">ML Reliability</a>
+  <a class="btn btn-small btn-ghost" href="{% url 'feedback_admin_dashboard' %}">Feedback</a>
+  <a class="btn btn-small btn-ghost" href="/admin/">Django Admin</a>
+</div>
+
+<div class="grid-4">
+  <div class="stat"><div class="label">Total accounts</div><div class="value">{{ counts.total }}</div></div>
+  <div class="stat"><div class="label">Admin</div><div class="value">{{ counts.admin }}</div></div>
+  <div class="stat"><div class="label">Staff</div><div class="value">{{ counts.staff }}</div></div>
+  <div class="stat"><div class="label">Users</div><div class="value">{{ counts.user }}</div></div>
+</div>
+<div class="grid-2" style="margin-top:0.75rem;">
+  <div class="stat"><div class="label">Active</div><div class="value">{{ counts.active }}</div></div>
+  <div class="stat"><div class="label">Inactive</div><div class="value">{{ counts.inactive }}</div></div>
+</div>
+
+<div class="section-title" style="margin-top:1.5rem;">
+  <div><h3>Automation</h3></div>
+</div>
+
+<div class="panel">
+  <h4 style="margin-top:0;">Manual controls</h4>
+  <p class="muted">Every button below enqueues the exact same background task the schedule uses — nothing runs in the web process, and duplicate clicks are safely skipped, not duplicated.</p>
+  <div class="quick-actions" style="margin:0.5rem 0 0;">
+    <form method="post" action="{% url 'run_pipeline' %}">{% csrf_token %}<button class="btn btn-small" name="mode" value="quote" type="submit">Fetch DSE now</button></form>
+    <form method="post" action="{% url 'run_pipeline' %}">{% csrf_token %}<button class="btn btn-small btn-ghost" name="mode" value="intraday" type="submit">Run lightweight analysis now</button></form>
+    <form method="post" action="{% url 'run_pipeline' %}">{% csrf_token %}<button class="btn btn-small btn-ghost" name="mode" value="analyze" type="submit">Run full analysis now</button></form>
+    <form method="post" action="{% url 'run_pipeline' %}">{% csrf_token %}<button class="btn btn-small btn-ghost" name="mode" value="eod" type="submit">Run end-of-day pipeline</button></form>
+    <form method="post" action="{% url 'run_pipeline' %}" onsubmit="return confirm('Train a new experimental model? This is an expensive, daily-scheduled operation — the currently active model stays live until a new candidate qualifies.');">
+      {% csrf_token %}<input type="hidden" name="confirm" value="yes"><button class="btn btn-small btn-gold" name="mode" value="train" type="submit">Train experimental model</button>
+    </form>
+  </div>
+
+  {% if automation %}
+  <div class="grid-4" style="margin-top:1.2rem;">
+    <div class="stat"><div class="label">Market sync</div><div class="value">{% if automation.automation_enabled.market_sync %}On{% else %}Off{% endif %}</div></div>
+    <div class="stat"><div class="label">Intraday analysis</div><div class="value">{% if automation.automation_enabled.intraday_analysis %}On{% else %}Off{% endif %}</div></div>
+    <div class="stat"><div class="label">Daily append</div><div class="value">{% if automation.automation_enabled.daily_append %}On{% else %}Off{% endif %}</div></div>
+    <div class="stat"><div class="label">ML training</div><div class="value">{% if automation.automation_enabled.ml_training %}On{% else %}Off{% endif %}</div></div>
+  </div>
+  <p class="muted" style="margin-top:0.6rem;">
+    DSE {% if automation.market_open %}<span class="badge badge-active">Open</span>{% else %}<span class="badge badge-inactive">Closed</span>{% endif %}
+    · Enabled exchanges: {{ automation.enabled_exchanges|join:", " }}
+    · Daily ML training: {{ automation.ml_training_schedule.time }} Asia/Dhaka
+  </p>
+
+  <div class="table-wrap" style="margin-top:0.8rem;">
+    <table>
+      <thead><tr><th>Stage</th><th>Last success</th><th>Last failure</th></tr></thead>
+      <tbody>
+        {% for row in automation.stage_rows %}
+        <tr>
+          <td>{{ row.label|title }}</td>
+          <td>{% if row.success %}{{ row.success.started_at|date:"d M, H:i" }}{% else %}<span class="muted">never</span>{% endif %}</td>
+          <td>{% if row.failure %}<span class="badge badge-inactive">{{ row.failure.started_at|date:"d M, H:i" }}</span>{% else %}<span class="muted">none</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if automation.active_model %}
+  <p class="muted" style="margin-top:0.8rem;">
+    Active model: <strong>{{ automation.active_model.model_name }}</strong>
+    [{{ automation.active_model.exchange_scope }}] v{{ automation.active_model.version }}
+    — trained {{ automation.active_model.trained_at|date:"d M Y, H:i" }}
+  </p>
+  {% else %}
+  <p class="muted" style="margin-top:0.8rem;">No active model deployed yet.</p>
+  {% endif %}
+
+  {% if automation.current_tasks %}
+  <h4 style="margin-top:1.2rem;">Currently running</h4>
+  <ul>
+    {% for t in automation.current_tasks %}<li>{{ t.task_name }} — started {{ t.started_at|date:"H:i:s" }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  <h4 style="margin-top:1.2rem;">Recent failures</h4>
+  {% if automation.recent_failures %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Task</th><th>When</th><th>Error</th><th></th></tr></thead>
+        <tbody>
+        {% for f in automation.recent_failures %}
+          <tr>
+            <td>{{ f.task_name }}</td>
+            <td>{{ f.started_at|date:"d M, H:i" }}</td>
+            <td class="muted">{{ f.error|truncatechars:80 }}</td>
+            <td>
+              <form method="post" action="{% url 'retry_task' f.id %}">{% csrf_token %}<button class="btn btn-small btn-ghost" type="submit">Retry</button></form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No recent failures.</p>
+  {% endif %}
+  {% else %}
+  <p class="muted">Automation status is temporarily unavailable.</p>
+  {% endif %}
+</div>
+
+<div class="section-title" style="margin-top:1.5rem;">
+  <div><h3>Telegram ML Report</h3></div>
+</div>
+
+<div class="panel">
+  {% if telegram_report %}
+  <div class="grid-4">
+    <div class="stat"><div class="label">Enabled</div><div class="value">{% if telegram_report.enabled %}Yes{% else %}No{% endif %}</div></div>
+    <div class="stat"><div class="label">Configured</div><div class="value">{% if telegram_report.configured %}Yes{% else %}No{% endif %}</div></div>
+    <div class="stat"><div class="label">Scheduled</div><div class="value">{{ telegram_report.time }} {{ telegram_report.timezone }}</div></div>
+    <div class="stat"><div class="label">Recipient</div><div class="value">{{ telegram_report.recipient_masked|default:"—" }}</div></div>
+  </div>
+  <p class="muted" style="margin-top:0.6rem;">Current ML summary: {{ telegram_report.active_model_summary }}</p>
+  {% if not telegram_report.configured %}
+  <p class="muted" style="margin-top:0.4rem;">Not configured — set <code>TELEGRAM_BOT_TOKEN</code> and <code>TELEGRAM_ADMIN_CHAT_ID</code> to enable real sends. The report still generates and previews normally in the meantime.</p>
+  {% endif %}
+
+  <div class="quick-actions" style="margin:0.8rem 0 0;">
+    <a class="btn btn-small btn-ghost" href="{% url 'telegram_report_preview' %}">Preview today's report</a>
+    <form method="post" action="{% url 'telegram_report_send' %}">{% csrf_token %}<button class="btn btn-small" type="submit">Send / retry today's report</button></form>
+    <form method="post" action="{% url 'telegram_report_send' %}" onsubmit="return confirm('Force-resend today\'s report even if it was already sent? This creates a duplicate Telegram message and is audited.');">
+      {% csrf_token %}<input type="hidden" name="force" value="yes"><button class="btn btn-small btn-gold" type="submit">Force resend</button>
+    </form>
+  </div>
+
+  <div class="grid-2" style="margin-top:0.8rem;">
+    <p class="muted">Last successful delivery: {% if telegram_report.last_success %}{{ telegram_report.last_success.report_date }} ({{ telegram_report.last_success.sent_at|date:"d M, H:i" }}){% else %}never{% endif %}</p>
+    <p class="muted">Last failed delivery: {% if telegram_report.last_failure %}<span class="badge badge-inactive">{{ telegram_report.last_failure.report_date }}</span> {{ telegram_report.last_failure.last_error|truncatechars:80 }}{% else %}none{% endif %}</p>
+  </div>
+
+  {% if telegram_report.history %}
+  <div class="table-wrap" style="margin-top:0.6rem;">
+    <table>
+      <thead><tr><th>Report date</th><th>Status</th><th>Recipient</th><th>Attempts</th><th>Sent</th></tr></thead>
+      <tbody>
+        {% for d in telegram_report.history %}
+        <tr>
+          <td>{{ d.report_date }}</td>
+          <td>{{ d.get_status_display }}</td>
+          <td>{{ d.recipient_masked }}</td>
+          <td>{{ d.attempt_count }}</td>
+          <td>{% if d.sent_at %}{{ d.sent_at|date:"d M, H:i" }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted" style="margin-top:0.6rem;">No reports generated yet.</p>
+  {% endif %}
+  {% else %}
+  <p class="muted">Telegram ML report status is temporarily unavailable.</p>
+  {% endif %}
+</div>
+
+<div class="grid-2" style="margin-top:1.5rem; align-items:start;">
+  <div class="panel">
+    <h3>DSE market status</h3>
+    <div class="market-status-chip {% if market_hours.dse.is_open %}is-open{% else %}is-closed{% endif %}" data-ex="DSE">
+      <span class="ms-ex">DSE</span>
+      <span class="ms-state">{{ market_hours.dse.status }}</span>
+      <span class="ms-next">{% if market_hours.dse.is_open %}closes{% else %}opens{% endif %} {{ market_hours.dse.next_when }}</span>
+    </div>
+    {% if cse_enabled %}
+    <div class="market-status-chip {% if market_hours.cse.is_open %}is-open{% else %}is-closed{% endif %}" data-ex="CSE" style="margin-top:0.5rem;">
+      <span class="ms-ex">CSE</span>
+      <span class="ms-state">{{ market_hours.cse.status }}</span>
+      <span class="ms-next">{% if market_hours.cse.is_open %}closes{% else %}opens{% endif %} {{ market_hours.cse.next_when }}</span>
+    </div>
+    {% endif %}
+
+    <h3 style="margin-top:1.2rem;">Operational alerts</h3>
+    {% if ops_alerts %}
+      <ul>
+        {% for a in ops_alerts %}
+          <li><span class="badge {% if a.severity == 'critical' %}badge-sell{% else %}badge-watch{% endif %}">{{ a.severity }}</span> {{ a.message }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No alerts firing.</p>
+    {% endif %}
+
+    <h3 style="margin-top:1.2rem;">Recent task runs</h3>
+    {% if recent_tasks %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Task</th><th>Status</th><th>Started</th></tr></thead>
+          <tbody>
+          {% for t in recent_tasks %}
+            <tr><td>{{ t.task_name }}</td><td>{{ t.status }}</td><td>{{ t.started_at|date:"d M, H:i" }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">No task runs recorded yet.</p>
+    {% endif %}
+
+    {% if ml_groups %}
+      <h3 style="margin-top:1.2rem;">Active ML models</h3>
+      <ul>
+        {% for g in ml_groups %}
+          <li>{{ g.model_family }} [{{ g.exchange }}] h={{ g.horizon_trading_days }} — {{ g.status }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h3>Recent account creations</h3>
+    {% if recent_accounts %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Username</th><th>Joined</th></tr></thead>
+          <tbody>
+          {% for a in recent_accounts %}
+            <tr><td><a href="{% url 'account_detail' a.id %}">{{ a.username }}</a></td><td>{{ a.date_joined|date:"d M Y" }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="empty-state">No accounts yet.</p>
+    {% endif %}
+
+    <h3 style="margin-top:1.2rem;">Recent role/status changes</h3>
+    {% if recent_events %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Event</th><th>Target</th><th>By</th><th>When</th></tr></thead>
+          <tbody>
+          {% for e in recent_events %}
+            <tr>
+              <td>{{ e.get_action_display }}</td>
+              <td>{{ e.target_username_snapshot|default:"—" }}</td>
+              <td>{{ e.username_snapshot|default:"system" }}</td>
+              <td>{{ e.created_at|date:"d M, H:i" }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="empty-state">No account-management events yet.</p>
+    {% endif %}
+
+    {% if quality %}
+      <h3 style="margin-top:1.2rem;">Data-quality warnings</h3>
+      <p class="muted">See the full <a href="{% url 'data_quality' %}">Data QA report</a> for freshness and provenance detail.</p>
+    {% endif %}
+
+    <h3 style="margin-top:1.2rem;">Feedback</h3>
+    {% if feedback_summary %}
+      <div class="grid-2">
+        <div class="stat"><div class="label">New</div><div class="value">{{ feedback_summary.new_count }}</div></div>
+        <div class="stat"><div class="label">Urgent</div><div class="value">{{ feedback_summary.urgent_count }}</div></div>
+      </div>
+      <p class="muted" style="margin-top:0.5rem;"><a href="{% url 'feedback_admin_dashboard' %}">Review all feedback →</a></p>
+    {% else %}
+      <p class="empty-state">No feedback submitted yet.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

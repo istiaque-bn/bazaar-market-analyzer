@@ -33,6 +33,23 @@ FETCH_TASK_NAMES = (
     "market.tasks.append_daily_bars",
 )
 
+# By this Asia/Dhaka hour, both scheduled append windows (10:05 and
+# 14:05) should already have produced a successful run — see
+# config/celery.py's beat_schedule.
+DAILY_APPEND_SETTLEMENT_HOUR = 15
+
+# Generous vs. the 60s beat tick for sync_live_market — beat fires this
+# task unconditionally every minute regardless of market/off-hours
+# state, so a longer silence during market hours means the worker/beat
+# process itself is down, not that the task chose to skip.
+WORKER_ABSENCE_MINUTES = 10
+
+# Total items queued-but-not-yet-started (TaskRun rows are only created
+# at task *start* — this counts what's still sitting in Redis before
+# that) across all four queues before this is a genuine backlog rather
+# than normal momentary queueing.
+TASK_BACKLOG_THRESHOLD = 20
+
 # Generous vs. the largest per-task time_limit (900s) — a task still
 # "started" this long after it began has almost certainly crashed its
 # worker process rather than genuinely still be running.
@@ -43,6 +60,12 @@ def _stale_data_alerts(freshness: dict) -> list[dict]:
     alerts = []
     today = timezone.localdate()
     for exchange, info in freshness.items():
+        # A deliberately disabled exchange stops refreshing on purpose —
+        # its now-growing data age is expected, not a fault, and must
+        # never page anyone. See market.services.data_quality.provenance_report,
+        # the only producer of this "enabled" field.
+        if not info.get("enabled", True):
+            continue
         latest = info.get("latest_price_date")
         if not latest:
             alerts.append(
@@ -181,6 +204,105 @@ def _repeated_failure_alerts() -> list[dict]:
     return alerts
 
 
+def _missing_daily_append_alert() -> list[dict]:
+    """No successful append_daily_bars run today, past the hour both
+    scheduled windows (10:05/14:05) should already have produced one.
+    Skipped entirely — not "no alert because success", genuinely no
+    check performed — when AUTO_DAILY_APPEND is off (intentionally
+    disabled automation must never alert) or today isn't a trading day
+    (weekend/holiday: nothing was ever due)."""
+    from django.conf import settings
+
+    from market.services.trading_calendar import closure_reason
+
+    if not getattr(settings, "AUTO_DAILY_APPEND", True):
+        return []
+    now = timezone.localtime()
+    today = now.date()
+    if closure_reason(today) is not None:
+        return []
+    if now.hour < DAILY_APPEND_SETTLEMENT_HOUR:
+        return []
+    ran = TaskRun.objects.filter(
+        task_name="market.tasks.append_daily_bars", status=TaskStatus.SUCCESS, started_at__date=today
+    ).exists()
+    if ran:
+        return []
+    return [
+        {
+            "key": "missing_daily_append",
+            "severity": "critical",
+            "message": (
+                f"No successful daily append recorded for {today} by {DAILY_APPEND_SETTLEMENT_HOUR}:00 "
+                "Asia/Dhaka — today's OHLCV bars may be missing."
+            ),
+            "detail": {"date": today.isoformat()},
+        }
+    ]
+
+
+def _worker_absence_alert() -> list[dict]:
+    """Beat fires sync_live_market unconditionally every ~60s regardless
+    of market/off-hours state (see config/celery.py) — so during market
+    hours, a longer silence than that means the worker/beat process
+    itself is down, not that the task chose to skip. Off-hours is
+    excluded: an idle worker legitimately ticks less visibly and this
+    isn't a real emergency outside trading hours."""
+    from market.services.autosync import is_market_hours
+
+    if not is_market_hours():
+        return []
+    cutoff = timezone.now() - timedelta(minutes=WORKER_ABSENCE_MINUTES)
+    if TaskRun.objects.filter(task_name="market.tasks.sync_live_market", started_at__gte=cutoff).exists():
+        return []
+    return [
+        {
+            "key": "worker_absent",
+            "severity": "critical",
+            "message": (
+                f"No market.tasks.sync_live_market run in the last {WORKER_ABSENCE_MINUTES} minutes "
+                "during market hours — the Celery worker or beat process may be down."
+            ),
+            "detail": {},
+        }
+    ]
+
+
+def _task_backlog_alert() -> list[dict]:
+    """Best-effort: counts items still sitting in each Redis-broker queue
+    (LLEN), not TaskRun rows (those only exist once a task has *started*
+    — this is specifically about work that hasn't started yet). Never
+    raises: a broker connectivity problem is _database_alerts'-equivalent
+    concern (see market.services.health.check_broker via readiness), not
+    this check's job — it just reports nothing rather than erroring the
+    whole alert evaluation."""
+    from django.conf import settings
+
+    try:
+        import redis
+
+        client = redis.Redis.from_url(settings.CELERY_BROKER_URL, socket_connect_timeout=2, socket_timeout=2)
+        queues = (
+            getattr(settings, "QUEUE_MARKET_FAST", "market-fast"),
+            getattr(settings, "QUEUE_MARKET_ANALYSIS", "market-analysis"),
+            getattr(settings, "QUEUE_MARKET_HEAVY", "market-heavy"),
+            getattr(settings, "QUEUE_NOTIFICATIONS", "notifications"),
+        )
+        total = sum(client.llen(q) for q in queues)
+    except Exception:
+        return []
+    if total <= TASK_BACKLOG_THRESHOLD:
+        return []
+    return [
+        {
+            "key": "task_backlog",
+            "severity": "warning",
+            "message": f"{total} tasks queued and not yet started (threshold {TASK_BACKLOG_THRESHOLD}).",
+            "detail": {"count": total, "threshold": TASK_BACKLOG_THRESHOLD},
+        }
+    ]
+
+
 def _job_overlap_and_stuck_alerts() -> list[dict]:
     alerts = []
     in_flight = list(TaskRun.objects.filter(status=TaskStatus.STARTED).order_by("task_name", "started_at"))
@@ -259,6 +381,35 @@ def _model_degradation_alerts(models: dict) -> list[dict]:
     return alerts
 
 
+def _telegram_report_repeated_failure_alert() -> list[dict]:
+    """The daily Telegram ML report failing once is a blip (network,
+    Telegram rate limit); failing on the last several distinct report
+    dates in a row is worth surfacing — as an in-app Admin alert here,
+    never as another Telegram send through the same channel that's
+    already broken. Recomputed fresh on every call from current
+    MlDailyReportDelivery rows, not a persisted/pushed alert queue, so it
+    naturally stops firing the moment a report succeeds again."""
+    from notifications.models import MlDailyReportDelivery, MlDailyReportStatus
+
+    recent = list(MlDailyReportDelivery.objects.order_by("-report_date")[:REPEATED_FAILURE_STREAK])
+    if len(recent) < REPEATED_FAILURE_STREAK:
+        return []
+    if not all(r.status == MlDailyReportStatus.FAILED for r in recent):
+        return []
+    return [
+        {
+            "key": "telegram_ml_report_repeated_failure",
+            "severity": "critical",
+            "message": (
+                f"The Telegram ML daily report has failed on the last {REPEATED_FAILURE_STREAK} report dates in a row "
+                f"({recent[-1].report_date} to {recent[0].report_date}) — see the Admin Panel's Telegram ML Report "
+                "section for the (redacted) last error."
+            ),
+            "detail": {"report_dates": [r.report_date.isoformat() for r in recent]},
+        }
+    ]
+
+
 def evaluate_alerts(summary: dict | None = None) -> list[dict]:
     """All currently-firing alerts, most-severe first. Pass an
     already-computed ops_metrics.ops_summary() to avoid recomputing it
@@ -274,6 +425,10 @@ def evaluate_alerts(summary: dict | None = None) -> list[dict]:
         + _job_overlap_and_stuck_alerts()
         + _database_alerts()
         + _model_degradation_alerts(summary["models"])
+        + _missing_daily_append_alert()
+        + _worker_absence_alert()
+        + _task_backlog_alert()
+        + _telegram_report_repeated_failure_alert()
     )
     severity_rank = {"critical": 0, "warning": 1}
     alerts.sort(key=lambda a: severity_rank.get(a["severity"], 2))

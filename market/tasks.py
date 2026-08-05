@@ -46,6 +46,27 @@ def sync_live_market():
 
 
 @shared_task(
+    name="market.tasks.run_intraday_analysis",
+    autoretry_for=_TRANSIENT_ERRORS,
+    retry_backoff=True,
+    retry_backoff_max=60,
+    retry_jitter=True,
+    max_retries=2,
+    time_limit=120,
+    soft_time_limit=100,
+)
+@record_task_run("market.tasks.run_intraday_analysis")
+def run_intraday_analysis():
+    """Lightweight technical-snapshot refresh — see market.services.
+    intraday_analysis's module docstring for why this is deliberately not
+    a second full-analysis pipeline. Runs every beat tick (see beat
+    schedule) but self-throttles exactly like sync_live_market does."""
+    from market.services.intraday_analysis import maybe_run_intraday_analysis
+
+    return maybe_run_intraday_analysis(force=False)
+
+
+@shared_task(
     name="market.tasks.fetch_all_market_data",
     autoretry_for=_TRANSIENT_ERRORS,
     retry_backoff=True,
@@ -78,9 +99,17 @@ def fetch_all_market_data(include_history: bool = False):
 def run_full_analysis_task(train_ml: bool = True):
     from market.services.analyzer import run_full_analysis
     from market.services.autosync import exclusive_db_write
+    from market.services.locking import LockBusy, distributed_lock
 
-    with exclusive_db_write(blocking=True, timeout=600):
-        return run_full_analysis(train_ml=train_ml)
+    try:
+        # Own non-blocking lock, same reasoning as train_ml_model's —
+        # only one full-analysis run at a time; a duplicate (manual +
+        # scheduled colliding) is Skipped, not queued-then-Failed.
+        with distributed_lock("full-analysis", timeout=900, blocking_timeout=0):
+            with exclusive_db_write(blocking=True, timeout=600):
+                return run_full_analysis(train_ml=train_ml)
+    except LockBusy:
+        return {"ok": True, "skipped": "already_running"}
 
 
 @shared_task(
@@ -156,12 +185,35 @@ def sync_pe_ratios():
 @record_task_run("market.tasks.train_ml_model")
 def train_ml_model():
     """Standalone forward-return model retrain, independent of the
-    analysis pass (which can also optionally retrain inline)."""
+    analysis pass (which can also optionally retrain inline). Scheduled
+    daily, outside market hours (see beat_schedule's train-ml-model-daily,
+    AUTO_ML_TRAINING_TIME) — this self-check is defense in depth so a
+    manual trigger or a direct call can't accidentally retrain because
+    AUTO_ML_TRAINING is off, and market.services.ml_model.train_model()
+    itself already restricts training to enabled_exchanges() only (CSE
+    excluded when disabled) and no-ops when there's no new
+    label-resolvable data since the last successful train."""
+    from django.conf import settings
+
     from market.services.autosync import exclusive_db_write
     from market.services.ml_model import train_model
 
-    with exclusive_db_write(blocking=True, timeout=300):
-        return train_model()
+    if not getattr(settings, "AUTO_ML_TRAINING", True):
+        return {"ok": True, "skipped": "disabled"}
+
+    from market.services.locking import LockBusy, distributed_lock
+
+    try:
+        # Own non-blocking lock (checked before the blocking DB-write
+        # lock) so a duplicate trigger — a manual admin click while the
+        # weekly scheduled run is already training — is reported as
+        # Skipped immediately rather than queueing behind it and
+        # eventually timing out as a Failure.
+        with distributed_lock("ml-training", timeout=600, blocking_timeout=0):
+            with exclusive_db_write(blocking=True, timeout=300):
+                return train_model()
+    except LockBusy:
+        return {"ok": True, "skipped": "already_running"}
 
 
 @shared_task(
@@ -177,10 +229,14 @@ def train_ml_model():
 def close_learn_settlement():
     """Settle due next-day-close forecasts, retrain the close-learn model
     if anything settled, and generate the next round of forecasts."""
+    from django.conf import settings
     from django.utils import timezone
 
     from market.services.autosync import exclusive_db_write
     from market.services.close_learn import run_close_learn_cycle
+
+    if not getattr(settings, "AUTO_CLOSE_LEARN", True):
+        return {"ok": True, "skipped": "disabled"}
 
     with exclusive_db_write(blocking=True, timeout=300):
         return run_close_learn_cycle(as_of=timezone.localdate(), train=True)
@@ -237,6 +293,58 @@ def assess_ml_reliability():
 
     with exclusive_db_write(blocking=True, timeout=300):
         return run_reliability_assessment()
+
+
+@shared_task(
+    name="market.tasks.run_end_of_day_pipeline",
+    time_limit=1800,
+    soft_time_limit=1700,
+)
+@record_task_run("market.tasks.run_end_of_day_pipeline")
+def run_end_of_day_pipeline():
+    """On-demand (manual Admin button) or automated end-of-day sequence:
+
+        append final daily bars (+ full analysis, if AUTO_ANALYZE_AFTER_APPEND)
+        -> settle previous forecasts + generate next-session forecasts (close-learn)
+        -> reliability/drift assessment
+        -> send eligible alerts (daily digest)
+
+    Each stage is the *exact same* task function the automated beat
+    schedule calls (append_daily_bars/close_learn_settlement/
+    assess_ml_reliability/send_daily_digest) — calling them directly
+    (not via .delay()) still runs them through their own @record_task_run
+    decoration, so each stage gets its own independent TaskRun row in
+    addition to this orchestrator's. A stage that raises is caught and
+    recorded in *this* task's detail as a failed stage — it does not
+    silently mark the whole pipeline "ok" — but later stages still run:
+    each one's own prerequisites are read from DB state (has an
+    unresolved forecast/has fresh price data), not from the immediately
+    preceding stage's return value, so e.g. a close-learn failure
+    shouldn't by itself prevent a reliability assessment of whatever
+    already-settled data exists.
+    """
+    from notifications.tasks import send_daily_digest
+
+    stages: dict[str, dict] = {}
+    ok = True
+
+    for stage_name, fn in (
+        ("append", append_daily_bars),
+        ("close_learn_settlement", close_learn_settlement),
+        ("reliability_assessment", assess_ml_reliability),
+        ("digest", send_daily_digest),
+    ):
+        try:
+            result = fn()
+        except Exception as exc:
+            result = {"ok": False, "error": str(exc)[:500]}
+            ok = False
+        else:
+            if isinstance(result, dict) and result.get("ok") is False:
+                ok = False
+        stages[stage_name] = result
+
+    return {"ok": ok, "stages": stages}
 
 
 @shared_task(

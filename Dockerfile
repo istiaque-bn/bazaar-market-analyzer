@@ -44,7 +44,7 @@ RUN pip install --no-cache-dir -r requirements-lock.txt
 COPY . .
 
 RUN useradd --create-home --uid 1000 bazaar \
-    && mkdir -p /app/data/cache /app/data/backups /app/staticfiles \
+    && mkdir -p /app/data/cache /app/data/backups /app/staticfiles /app/beat \
     && chown -R bazaar:bazaar /app
 
 USER bazaar

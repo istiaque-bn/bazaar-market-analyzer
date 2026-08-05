@@ -194,15 +194,23 @@ def _run_live_sync_unlocked() -> dict:
 
         dse = _retry_db(sync_dse_live)
         cse = _retry_db(sync_cse_live)
+        # A skipped-because-disabled result reports ok=True (it's not an
+        # error — see sync_dse_live/sync_cse_live) but did no real work,
+        # so it must not count toward "a live sync just succeeded" —
+        # otherwise disabling both exchanges at once (maintenance mode)
+        # would make the ticker badge/last-success timestamp claim a sync
+        # happened when nothing was actually fetched.
+        dse_real_ok = bool(dse.get("ok")) and dse.get("skipped") != "exchange_disabled"
+        cse_real_ok = bool(cse.get("ok")) and cse.get("skipped") != "exchange_disabled"
         source = None
-        if dse.get("ok"):
+        if dse_real_ok:
             source = dse.get("source")
             _retry_db(lambda: _update_snapshots_from_quotes("DSE", dse.get("count") or 0, source or "dse"))
-        if cse.get("ok"):
+        if cse_real_ok:
             _retry_db(lambda: _update_snapshots_from_quotes("CSE", cse.get("count") or 0, cse.get("source") or "cse"))
             source = source or cse.get("source")
 
-        ok = bool(dse.get("ok") or cse.get("ok"))
+        ok = dse_real_ok or cse_real_ok
         result = {"ok": ok, "dse": dse, "cse": cse, "at": timezone.now().isoformat()}
         _state["last_result"] = result
         _state["source"] = source
@@ -213,6 +221,8 @@ def _run_live_sync_unlocked() -> dict:
                 _state_file().write_text(timezone.now().isoformat(), encoding="utf-8")
             except OSError:
                 pass
+        elif dse.get("skipped") == "exchange_disabled" and cse.get("skipped") == "exchange_disabled":
+            _state["last_error"] = None
         else:
             _state["last_error"] = str(dse.get("error") or cse.get("error") or "fetch failed")
         return result

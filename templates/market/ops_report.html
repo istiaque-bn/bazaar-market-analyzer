@@ -4,7 +4,9 @@
 <div class="section-title">
   <div>
     <h2>Operational readiness</h2>
-    <p class="muted">Generated {{ summary.generated_at|date:"d M Y, h:i A" }} · staff-only</p>
+    <p class="muted">Generated {{ summary.generated_at|date:"d M Y, h:i A" }} · staff-only
+      · Enabled exchanges: {{ summary.enabled_exchanges|join:", " }}{% if "CSE" not in summary.enabled_exchanges %} <span class="badge quote-badge quote-exchange_disabled tiny">CSE disabled</span>{% endif %}
+    </p>
   </div>
 </div>
 

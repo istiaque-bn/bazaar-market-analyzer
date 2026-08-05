@@ -4,8 +4,10 @@ from __future__ import annotations
 from decimal import Decimal
 
 from django import forms
+from django.db.models import Q
 
 from market.models import Portfolio, Stock, TransactionType
+from market.services.exchange_config import enabled_exchanges
 
 
 class PortfolioForm(forms.ModelForm):
@@ -56,9 +58,24 @@ class TransactionForm(forms.Form):
     notes = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 2, "maxlength": 2000}))
     allow_fractional = forms.BooleanField(required=False, widget=forms.HiddenInput)
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, portfolio: Portfolio | None = None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["stock"].queryset = Stock.objects.filter(is_active=True).order_by("trading_code")
+        # New selections are limited to currently-enabled exchanges — a
+        # disabled exchange (e.g. CSE) never appears as a choice for a
+        # brand-new position. A stock the portfolio has *already*
+        # transacted in stays selectable even if its exchange has since
+        # been disabled, so a corrective SELL/close-out against an
+        # existing holding remains possible; validate_transaction() is
+        # still the actual enforcement point (rejects a BUY either way),
+        # this is just keeping the dropdown honest about what's realistic.
+        qs = Stock.objects.filter(is_active=True, exchange__in=enabled_exchanges())
+        if portfolio is not None:
+            held_ids = list(portfolio.transactions.values_list("stock_id", flat=True).distinct())
+            if held_ids:
+                qs = Stock.objects.filter(is_active=True).filter(
+                    Q(exchange__in=enabled_exchanges()) | Q(id__in=held_ids)
+                )
+        self.fields["stock"].queryset = qs.order_by("trading_code")
 
     def clean_fees(self):
         return self.cleaned_data.get("fees") or Decimal("0")

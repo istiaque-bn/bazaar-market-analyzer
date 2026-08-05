@@ -9,58 +9,47 @@ from rest_framework.throttling import ScopedRateThrottle
 from market.models import AnalysisResult, Exchange, SignalAction, Stock
 
 
-class RegisterAPIPasswordValidationTests(TestCase):
-    """/api/auth/register/ must reject weak passwords the same way the web
-    signup form (UserCreationForm + AUTH_PASSWORD_VALIDATORS) does, instead
-    of calling create_user() directly and bypassing validation."""
+class RegisterAPIDisabledTests(TestCase):
+    """/api/auth/register/ is a tombstone for the old public self-registration
+    endpoint (see api.views.RegisterAPI) — public registration has been
+    removed project-wide. It must always refuse and never create an
+    account, regardless of payload or auth state."""
 
     def setUp(self):
         self.url = reverse("api_register")
 
-    def test_weak_password_rejected(self):
+    def test_anonymous_post_refused_and_no_account_created(self):
         response = self.client.post(
-            self.url, {"username": "weakpw", "password": "1", "email": "weak@example.com"}
+            self.url, {"username": "hopeful", "password": "Correct-Horse-Battery-Staple-42", "email": "h@example.com"}
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertFalse(User.objects.filter(username="weakpw").exists())
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(User.objects.filter(username="hopeful").exists())
 
-    def test_weak_password_error_is_clear_and_field_scoped(self):
+    def test_authenticated_post_also_refused(self):
+        User.objects.create_user(username="already_in", password="Correct-Horse-Battery-Staple-42")
+        self.client.login(username="already_in", password="Correct-Horse-Battery-Staple-42")
         response = self.client.post(
-            self.url, {"username": "weakpw2", "password": "1", "email": "weak2@example.com"}
+            self.url, {"username": "sneaky", "password": "Correct-Horse-Battery-Staple-42", "email": "sn@example.com"}
         )
-        body = response.json()
-        self.assertIn("password", body)
-        self.assertTrue(len(body["password"]) > 0)
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(User.objects.filter(username="sneaky").exists())
 
-    def test_strong_password_creates_user_and_token(self):
+    def test_no_token_issued(self):
         response = self.client.post(
-            self.url,
-            {"username": "stronguser", "password": "Correct-Horse-Battery-Staple-42", "email": "s@example.com"},
+            self.url, {"username": "notoken", "password": "Correct-Horse-Battery-Staple-42", "email": "nt@example.com"}
         )
-        self.assertEqual(response.status_code, 201)
-        self.assertTrue(User.objects.filter(username="stronguser").exists())
-        self.assertIn("token", response.json())
+        self.assertNotIn("token", response.json())
 
 
 class ApiThrottlingTests(TestCase):
-    """Registration, login, and prediction endpoints must enforce explicit
-    rate limits (scoped throttles), independent of the codebase's default
-    anon/user rates."""
+    """Login and prediction endpoints must enforce explicit rate limits
+    (scoped throttles), independent of the codebase's default anon/user
+    rates."""
 
     def setUp(self):
         cache.clear()
-
-    def test_register_endpoint_is_throttled(self):
-        url = reverse("api_register")
-        with mock.patch.dict(ScopedRateThrottle.THROTTLE_RATES, {"register": "1/min"}):
-            r1 = self.client.post(
-                url, {"username": "throttle1", "password": "Correct-Horse-Battery-Staple-42", "email": "t1@example.com"}
-            )
-            self.assertEqual(r1.status_code, 201)
-            r2 = self.client.post(
-                url, {"username": "throttle2", "password": "Correct-Horse-Battery-Staple-42", "email": "t2@example.com"}
-            )
-            self.assertEqual(r2.status_code, 429)
+        self.user = User.objects.create_user(username="throttle_user", password="Correct-Horse-Battery-Staple-42")
+        self.client.force_login(self.user)
 
     def test_login_endpoint_is_throttled(self):
         url = reverse("api_login")
@@ -83,6 +72,8 @@ class ApiResearchLanguageTests(TestCase):
     outward JSON key/labels must not present it as a safety guarantee."""
 
     def setUp(self):
+        user = User.objects.create_user(username="research_lang_user", password="Correct-Horse-Battery-Staple-42")
+        self.client.force_login(user)
         self.stock = Stock.objects.create(exchange=Exchange.DSE, trading_code="TEST", company_name="Test Co")
         AnalysisResult.objects.create(
             stock=self.stock,

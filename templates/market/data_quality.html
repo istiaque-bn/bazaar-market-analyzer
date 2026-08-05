@@ -29,11 +29,12 @@
     <h3>Freshness by exchange</h3>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Exchange</th><th>Latest price date</th><th>Last successful batch</th><th>Source</th></tr></thead>
+        <thead><tr><th>Exchange</th><th>Status</th><th>Latest price date</th><th>Last successful batch</th><th>Source</th></tr></thead>
         <tbody>
           {% for ex, f in report.freshness.items %}
           <tr>
             <td>{{ ex }}</td>
+            <td>{% if f.enabled %}<span class="badge quote-badge quote-live tiny">Enabled</span>{% else %}<span class="badge quote-badge quote-exchange_disabled tiny">Disabled</span>{% endif %}</td>
             <td>{{ f.latest_price_date|default:"—" }}</td>
             <td>{% if f.last_successful_batch_at %}{{ f.last_successful_batch_at|slice:":16"|cut:"T" }}{% else %}—{% endif %}</td>
             <td>{{ f.last_successful_batch_source|default:"—" }}</td>

@@ -507,7 +507,8 @@ class PortfolioViewMutationTests(TestCase):
         self.assertContains(response, "Portfolio")
         self.client.logout()
         response = self.client.get(reverse("home"))
-        self.assertNotContains(response, reverse("portfolio_redirect"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)
 
 
 class PortfolioAPITests(TestCase):

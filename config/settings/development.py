@@ -26,3 +26,14 @@ SECURE_HSTS_SECONDS = 0
 # Local exception: lets the Vite/React-style dev tooling or a mobile
 # simulator hit the API from any origin during development.
 CORS_ALLOW_ALL_ORIGINS = True
+
+# Local exception: base.py defaults ENABLE_CSE to False (the production-
+# facing "DSE-only by default for new deployments" behavior), but this
+# whole codebase — including `manage.py test`, which runs under this
+# module by default — predates the exchange feature flag and exercises
+# CSE broadly without expecting it to be off. Re-enable it here so local
+# `runserver`/`manage.py test` keep behaving exactly as before unless a
+# developer explicitly sets ENABLE_CSE=False in their own .env to test
+# DSE-only mode locally.
+ENABLE_DSE = os.getenv("ENABLE_DSE", "True").strip().lower() in ("1", "true", "yes")
+ENABLE_CSE = os.getenv("ENABLE_CSE", "True").strip().lower() in ("1", "true", "yes")

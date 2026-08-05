@@ -6,6 +6,7 @@ silently omitting them.
 """
 from datetime import date, timedelta
 
+from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 
@@ -40,6 +41,10 @@ class ClosureReasonTests(TestCase):
 
 
 class HistoryTableClosureLabelTests(TestCase):
+    def setUp(self):
+        user = User.objects.create_user(username="calendar_viewer", password="Correct-Horse-Battery-Staple-42")
+        self.client.force_login(user)
+
     def _mk_stock(self, code="CALX"):
         return Stock.objects.create(exchange=Exchange.DSE, trading_code=code, company_name="Calendar Test Co")
 

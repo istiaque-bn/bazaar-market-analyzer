@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ fb.reference_number }}{% endblock %}
+{% block content %}
+<div class="section-title">
+  <div>
+    <h2>{{ fb.reference_number }} <span class="badge badge-hold">{{ fb.get_status_display }}</span></h2>
+    <p class="muted">{{ fb.get_category_display }} · Submitted {{ fb.created_at|date:"d M Y, H:i" }}</p>
+  </div>
+</div>
+
+<div class="grid-2" style="align-items:start;">
+  <div class="panel">
+    <h3>{{ fb.title }}</h3>
+    <p>{{ fb.description|linebreaksbr }}</p>
+    {% if fb.steps_to_reproduce %}<p><strong>Steps to reproduce:</strong><br>{{ fb.steps_to_reproduce|linebreaksbr }}</p>{% endif %}
+    {% if fb.expected_behavior %}<p><strong>Expected:</strong> {{ fb.expected_behavior }}</p>{% endif %}
+    {% if fb.actual_behavior %}<p><strong>Actual:</strong> {{ fb.actual_behavior }}</p>{% endif %}
+
+    {% if fb.admin_response %}
+    <div class="temp-password-box">
+      <p class="muted" style="margin-top:0;">Admin response:</p>
+      <p>{{ fb.admin_response|linebreaksbr }}</p>
+    </div>
+    {% endif %}
+
+    {% if is_owner %}
+    <div class="account-actions" style="margin-top:1rem;">
+      {% if not fb.is_closed %}
+        <form method="post" action="{% url 'feedback_withdraw' fb.pk %}" onsubmit="return confirm('Withdraw this report?');">{% csrf_token %}<button class="btn btn-small btn-ghost" type="submit">Withdraw</button></form>
+      {% endif %}
+      {% if fb.status == "resolved" or fb.status == "implemented" %}
+        <form method="post" action="{% url 'feedback_dispute' fb.pk %}">{% csrf_token %}<button class="btn btn-small btn-ghost" type="submit">This isn't resolved</button></form>
+      {% endif %}
+    </div>
+    {% if not fb.is_closed %}
+    <form method="post" action="{% url 'feedback_follow_up' fb.pk %}" class="form" style="margin-top:1rem;">
+      {% csrf_token %}
+      <label>Add follow-up information{{ follow_up_form.text }}</label>
+      <button class="btn btn-small" type="submit">Add follow-up</button>
+    </form>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h3>History</h3>
+    {% if events %}
+      <ul>
+        {% for e in events %}
+          <li>
+            <span class="muted">{{ e.created_at|date:"d M, H:i" }}</span> —
+            {% if e.event_type == "reporter_follow_up" %}Follow-up: {{ e.detail.text }}
+            {% elif e.event_type == "status_changed" %}Status changed to {{ e.detail.to }}
+            {% elif e.event_type == "response_posted" %}Admin response posted
+            {% elif e.event_type == "reporter_disputed_resolution" %}You marked this still unresolved
+            {% elif e.event_type == "marked_duplicate" %}Marked duplicate of {{ e.detail.original_reference }}
+            {% else %}{{ e.get_event_type_display }}
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No history yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<p style="margin-top:1rem;"><a href="{% url 'feedback_my_list' %}">&larr; Back to my feedback</a></p>
+{% endblock %}

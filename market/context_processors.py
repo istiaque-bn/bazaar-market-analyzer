@@ -4,7 +4,13 @@
 # check (not a substring/`in` string test) so a url_name can never
 # accidentally match a sibling group's name.
 NAV_GROUPS = {
-    "dashboard": {"dashboard"},
+    "panel": {"admin_panel", "staff_panel", "user_panel"},
+    "accounts": {
+        "account_list",
+        "account_detail",
+        "account_create_user",
+        "account_create_staff",
+    },
     "stocks": {"stock_list", "stock_detail", "predict_price"},
     "portfolio": {
         "portfolio_redirect",
@@ -21,7 +27,14 @@ NAV_GROUPS = {
         "portfolio_delete_transaction",
     },
     "watchlist": {"watchlist"},
-    "tools": {"backtests", "alerts"},
+    "feedback": {
+        "feedback_my_list",
+        "feedback_submit",
+        "feedback_detail",
+        "feedback_triage_list",
+        "feedback_admin_dashboard",
+    },
+    "tools": {"dashboard", "backtests", "alerts"},
     "admin": {"data_quality", "ops_report", "ml_reliability"},
 }
 
@@ -39,9 +52,14 @@ def market_nav(request):
     from django.conf import settings
     from django.utils import timezone
 
-    from market.models import AnalysisResult, MarketSnapshot, PriceHistory, Stock
+    from market.models import AnalysisResult, Exchange, MarketSnapshot, PriceHistory, Stock
+    from market.services.exchange_config import enabled_exchanges
     from market.services.market_hours import both_exchanges_status
     from market.services.screener import screen_summary
+
+    enabled = enabled_exchanges()
+    dse_on = Exchange.DSE in enabled
+    cse_on = Exchange.CSE in enabled
 
     def pack(stocks):
         quotes = []
@@ -67,19 +85,27 @@ def market_nav(request):
             )
         return quotes
 
-    dse_stocks = list(
-        Stock.objects.filter(exchange="DSE", is_active=True, last_price__isnull=False).order_by(
-            "-last_volume"
-        )[:60]
+    dse_stocks = (
+        list(
+            Stock.objects.filter(exchange="DSE", is_active=True, last_price__isnull=False).order_by(
+                "-last_volume"
+            )[:60]
+        )
+        if dse_on
+        else []
     )
-    cse_stocks = list(
-        Stock.objects.filter(exchange="CSE", is_active=True, last_price__isnull=False).order_by(
-            "-last_volume"
-        )[:60]
+    cse_stocks = (
+        list(
+            Stock.objects.filter(exchange="CSE", is_active=True, last_price__isnull=False).order_by(
+                "-last_volume"
+            )[:60]
+        )
+        if cse_on
+        else []
     )
 
     latest_snaps = {}
-    for snap in MarketSnapshot.objects.order_by("-as_of"):
+    for snap in MarketSnapshot.objects.filter(exchange__in=enabled).order_by("-as_of"):
         latest_snaps.setdefault(snap.exchange, snap)
 
     local_now = timezone.localtime()
@@ -94,4 +120,7 @@ def market_nav(request):
         "local_now": local_now,
         "local_now_display": local_now.strftime("%a %d %b · %I:%M %p").lstrip("0").replace(" 0", " "),
         "active_nav": _active_nav(request),
+        "enabled_exchanges": enabled,
+        "dse_enabled": dse_on,
+        "cse_enabled": cse_on,
     }

@@ -51,15 +51,15 @@ class DashboardHealthBannerRenderingTests(TestCase):
     def setUp(self):
         self.url = reverse("dashboard")
 
-    def test_anonymous_user_never_sees_the_banner_even_if_stale(self):
+    def test_anonymous_user_is_redirected_to_login(self):
         TaskRun.objects.create(
             task_name="market.tasks.sync_live_market",
             status=TaskStatus.SUCCESS,
             detail={"ok": False, "error": "boom"},
         )
         response = self.client.get(self.url)
-        self.assertEqual(response.status_code, 200)
-        self.assertNotIn(b"health-warning", response.content)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_staff_user_sees_the_banner_when_sync_is_silently_failing(self):
         staff = User.objects.create_user(username="staffer", password="Correct-Horse-Battery-Staple-42")

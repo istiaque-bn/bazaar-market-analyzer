@@ -36,3 +36,14 @@ SECURE_HSTS_SECONDS = 0
 # Password hashing is deliberately slow in production; that cost buys
 # nothing in tests and adds up across hundreds of user-creation calls.
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+
+# Deliberately hardcoded (not env-driven, unlike base.py's ENABLE_CSE
+# default) so this settings module's test runs are 100% deterministic
+# regardless of whatever a developer's or CI runner's local .env happens
+# to set — the pre-existing suite exercises CSE broadly and must keep
+# passing under this module exactly like it does under development.py's
+# own explicit re-enable. Tests exercising the disabled-CSE path use
+# @override_settings(ENABLE_CSE=False) explicitly rather than relying on
+# either settings module's ambient default (see market/tests/test_exchange_config.py).
+ENABLE_DSE = True
+ENABLE_CSE = True

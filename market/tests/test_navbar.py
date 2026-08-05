@@ -1,36 +1,36 @@
-"""Navbar tests: link visibility per auth/staff state, active-page
-highlighting, CSRF-protected logout, and that every page using base.html
-still renders (no broken {% url %} references introduced by the navbar
-redesign)."""
+"""Navbar tests: role-aware link visibility, active-page highlighting,
+CSRF-protected logout, and that every page using base.html still renders
+(no broken {% url %} references introduced by the navbar redesign)."""
 from django.contrib.auth.models import User
 from django.test import Client, TestCase
 
 PASSWORD = "Correct-Horse-Battery-Staple-42"
 
 
-def make_user(username: str, is_staff: bool = False) -> User:
-    return User.objects.create_user(username=username, password=PASSWORD, is_staff=is_staff)
+def make_user(username: str, is_staff: bool = False, is_superuser: bool = False) -> User:
+    return User.objects.create_user(
+        username=username, password=PASSWORD, is_staff=is_staff or is_superuser, is_superuser=is_superuser
+    )
 
 
 class AnonymousNavTests(TestCase):
-    def test_login_and_signup_links_present(self):
-        html = self.client.get("/").content.decode()
-        self.assertIn('class="nav-login"', html)
-        self.assertIn('href="/accounts/signup/"', html)
+    """Anonymous visitors get redirected to Login before any nav ever
+    renders — there is no public page left that shows the navbar."""
 
-    def test_authenticated_only_links_absent(self):
-        html = self.client.get("/").content.decode()
-        self.assertNotIn("id=\"userMenu\"", html)
-        self.assertNotIn(">Watchlist<", html)
-        self.assertNotIn(">Profile<", html)
+    def test_root_redirects_to_login(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)
 
-    def test_staff_only_admin_dropdown_absent(self):
-        html = self.client.get("/").content.decode()
-        self.assertNotIn('id="staffMenu"', html)
+    def test_login_page_has_no_signup_link(self):
+        html = self.client.get("/accounts/login/").content.decode()
+        self.assertNotIn("/accounts/signup/", html)
+        self.assertNotIn("Sign up", html)
 
-    def test_logout_form_absent_when_anonymous(self):
-        html = self.client.get("/").content.decode()
-        self.assertNotIn("nav-logout-form", html)
+    def test_login_page_has_no_primary_nav(self):
+        html = self.client.get("/accounts/login/").content.decode()
+        self.assertNotIn('id="siteNav"', html)
+        self.assertNotIn('id="marketStatus"', html)
 
 
 class AuthenticatedNavTests(TestCase):
@@ -39,17 +39,17 @@ class AuthenticatedNavTests(TestCase):
         self.client.login(username="alice", password=PASSWORD)
 
     def test_watchlist_and_portfolio_links_present(self):
-        html = self.client.get("/dashboard/").content.decode()
+        html = self.client.get("/accounts/panel/user/").content.decode()
         self.assertIn('href="/watchlist/"', html)
         self.assertIn('href="/portfolio/"', html)
 
     def test_account_menu_shows_username_and_profile_link(self):
-        html = self.client.get("/dashboard/").content.decode()
+        html = self.client.get("/accounts/panel/user/").content.decode()
         self.assertIn("alice", html)
         self.assertIn('href="/accounts/profile/"', html)
 
     def test_logout_is_post_form_with_csrf_token(self):
-        html = self.client.get("/dashboard/").content.decode()
+        html = self.client.get("/accounts/panel/user/").content.decode()
         self.assertIn('<form class="nav-logout-form" method="post" action="/accounts/logout/">', html)
         self.assertIn("csrfmiddlewaretoken", html)
 
@@ -63,28 +63,62 @@ class AuthenticatedNavTests(TestCase):
         response = strict_client.post("/accounts/logout/")
         self.assertEqual(response.status_code, 403)
 
-    def test_staff_only_admin_dropdown_absent_for_regular_user(self):
-        html = self.client.get("/dashboard/").content.decode()
+    def test_operations_dropdown_absent_for_regular_user(self):
+        html = self.client.get("/accounts/panel/user/").content.decode()
         self.assertNotIn('id="staffMenu"', html)
+
+    def test_accounts_link_absent_for_regular_user(self):
+        html = self.client.get("/accounts/panel/user/").content.decode()
+        self.assertNotIn('href="/accounts/manage/"', html)
 
 
 class StaffNavTests(TestCase):
     def setUp(self):
-        self.user = make_user("admin_bob", is_staff=True)
-        self.client.login(username="admin_bob", password=PASSWORD)
+        self.user = make_user("staff_bob", is_staff=True)
+        self.client.login(username="staff_bob", password=PASSWORD)
 
-    def test_admin_dropdown_present_with_all_three_links(self):
-        html = self.client.get("/dashboard/").content.decode()
+    def test_operations_dropdown_present_without_ml_reliability_or_django_admin(self):
+        html = self.client.get("/accounts/panel/staff/").content.decode()
+        self.assertIn('id="staffMenu"', html)
+        self.assertIn('href="/data-quality/"', html)
+        self.assertIn('href="/ops/"', html)
+        self.assertNotIn('href="/ml-reliability/"', html)
+        self.assertNotIn('href="/admin/"', html)
+
+    def test_users_link_present_not_accounts_wording(self):
+        html = self.client.get("/accounts/panel/staff/").content.decode()
+        self.assertIn('href="/accounts/manage/"', html)
+        self.assertIn(">Users<", html)
+
+    def test_portfolio_watchlist_links_absent(self):
+        html = self.client.get("/accounts/panel/staff/").content.decode()
+        self.assertNotIn(">Portfolio<", html)
+        self.assertNotIn(">Watchlist<", html)
+
+
+class AdminNavTests(TestCase):
+    def setUp(self):
+        self.user = make_user("admin_carol", is_superuser=True)
+        self.client.login(username="admin_carol", password=PASSWORD)
+
+    def test_admin_dropdown_present_with_all_links(self):
+        html = self.client.get("/accounts/panel/admin/").content.decode()
         self.assertIn('id="staffMenu"', html)
         self.assertIn('href="/data-quality/"', html)
         self.assertIn('href="/ops/"', html)
         self.assertIn('href="/ml-reliability/"', html)
+        self.assertIn('href="/admin/"', html)
+
+    def test_accounts_link_present(self):
+        html = self.client.get("/accounts/panel/admin/").content.decode()
+        self.assertIn('href="/accounts/manage/"', html)
+        self.assertIn(">Accounts<", html)
 
 
 class ActiveNavStateTests(TestCase):
     def setUp(self):
-        self.user = make_user("carol")
-        self.client.login(username="carol", password=PASSWORD)
+        self.user = make_user("carol_active")
+        self.client.login(username="carol_active", password=PASSWORD)
 
     def _active_anchor(self, path, href):
         html = self.client.get(path).content.decode()
@@ -94,15 +128,15 @@ class ActiveNavStateTests(TestCase):
         self.assertIsNotNone(m, f"anchor for {href} not found on {path}")
         return m.group(0)
 
-    def test_dashboard_active_only_on_dashboard(self):
-        self.assertIn("active", self._active_anchor("/dashboard/", "/dashboard/"))
-        self.assertNotIn("active", self._active_anchor("/stocks/", "/dashboard/"))
+    def test_panel_active_only_on_own_panel(self):
+        self.assertIn("active", self._active_anchor("/accounts/panel/user/", "/accounts/panel/user/"))
+        self.assertNotIn("active", self._active_anchor("/stocks/", "/accounts/panel/user/"))
 
     def test_stocks_active_on_stock_list(self):
         self.assertIn("active", self._active_anchor("/stocks/", "/stocks/"))
 
-    def test_stocks_not_active_on_dashboard(self):
-        self.assertNotIn("active", self._active_anchor("/dashboard/", "/stocks/"))
+    def test_stocks_not_active_on_own_panel(self):
+        self.assertNotIn("active", self._active_anchor("/accounts/panel/user/", "/stocks/"))
 
     def test_watchlist_active_on_watchlist_page(self):
         self.assertIn("active", self._active_anchor("/watchlist/", "/watchlist/"))
@@ -124,12 +158,12 @@ class ActiveNavStateTests(TestCase):
         self.assertIn("nav-dropdown-btn active", html_backtests)
         self.assertIn("nav-dropdown-btn active", html_alerts)
 
-    def test_tools_dropdown_not_active_on_dashboard(self):
-        html = self.client.get("/dashboard/").content.decode()
+    def test_tools_dropdown_not_active_on_own_panel(self):
+        html = self.client.get("/accounts/panel/user/").content.decode()
         self.assertNotIn("nav-dropdown-btn active", html)
 
     def test_aria_current_present_on_active_link(self):
-        anchor = self._active_anchor("/dashboard/", "/dashboard/")
+        anchor = self._active_anchor("/accounts/panel/user/", "/accounts/panel/user/")
         self.assertIn('aria-current="page"', anchor)
 
 
@@ -137,16 +171,31 @@ class PageLoadSmokeTests(TestCase):
     """Every page rendering base.html must still load — a broken {% url %}
     in the navbar would 500 every page in the project, not just the nav."""
 
-    def test_anonymous_pages_load(self):
-        for path in ("/", "/stocks/", "/accounts/login/", "/accounts/signup/"):
+    def test_anonymous_pages_redirect_or_load(self):
+        # Anonymous visitors may only reach Login (+ static assets) —
+        # every other path must redirect, never 200 with the app chrome.
+        for path in ("/", "/stocks/", "/dashboard/"):
             with self.subTest(path=path):
                 response = self.client.get(path)
-                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.status_code, 302)
+        response = self.client.get("/accounts/login/")
+        self.assertEqual(response.status_code, 200)
+        response = self.client.get("/accounts/signup/")
+        self.assertEqual(response.status_code, 403)
 
     def test_authenticated_pages_load(self):
         make_user("dave")
         self.client.login(username="dave", password=PASSWORD)
-        for path in ("/dashboard/", "/stocks/", "/watchlist/", "/portfolio/", "/backtests/", "/alerts/", "/accounts/profile/"):
+        for path in (
+            "/accounts/panel/user/",
+            "/dashboard/",
+            "/stocks/",
+            "/watchlist/",
+            "/portfolio/",
+            "/backtests/",
+            "/alerts/",
+            "/accounts/profile/",
+        ):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertIn(response.status_code, (200, 302))
@@ -154,7 +203,21 @@ class PageLoadSmokeTests(TestCase):
     def test_staff_pages_load(self):
         make_user("erin", is_staff=True)
         self.client.login(username="erin", password=PASSWORD)
-        for path in ("/data-quality/", "/ops/", "/ml-reliability/"):
+        for path in ("/accounts/panel/staff/", "/data-quality/", "/ops/", "/accounts/manage/"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+
+    def test_admin_pages_load(self):
+        make_user("frank", is_superuser=True)
+        self.client.login(username="frank", password=PASSWORD)
+        for path in (
+            "/accounts/panel/admin/",
+            "/data-quality/",
+            "/ops/",
+            "/ml-reliability/",
+            "/accounts/manage/",
+        ):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 200)

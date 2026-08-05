@@ -7,6 +7,7 @@ from accounts.models import UserProfile
 
 class ProfileInline(admin.StackedInline):
     model = UserProfile
+    fk_name = "user"
     can_delete = False
 
 

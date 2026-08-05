@@ -44,7 +44,27 @@ See `.env.production.example` for the full annotated template. Required
 - `CELERY_BROKER_URL` — must be `rediss://` (TLS) unless
   `CELERY_BROKER_ALLOW_PLAINTEXT=True` is set explicitly.
 
-Everything else has a documented default (see `.env.production.example`).
+Everything else has a documented default (see `.env.production.example`),
+including the exchange feature flags below.
+
+## Exchange feature flags (DSE-only deployment)
+
+`ENABLE_DSE` (default `True`) / `ENABLE_CSE` (default `False`) control
+which exchanges this deployment actively fetches, analyzes, trains
+models for, and exposes to public discovery — a fresh production
+deployment with no override is **DSE-only by default**. `MAINTENANCE_MODE`
+is a documented escape hatch for a deliberate full-outage window (both
+flags false is otherwise a startup-time `ImproperlyConfigured` error).
+
+This is an **operational toggle, not a data migration** — no schema
+change, no destructive migration, nothing to run before or after
+flipping it. Restart the web process(es) and every Celery
+worker/beat after changing it (settings are read once at process start).
+Full behavior, the exact re-enablement/catch-up procedure, and the
+per-layer enforcement details (public routes 404, background tasks skip
+without a false failure, ML training/serving stays DSE-scoped, existing
+portfolio/watchlist records stay readable) are documented in the
+top-level [README.md's "Exchange feature flags" section](../README.md#exchange-feature-flags).
 
 ## Security headers / HTTPS
 
@@ -183,14 +203,71 @@ Worker/timeout settings (overridable via env, see
 `.env.production.example`): `CELERY_TASK_TIME_LIMIT` (hard kill),
 `CELERY_TASK_SOFT_TIME_LIMIT` (raises inside the task first),
 `CELERY_WORKER_MAX_TASKS_PER_CHILD` (recycle worker processes to bound
-memory growth), `CELERY_WORKER_PREFETCH_MULTIPLIER`,
+memory growth), `CELERY_WORKER_CONCURRENCY`/`CELERY_WORKER_PREFETCH_MULTIPLIER`
+(default `1`/`1` — conservative for the documented VPS target, see below),
 `CELERY_BROKER_CONNECTION_TIMEOUT`, and a `visibility_timeout` transport
 option so a crashed worker's in-flight task is eventually retried by
 another worker rather than lost forever.
 
 Run the worker and beat scheduler as separate processes/services (see
-README "Background execution"), each with
-`DJANGO_SETTINGS_MODULE=config.settings.production` exported.
+README "Hybrid automation"), each with
+`DJANGO_SETTINGS_MODULE=config.settings.production` exported. **The worker
+must be started with `-Q market-fast,market-analysis,market-heavy,notifications,celery`**
+(already set in `docker-compose.yml`'s `celery-worker` command) — Celery
+only consumes the queue(s) it's told to, and skipping this means everything
+except live quote sync (daily append, full analysis, ML training, digests,
+feedback notifications) silently never runs.
+
+### VPS sizing
+
+Documented target: **Oracle Cloud "Always Free" A1 Flex — 2 OCPUs, ~12GB
+RAM, ~20 concurrent users.** At that size, run exactly one worker process
+(`CELERY_WORKER_CONCURRENCY=1`) — the heavy, slow tasks (full analysis, ML
+training) are scheduled for daily off-hours windows specifically so they
+don't need to run concurrently with quote-fetch traffic. Scale
+`CELERY_WORKER_CONCURRENCY` up, or split `market-heavy` onto its own worker
+container/queue, only if profiling shows the single worker genuinely can't
+keep up.
+
+### Inspecting task status / recovering a stuck task
+
+- **Admin Panel → Automation** — last success/failure per stage, currently-
+  running tasks, recent failures with a one-click **Retry**.
+- **Django Admin → Market → Task runs** — the full `TaskRun` history,
+  filterable by status/task name.
+- A run stuck in `started` for longer than ~20 minutes almost always means
+  its worker process died mid-task (see the `stuck_job_*` alert on the Ops
+  Report page) — the Redis-backed lock it was holding
+  (`market.services.locking.distributed_lock`) auto-expires on its own
+  `timeout`, so a new run isn't permanently blocked; use **Retry** on the
+  Admin Panel once you've confirmed the old worker really is gone (check
+  `docker compose ps celery-worker` / `docker compose logs celery-worker`).
+- `docker compose restart celery-worker` recovers a wedged worker without
+  touching `celery-beat` or losing the schedule.
+
+### Telegram ML daily report — setup & troubleshooting
+
+See README's "Telegram ML daily report" section for the full behavior
+(schedule, precision definitions, evidence levels, duplicate prevention).
+Deployment-specific notes:
+
+- Create the bot once via [@BotFather](https://t.me/BotFather); the token
+  goes in `TELEGRAM_BOT_TOKEN` (secrets store / `.env.docker`, never git).
+- Get `TELEGRAM_ADMIN_CHAT_ID` by messaging the bot once, then reading
+  `message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates` —
+  do this from a terminal/browser you control, never accept a chat id from
+  an inbound web request.
+- Nothing sends until both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ADMIN_CHAT_ID`
+  are set — until then the report still generates daily and is previewable
+  from the Admin Panel, so this is safe to deploy before the bot exists.
+- If the report stops sending: check Admin Panel → Telegram ML Report for
+  the last failure (redacted — never shows the token or full Telegram
+  response), then Django Admin → Notifications → Ml daily report deliveries
+  for the full history. Three consecutive failed report dates also raise an
+  Operational Alert.
+- A stuck/misconfigured chat id (bot blocked, wrong id) fails permanently
+  (not retried indefinitely) — fix the id/unblock the bot, then use
+  **Send / retry today's report** on the Admin Panel.
 
 ## Static & media files
 
@@ -229,6 +306,17 @@ gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3
 celery -A config worker --loglevel=info
 celery -A config beat --loglevel=info
 ```
+
+There is no public sign-up (see the README's "Roles & permissions"
+section) — after the first `migrate`, create the first Admin account
+before anyone can log in at all:
+
+```bash
+python manage.py createsuperuser
+```
+
+Every subsequent account (Staff or User) is created from that Admin's
+**Accounts → Create User / Create Staff** page, not from the shell.
 
 ## Deployment checks
 
@@ -327,7 +415,12 @@ Cloudflare's edge). Set up 2026-08-01 for domain `sma.is`.
 at `/app/data`, so ML model artifacts (`data/cache/*.pkl`, only ever
 read/written by the worker — web only reads precomputed DB rows) and
 `data/backups/` survive container rebuilds. Postgres data lives in the
-named volume `postgres_data`, independent of the containers themselves.
+named volume `postgres_data`, and `celery-beat`'s own schedule-state file
+lives in the named volume `beat_data` (`/app/beat/celerybeat-schedule`) —
+all three independent of the containers themselves. Exactly one
+`celery-beat` container is ever defined in `docker-compose.yml`; don't scale
+that service beyond `1` replica, or the schedule fires more than once per
+tick.
 
 **One-time setup:**
 

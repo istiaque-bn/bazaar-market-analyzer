@@ -231,6 +231,9 @@ def provenance_report() -> dict:
     for flags in PriceHistory.objects.exclude(quality_flags=[]).values_list("quality_flags", flat=True).iterator():
         flag_counts.update(flags)
 
+    from market.services.exchange_config import enabled_exchanges
+
+    enabled = enabled_exchanges()
     freshness = {}
     for ex in (Exchange.DSE, Exchange.CSE):
         last_batch = ImportBatch.objects.filter(exchange=ex, finished_at__isnull=False, error="").order_by("-finished_at").first()
@@ -239,6 +242,10 @@ def provenance_report() -> dict:
             "last_successful_batch_at": last_batch.finished_at.isoformat() if last_batch else None,
             "last_successful_batch_source": last_batch.source if last_batch else None,
             "latest_price_date": last_row.date.isoformat() if last_row else None,
+            # Staff reports must be able to tell "this exchange's data is
+            # genuinely stale/broken" apart from "this exchange is
+            # intentionally disabled and stopped refreshing on purpose".
+            "enabled": ex in enabled,
         }
 
     recent_batches = list(

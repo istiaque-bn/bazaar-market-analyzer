@@ -211,6 +211,12 @@ def sync_dse_pe_ratios() -> dict:
     so it's safe for display but must NOT be used as a walk-forward ML
     feature as-is — that would need a genuine daily time series to avoid
     leaking a stock's future P/E into historical training rows."""
+    from market.services.exchange_config import is_exchange_enabled
+
+    if not is_exchange_enabled(Exchange.DSE):
+        logger.info("DSE P/E sync skipped — DSE is disabled for this deployment (ENABLE_DSE=False).")
+        return {"ok": True, "skipped": "exchange_disabled", "updated": 0}
+
     df = fetch_dse_pe_ratios()
     if df is None or df.empty:
         return {"ok": False, "error": "No P/E data available", "updated": 0}
@@ -711,6 +717,12 @@ def seed_demo_universe(days: int = 260) -> dict:
 
 
 def sync_dse_live() -> dict:
+    from market.services.exchange_config import is_exchange_enabled
+
+    if not is_exchange_enabled(Exchange.DSE):
+        logger.info("DSE fetch skipped — DSE is disabled for this deployment (ENABLE_DSE=False).")
+        return {"ok": True, "skipped": "exchange_disabled", "source": None, "count": 0}
+
     batch = create_import_batch(DataSource.DSE_LIVE, exchange=Exchange.DSE)
     df = fetch_dse_live_via_bdshare()
     sub_source = "bdshare"
@@ -735,7 +747,22 @@ def sync_dse_history(
     use_synthetic_fallback: bool = False,
     limit: int | None = None,
     _prefetched: list[tuple[str, pd.DataFrame | None, str]] | None = None,
+    force: bool = False,
 ) -> dict:
+    """`force=True` is a deliberate, explicit override (see
+    management.commands.fetch_history's --force-disabled) for fetching a
+    currently-disabled exchange anyway — e.g. pre-warming catch-up history
+    ahead of re-enabling it. Every other/automatic caller leaves this
+    False, so the exchange-disabled guard below still applies to them."""
+    from market.services.exchange_config import is_exchange_enabled
+
+    if not force and not is_exchange_enabled(Exchange.DSE):
+        logger.info("DSE history fetch skipped — DSE is disabled for this deployment (ENABLE_DSE=False).")
+        # Matches the real return shape's field *types* (ok/skipped are
+        # counts here, unlike sync_dse_live's boolean "ok") so a caller
+        # that does arithmetic on these fields doesn't need a special case.
+        return {"ok": 0, "failed_or_fallback": 0, "skipped": 0, "codes": 0, "exchange_disabled": True}
+
     lookback = lookback_days or settings.LOOKBACK_DAYS
     end = timezone.localdate()
     start = end - timedelta(days=lookback)

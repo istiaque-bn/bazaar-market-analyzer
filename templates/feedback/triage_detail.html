@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}{{ fb.reference_number }}{% endblock %}
+{% block content %}
+<div class="section-title">
+  <div>
+    <h2>{{ fb.reference_number }} <span class="badge badge-hold">{{ fb.get_status_display }}</span>
+      {% if fb.admin_priority %}<span class="badge badge-watch">{{ fb.get_admin_priority_display }}</span>{% endif %}
+    </h2>
+    <p class="muted">
+      {{ fb.get_category_display }} · Reported by {{ fb.reporter_username_snapshot|default:"(deleted account)" }}
+      · {{ fb.created_at|date:"d M Y, H:i" }}
+      {% if fb.assigned_to %} · Assigned to {{ fb.assigned_to.username }}{% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="grid-2" style="align-items:start;">
+  <div class="panel">
+    <h3>{{ fb.title }}</h3>
+    <p><strong>Reporter priority:</strong> {{ fb.get_reporter_priority_display }} · <strong>Contact allowed:</strong> {% if fb.contact_allowed %}Yes{% else %}No{% endif %}</p>
+    {% if fb.page_path %}<p><strong>Page/feature:</strong> {{ fb.page_path }}</p>{% endif %}
+    <p>{{ fb.description|linebreaksbr }}</p>
+    {% if fb.steps_to_reproduce %}<p><strong>Steps to reproduce:</strong><br>{{ fb.steps_to_reproduce|linebreaksbr }}</p>{% endif %}
+    {% if fb.expected_behavior %}<p><strong>Expected:</strong> {{ fb.expected_behavior }}</p>{% endif %}
+    {% if fb.actual_behavior %}<p><strong>Actual:</strong> {{ fb.actual_behavior }}</p>{% endif %}
+
+    {% if fb.meta_trading_code %}
+    <div class="temp-password-box">
+      <p class="muted" style="margin-top:0;">Server-captured diagnostic metadata:</p>
+      <p>
+        {{ fb.meta_exchange }}:{{ fb.meta_trading_code }}
+        {% if fb.meta_analysis_date %} · analysis as of {{ fb.meta_analysis_date }}{% endif %}
+        {% if fb.meta_model_version %} · model {{ fb.meta_model_version }}{% endif %}
+        {% if fb.meta_quote_timestamp %} · quote as of {{ fb.meta_quote_timestamp|date:"d M Y, H:i" }}{% endif %}
+        {% if fb.meta_data_source %} · source {{ fb.meta_data_source }}{% endif %}
+      </p>
+    </div>
+    {% endif %}
+
+    {% if fb.duplicate_of %}<p class="muted">Duplicate of <a href="{% url 'feedback_detail' fb.duplicate_of.pk %}">{{ fb.duplicate_of.reference_number }}</a></p>{% endif %}
+
+    <h4 style="margin-top:1.2rem;">Public response (visible to reporter)</h4>
+    <form method="post" action="{% url 'feedback_post_response' fb.pk %}" class="form">
+      {% csrf_token %}
+      {{ response_form.response }}
+      <button class="btn btn-small" type="submit">Post response</button>
+    </form>
+
+    <h4 style="margin-top:1.2rem;">Internal notes (staff/admin only)</h4>
+    {% if fb.internal_notes %}<pre style="white-space:pre-wrap;font-family:inherit;">{{ fb.internal_notes }}</pre>{% endif %}
+    <form method="post" action="{% url 'feedback_add_note' fb.pk %}" class="form">
+      {% csrf_token %}
+      {{ note_form.note }}
+      <button class="btn btn-small btn-ghost" type="submit">Add internal note</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h3>Triage actions</h3>
+    <form method="post" action="{% url 'feedback_change_status' fb.pk %}" class="form">
+      {% csrf_token %}
+      <label>Status{{ status_form.status }}</label>
+      <label>Note (optional){{ status_form.note }}</label>
+      <button class="btn btn-small" type="submit">Update status</button>
+    </form>
+
+    <form method="post" action="{% url 'feedback_assign_to_me' fb.pk %}" style="margin-top:0.6rem;">
+      {% csrf_token %}<button class="btn btn-small btn-ghost" type="submit">Assign to me</button>
+    </form>
+
+    {% if can_manage_priority %}
+    <form method="post" action="{% url 'feedback_set_priority' fb.pk %}" class="form" style="margin-top:1rem;">
+      {% csrf_token %}
+      <label>Final (Admin) priority{{ priority_form.admin_priority }}</label>
+      <button class="btn btn-small btn-gold" type="submit">Set priority</button>
+    </form>
+
+    <form method="post" action="{% url 'feedback_mark_duplicate' fb.pk %}" class="form" style="margin-top:1rem;">
+      {% csrf_token %}
+      <label>{{ duplicate_form.original_reference.label }}{{ duplicate_form.original_reference }}</label>
+      <button class="btn btn-small btn-ghost" type="submit">Mark as duplicate</button>
+    </form>
+    {% endif %}
+
+    <h4 style="margin-top:1.2rem;">History</h4>
+    {% if events %}
+      <ul>
+        {% for e in events %}
+          <li><span class="muted">{{ e.created_at|date:"d M, H:i" }} — {{ e.actor_username_snapshot|default:"system" }}</span>: {{ e.get_event_type_display }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No history yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<p style="margin-top:1rem;"><a href="{% url 'feedback_triage_list' %}">&larr; Back to feedback triage</a></p>
+{% endblock %}

@@ -6,6 +6,7 @@ demonstrated edge.
 """
 from datetime import timedelta
 
+from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -17,7 +18,18 @@ def _mk_stock(code="VIEWX", **kwargs):
     return Stock.objects.create(exchange=Exchange.DSE, trading_code=code, company_name="View Test Co", **kwargs)
 
 
-class EmptyStateTests(TestCase):
+class _LoggedInTestCase(TestCase):
+    """stock_detail/dashboard require authentication (see accounts/roles.py)
+    — every test in this module needs a logged-in user before hitting them."""
+
+    def setUp(self):
+        counter = getattr(_LoggedInTestCase, "_counter", 0) + 1
+        _LoggedInTestCase._counter = counter
+        user = User.objects.create_user(username=f"viewer{counter}", password="Correct-Horse-Battery-Staple-42")
+        self.client.force_login(user)
+
+
+class EmptyStateTests(_LoggedInTestCase):
     def test_stock_with_no_analysis_shows_empty_state(self):
         stock = _mk_stock("EMPTY1")
         url = reverse("stock_detail", args=[stock.exchange, stock.trading_code])
@@ -27,7 +39,7 @@ class EmptyStateTests(TestCase):
         self.assertContains(resp, "Empty — no next-day close forecast yet")
 
 
-class StaleDataStateTests(TestCase):
+class StaleDataStateTests(_LoggedInTestCase):
     def test_old_analysis_shows_stale_badge(self):
         stock = _mk_stock("STALE1")
         AnalysisResult.objects.create(
@@ -44,7 +56,7 @@ class StaleDataStateTests(TestCase):
         self.assertContains(resp, "Stale data")
 
 
-class ModelUnavailableStateTests(TestCase):
+class ModelUnavailableStateTests(_LoggedInTestCase):
     def test_no_ml_model_on_record_shows_not_deployed(self):
         stock = _mk_stock("NOEDGE1")
         AnalysisResult.objects.create(
@@ -106,7 +118,7 @@ class ModelUnavailableStateTests(TestCase):
         self.assertContains(resp, "Demonstrated edge")
 
 
-class NextCloseForecastTickRoundingTests(TestCase):
+class NextCloseForecastTickRoundingTests(_LoggedInTestCase):
     """The next-day close forecast is a model output, not a real observed
     trade — real DSE/CSE closes always land on a 0.10-taka tick, so the
     displayed prediction should too (see market/services/price_format.py)."""
@@ -127,7 +139,7 @@ class NextCloseForecastTickRoundingTests(TestCase):
         self.assertNotContains(resp, "16.83")
 
 
-class ChartJsonSafetyTests(TestCase):
+class ChartJsonSafetyTests(_LoggedInTestCase):
     def test_no_raw_safe_filter_json_interpolation(self):
         stock = _mk_stock("SAFEJS1")
         base = timezone.localdate() - timedelta(days=5)
@@ -146,7 +158,7 @@ class ChartJsonSafetyTests(TestCase):
         self.assertIn("JSON.parse(document.getElementById('chart-data')", content)
 
 
-class DashboardEdgeBannerTests(TestCase):
+class DashboardEdgeBannerTests(_LoggedInTestCase):
     def test_dashboard_shows_no_edge_when_nothing_deployed(self):
         resp = self.client.get(reverse("dashboard"))
         self.assertEqual(resp.status_code, 200)

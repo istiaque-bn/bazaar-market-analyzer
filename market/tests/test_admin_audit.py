@@ -22,21 +22,26 @@ def _login_staff(client, username, *, superuser=False):
 
 
 class PipelineTriggerAuditTests(TestCase):
+    """Pipeline triggering is Admin-only (see market.views.run_pipeline_view
+    / accounts.decorators.admin_required) — these use a superuser login,
+    not plain Staff, which now gets 403 before the view (and its audit
+    write) ever runs — see market.tests.test_pipeline_auth."""
+
     @mock.patch("market.tasks.run_full_analysis_task.delay")
     def test_successful_trigger_is_audited_with_user_and_mode(self, mock_delay):
-        user = _login_staff(self.client, "staffer")
+        user = _login_staff(self.client, "admin_trigger", superuser=True)
         self.client.post(reverse("run_pipeline"), {"mode": "analyze"})
 
         log = AdminAuditLog.objects.get(action=AdminAuditAction.PIPELINE_TRIGGERED)
         self.assertEqual(log.user_id, user.id)
-        self.assertEqual(log.username_snapshot, "staffer")
+        self.assertEqual(log.username_snapshot, "admin_trigger")
         self.assertEqual(log.detail.get("mode"), "analyze")
         self.assertNotIn("error", log.detail)
 
     @mock.patch("market.tasks.run_full_analysis_task.delay")
     def test_failed_trigger_is_still_audited_with_error_detail(self, mock_delay):
         mock_delay.side_effect = RuntimeError("broker unreachable")
-        _login_staff(self.client, "staffer_err")
+        _login_staff(self.client, "admin_trigger_err", superuser=True)
         self.client.post(reverse("run_pipeline"), {"mode": "analyze"})
 
         log = AdminAuditLog.objects.get(action=AdminAuditAction.PIPELINE_TRIGGERED)
