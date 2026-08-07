@@ -299,3 +299,83 @@ def send_ml_daily_report(self, force: bool = False, manual: bool = False):
             return {"ok": True, "sent": True, "chunks": len(chunks)}
     except LockBusy:
         return {"ok": True, "skipped": "already_running"}
+
+
+# ---------------------------------------------------------------------------
+# Telegram market open/close notices
+# ---------------------------------------------------------------------------
+
+
+def _market_session_text(is_open: bool, as_of: date) -> str:
+    from market.services.exchange_config import enabled_exchanges
+
+    exchanges = " & ".join(enabled_exchanges()) or "Market"
+    if is_open:
+        return f"🟢 {exchanges} market is now OPEN — {as_of.isoformat()}, 10:00 Asia/Dhaka"
+    return f"🔴 {exchanges} market is now CLOSED — {as_of.isoformat()}, 14:45 Asia/Dhaka"
+
+
+def _send_market_session_notification(is_open: bool) -> dict:
+    """Shared body for the open/close notice tasks below. Same idempotency
+    shape as send_daily_digest: a per-day Alert(user=None, title=...) row
+    doubles as both the in-app audit record and the duplicate-send guard,
+    inside a lock so a retry/double beat-fire can't race past the check."""
+    from market.services.locking import LockBusy, distributed_lock
+    from market.services.market_hours import TRADING_WEEKDAYS
+    from market.services.trading_calendar import closure_reason
+
+    today = timezone.localdate()
+    if today.weekday() not in TRADING_WEEKDAYS or closure_reason(today) is not None:
+        return {"ok": True, "skipped": "non_trading_day"}
+    if not (settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_ADMIN_CHAT_ID):
+        return {"ok": True, "skipped": "not_configured"}
+
+    kind = "open" if is_open else "close"
+    title = f"Market {kind} {today.isoformat()}"
+    try:
+        with distributed_lock(f"market-{kind}-notice:{today.isoformat()}", timeout=60, blocking_timeout=0):
+            if Alert.objects.filter(user__isnull=True, title=title).exists():
+                return {"ok": True, "skipped": "already_sent"}
+            text = _market_session_text(is_open, today)
+            sent = send_telegram_message(settings.TELEGRAM_ADMIN_CHAT_ID, text)
+            Alert.objects.create(
+                user=None,
+                channel=AlertChannel.IN_APP,
+                title=title,
+                message=text,
+                is_sent=True,
+                sent_at=timezone.now(),
+            )
+            return {"ok": True, "sent": sent}
+    except LockBusy:
+        return {"ok": True, "skipped": "already_running"}
+
+
+@shared_task(
+    name="notifications.tasks.send_market_open_notification",
+    autoretry_for=(TimeoutError, OperationalError, requests.exceptions.RequestException),
+    retry_backoff=True,
+    retry_backoff_max=120,
+    retry_jitter=True,
+    max_retries=3,
+    time_limit=60,
+    soft_time_limit=45,
+)
+@record_task_run("notifications.tasks.send_market_open_notification")
+def send_market_open_notification():
+    return _send_market_session_notification(is_open=True)
+
+
+@shared_task(
+    name="notifications.tasks.send_market_close_notification",
+    autoretry_for=(TimeoutError, OperationalError, requests.exceptions.RequestException),
+    retry_backoff=True,
+    retry_backoff_max=120,
+    retry_jitter=True,
+    max_retries=3,
+    time_limit=60,
+    soft_time_limit=45,
+)
+@record_task_run("notifications.tasks.send_market_close_notification")
+def send_market_close_notification():
+    return _send_market_session_notification(is_open=False)

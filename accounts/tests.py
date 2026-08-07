@@ -227,6 +227,25 @@ class LoginRedirectTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
 
+class NoStoreAfterLogoutTests(TestCase):
+    """Authenticated pages must be marked uncacheable so the browser's
+    back-forward cache can't replay them after logout."""
+
+    def test_authenticated_page_is_marked_no_store(self):
+        make_user("nostore_user")
+        self.client.login(username="nostore_user", password=PASSWORD)
+        response = self.client.get(reverse("dashboard"))
+        self.assertIn("no-store", response["Cache-Control"])
+
+    def test_page_is_no_store_again_after_logout(self):
+        make_user("nostore_user2")
+        self.client.login(username="nostore_user2", password=PASSWORD)
+        self.client.post(reverse("logout"))
+        response = self.client.get(reverse("dashboard"))
+        self.assertNotIn("no-store", response.get("Cache-Control", ""))
+        self.assertRedirects(response, f"{reverse('login')}?next={reverse('dashboard')}")
+
+
 class DeactivatedAccountSessionTests(TestCase):
     """A deactivated account must lose access on its very next request,
     even mid-session (see accounts.middleware.AccountStateMiddleware)."""

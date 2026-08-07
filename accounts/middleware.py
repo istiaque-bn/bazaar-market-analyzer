@@ -52,3 +52,30 @@ class AccountStateMiddleware:
                         pass
 
         return self.get_response(request)
+
+
+class NoStoreForAuthenticatedMiddleware:
+    """Marks every response served to a signed-in user as uncacheable.
+
+    Without this, a browser can restore a dashboard/panel page straight
+    from its back-forward cache after logout — the page still renders
+    with the old session's data because no request ever reaches the
+    server to notice the user is gone. `Cache-Control: no-store` opts
+    the page out of bfcache (and disk/memory cache) entirely, so
+    clicking Back after signing out forces a real request, which then
+    hits `login_required`/`AccountStateMiddleware` like any other
+    anonymous hit.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        if request.path.startswith("/static/") or request.path.startswith("/media/"):
+            return response
+        user = getattr(request, "user", None)
+        if user is not None and getattr(user, "is_authenticated", False):
+            response["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+            response["Pragma"] = "no-cache"
+        return response

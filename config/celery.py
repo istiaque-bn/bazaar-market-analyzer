@@ -74,6 +74,12 @@ app.conf.beat_schedule = {
         "task": "market.tasks.append_daily_bars",
         "schedule": crontab(hour=10, minute=5, day_of_week=_BD_WEEK),
     },
+    # Telegram open/close notices — the task itself skips non-trading days
+    # (holiday calendar) and no-ops if Telegram isn't configured.
+    "market-open-telegram": {
+        "task": "notifications.tasks.send_market_open_notification",
+        "schedule": crontab(hour=10, minute=0, day_of_week=_BD_WEEK),
+    },
     "append-market-1405": {
         "task": "market.tasks.append_daily_bars",
         "schedule": crontab(hour=14, minute=5, day_of_week=_BD_WEEK),
@@ -83,6 +89,10 @@ app.conf.beat_schedule = {
     # The task itself honors AUTO_CLOSE_LEARN.
     "close-learn-settlement-1445": {
         "task": "market.tasks.close_learn_settlement",
+        "schedule": crontab(hour=14, minute=45, day_of_week=_BD_WEEK),
+    },
+    "market-close-telegram": {
+        "task": "notifications.tasks.send_market_close_notification",
         "schedule": crontab(hour=14, minute=45, day_of_week=_BD_WEEK),
     },
     "send-daily-digest": {

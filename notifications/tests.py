@@ -1,4 +1,4 @@
-from datetime import datetime, timezone as dt_timezone
+from datetime import date, datetime, timezone as dt_timezone
 from unittest import mock
 
 from django.contrib.auth.models import User
@@ -12,7 +12,15 @@ from accounts.models import UserProfile
 from market.models import AdminAuditAction, AdminAuditLog, MLModelVersion
 from notifications.models import Alert, AlertChannel, MlDailyReportDelivery, MlDailyReportStatus
 from notifications.services import TelegramPermanentError, TelegramTransientError, send_telegram_message, send_telegram_message_tracked
-from notifications.tasks import _compare_with_previous, _digest_text, _idempotency_key, send_daily_digest, send_ml_daily_report
+from notifications.tasks import (
+    _compare_with_previous,
+    _digest_text,
+    _idempotency_key,
+    send_daily_digest,
+    send_market_close_notification,
+    send_market_open_notification,
+    send_ml_daily_report,
+)
 
 PASSWORD = "Correct-Horse-Battery-Staple-42"
 FIXED_NOW_BEFORE = datetime(2026, 8, 5, 4, 0, tzinfo=dt_timezone.utc)  # 10:00 Asia/Dhaka
@@ -77,6 +85,64 @@ class DailyDigestDedupTests(TestCase):
         self.assertEqual(Alert.objects.count(), 1)
         self.assertIn("skipped", second)
         self.assertNotIn("skipped", first)
+
+
+@override_settings(TELEGRAM_BOT_TOKEN="tok-abc", TELEGRAM_ADMIN_CHAT_ID="999888777")
+class MarketSessionNotificationTests(TestCase):
+    """Same idempotency shape as send_daily_digest (a per-day, user=None
+    Alert row doubles as the audit record and the duplicate-send guard),
+    plus the trading-day gate these two tasks add on top."""
+
+    TRADING_DAY = date(2026, 8, 9)  # Sunday — a real DSE trading day, not a seeded holiday
+    NON_TRADING_WEEKDAY = date(2026, 8, 7)  # Friday — outside TRADING_WEEKDAYS
+
+    @mock.patch("notifications.tasks.send_telegram_message", return_value=True)
+    def test_skips_on_non_trading_weekday(self, mock_send):
+        with mock.patch("notifications.tasks.timezone.localdate", return_value=self.NON_TRADING_WEEKDAY):
+            result = send_market_open_notification()
+        self.assertEqual(result.get("skipped"), "non_trading_day")
+        mock_send.assert_not_called()
+
+    @mock.patch("market.services.trading_calendar.closure_reason", return_value="Eid holiday")
+    @mock.patch("notifications.tasks.send_telegram_message", return_value=True)
+    def test_skips_on_holiday(self, mock_send, mock_closure):
+        with mock.patch("notifications.tasks.timezone.localdate", return_value=self.TRADING_DAY):
+            result = send_market_open_notification()
+        self.assertEqual(result.get("skipped"), "non_trading_day")
+        mock_send.assert_not_called()
+
+    @override_settings(TELEGRAM_BOT_TOKEN="", TELEGRAM_ADMIN_CHAT_ID="")
+    @mock.patch("notifications.tasks.send_telegram_message", return_value=True)
+    def test_skips_when_not_configured(self, mock_send):
+        with mock.patch("notifications.tasks.timezone.localdate", return_value=self.TRADING_DAY):
+            result = send_market_open_notification()
+        self.assertEqual(result.get("skipped"), "not_configured")
+        mock_send.assert_not_called()
+
+    @mock.patch("notifications.tasks.send_telegram_message", return_value=True)
+    def test_sends_and_records_alert_on_trading_day(self, mock_send):
+        with mock.patch("notifications.tasks.timezone.localdate", return_value=self.TRADING_DAY):
+            result = send_market_open_notification()
+        self.assertTrue(result.get("sent"))
+        mock_send.assert_called_once()
+        self.assertEqual(Alert.objects.filter(user__isnull=True).count(), 1)
+
+    @mock.patch("notifications.tasks.send_telegram_message", return_value=True)
+    def test_duplicate_trigger_same_day_is_idempotent(self, mock_send):
+        with mock.patch("notifications.tasks.timezone.localdate", return_value=self.TRADING_DAY):
+            first = send_market_open_notification()
+            second = send_market_open_notification()
+        self.assertNotIn("skipped", first)
+        self.assertEqual(second.get("skipped"), "already_sent")
+        mock_send.assert_called_once()
+
+    @mock.patch("notifications.tasks.send_telegram_message", return_value=True)
+    def test_open_and_close_are_independent_alerts(self, mock_send):
+        with mock.patch("notifications.tasks.timezone.localdate", return_value=self.TRADING_DAY):
+            send_market_open_notification()
+            send_market_close_notification()
+        self.assertEqual(Alert.objects.filter(user__isnull=True).count(), 2)
+        self.assertEqual(mock_send.call_count, 2)
 
 
 class AlertPrivacyTests(TestCase):

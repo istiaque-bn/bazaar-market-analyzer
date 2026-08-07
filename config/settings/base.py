@@ -68,6 +68,9 @@ MIDDLEWARE = [
     # out a deactivated account's live session and forces a
     # temporary-password holder through the password-change screen.
     "accounts.middleware.AccountStateMiddleware",
+    # After auth is resolved so it can see request.user; before
+    # MessageMiddleware doesn't matter (it only touches headers, not body).
+    "accounts.middleware.NoStoreForAuthenticatedMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
