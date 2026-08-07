@@ -24,6 +24,9 @@ from django.conf import settings
 from django.db.models import Avg
 from django.utils import timezone
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import balanced_accuracy_score, f1_score, precision_score
+from xgboost import XGBClassifier
 
 from market.models import CloseLearnState, Exchange, NextDayCloseForecast, PriceHistory, Stock
 from market.services.indicators import compute_indicators, prices_to_df
@@ -70,6 +73,16 @@ FEATURE_COLS = [
     "sector_ret_1d",
     "breadth",
     "rel_ret_1d",
+    "return_1d",
+    "return_2d",
+    "return_3d",
+    "intraday_return",
+    "overnight_gap",
+    "range_atr",
+    "close_location",
+    "volume_acceleration",
+    "turnover_acceleration",
+    "up_down_streak",
 ]
 TECH_COLS = [
     "rsi_14",
@@ -83,7 +96,20 @@ TECH_COLS = [
 ]
 BIAS_EMA_ALPHA = 0.08
 STOCK_BIAS_ALPHA = 0.12
+# Bias exists to correct a small, slow systematic drift in the raw
+# analogue signal (whose own magnitude is ~0.08% historically) — not to
+# out-vote it. Uncapped, the global EMA was observed to drift to ~2.8%,
+# 16x the signal it's supposed to merely correct, because it gets
+# updated once per settled forecast (i.e. many times per batch) rather
+# than once per trading day, so it chases a single day's cross-sectional
+# noise instead of tracking a genuine multi-day drift. Well-behaved
+# per-stock biases stayed under 0.9% (actual_ret std is ~2.7%), so 1%
+# comfortably bounds real drift while blocking the runaway case.
+RETURN_BIAS_CAP = 0.01
 MIN_HISTORY = 40
+FLAT_RETURN_THRESHOLD = 0.005
+MIN_DIRECTION_CONFIDENCE = 0.65
+ROLLING_WINDOW_DAYS = (365, 730, 1095)
 LIQUID_TOP_N = 80
 STOCK_BIAS_MIN_SETTLES = 8
 
@@ -250,6 +276,19 @@ def _tech_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
     out["dist_sma20"] = out["close"] / out["sma_20"] - 1
     out["dist_sma50"] = out["close"] / out["sma_50"] - 1
     out["stock_ret_1d"] = out["close"].pct_change()
+    out["return_1d"] = out["stock_ret_1d"]
+    out["return_2d"] = out["close"].pct_change(2)
+    out["return_3d"] = out["close"].pct_change(3)
+    out["intraday_return"] = out["close"] / out["open"].replace(0, np.nan) - 1
+    out["overnight_gap"] = out["open"] / out["close"].shift(1).replace(0, np.nan) - 1
+    out["range_atr"] = (out["high"] - out["low"]) / out["atr_14"].replace(0, np.nan)
+    out["close_location"] = (out["close"] - out["low"]) / (out["high"] - out["low"]).replace(0, np.nan)
+    out["volume_acceleration"] = out["volume"] / out["volume"].rolling(5, min_periods=3).mean().replace(0, np.nan)
+    turnover = out["close"] * out["volume"]
+    out["turnover_acceleration"] = turnover / turnover.rolling(20, min_periods=10).mean().replace(0, np.nan)
+    signs = np.sign(out["stock_ret_1d"].fillna(0.0))
+    groups = signs.ne(signs.shift()).cumsum()
+    out["up_down_streak"] = signs * signs.groupby(groups).cumcount().add(1)
     return out
 
 
@@ -375,11 +414,21 @@ def _ml_one_day_return(feats: dict, exchange: str | None = None) -> float | None
         return None
     try:
         cols = bundle.get("features", FEATURE_COLS)
-        payload = {c: feats.get(c, 0.0) for c in cols}
+        payload = {c: (0.0 if feats.get(c) is None else feats.get(c)) for c in cols}
         row = pd.DataFrame([payload])
         imputer = bundle.get("imputer")
         if imputer is not None:
             row = apply_imputer(imputer, row)
+        if bundle.get("task") == "three_class_direction":
+            probs = bundle["model"].predict_proba(row)[0]
+            calibrator = bundle.get("calibrator")
+            if calibrator is not None:
+                probs = calibrator.predict_proba(np.asarray(probs).reshape(1, -1))[0]
+            confidence = float(np.max(probs))
+            if confidence < float(bundle.get("abstain_threshold", MIN_DIRECTION_CONFIDENCE)):
+                return 0.0
+            representatives = np.asarray(bundle.get("class_returns", [-0.01, 0.0, 0.01]), dtype=float)
+            return float(np.dot(probs, representatives))
         if "classifier" in bundle and "regressor" in bundle:
             p_move = float(bundle["classifier"].predict_proba(row)[0, 1])
             magnitude = float(bundle["regressor"].predict(row)[0])
@@ -503,6 +552,49 @@ def compute_skill_metrics(limit: int = 8000) -> dict:
     }
 
 
+def compute_candidate_skill(limit: int = 8000) -> dict:
+    """Skill of the analogue(+ctx+bias[+ml]) CANDIDATE prediction vs the
+    naive baseline, independent of whether it was actually served. Reads
+    features->candidate_return, which is always recorded alongside the
+    served fields (see generate_forecasts_for_as_of), falling back to the
+    served predicted_return for forecasts written before this gate existed
+    — at that time the served value was always the candidate, so the
+    fallback is exact, not an approximation. Used by
+    _maybe_toggle_naive_fallback to decide whether the naive-fallback
+    serving gate should be engaged or lifted."""
+    rows = list(
+        NextDayCloseForecast.objects.filter(actual_close__isnull=False)
+        .order_by("-target_date")
+        .values_list("last_close", "predicted_return", "actual_close", "features")[:limit]
+    )
+    if not rows:
+        return {"n": 0, "skill_vs_naive": None}
+
+    model_abs_ret = []
+    base_abs_ret = []
+    for last_c, pred_r, act_c, feats in rows:
+        if not last_c or not act_c:
+            continue
+        actual_ret = act_c / last_c - 1
+        candidate = (feats or {}).get("candidate_return")
+        candidate = float(candidate) if candidate is not None else float(pred_r or 0.0)
+        model_abs_ret.append(abs(candidate - actual_ret))
+        base_abs_ret.append(abs(actual_ret))
+
+    n = len(model_abs_ret)
+    if not n:
+        return {"n": 0, "skill_vs_naive": None}
+    m_mae = float(np.mean(model_abs_ret))
+    b_mae = float(np.mean(base_abs_ret))
+    skill = float(1.0 - m_mae / b_mae) if b_mae > 1e-12 else None
+    return {
+        "n": n,
+        "candidate_mae_return": round(m_mae, 6),
+        "baseline_mae_return": round(b_mae, 6),
+        "skill_vs_naive": None if skill is None else round(skill, 4),
+    }
+
+
 MIN_LIVE_SETTLES_FOR_GATE = 50
 
 
@@ -535,6 +627,40 @@ def _maybe_downgrade_on_live_skill(skill: dict) -> None:
         )
 
 
+def _maybe_toggle_naive_fallback(candidate_skill: dict) -> None:
+    """Serving gate for the forecast itself — the counterpart of
+    _maybe_downgrade_on_live_skill for the analogue(+ctx+bias[+ml])
+    candidate rather than just the ML component. Gates on the CANDIDATE
+    skill (see compute_candidate_skill), not the skill of whatever was
+    actually served, so this can recover on its own once the candidate's
+    live accuracy improves — gating on served skill would get stuck
+    comparing naive-vs-naive forever once fallback engages, since a
+    served naive prediction trivially ties the naive baseline. Flips in
+    either direction once enough live settles exist; below that threshold
+    it leaves the current setting alone rather than acting on a noisy
+    small sample."""
+    if not candidate_skill or candidate_skill.get("n", 0) < MIN_LIVE_SETTLES_FOR_GATE:
+        return
+    cskill = candidate_skill.get("skill_vs_naive")
+    if cskill is None:
+        return
+    should_fallback = cskill <= 0
+    state = get_learn_state()
+    extras = dict(state.extras or {})
+    changed = bool(extras.get("serve_naive_fallback", False)) != should_fallback
+    extras["serve_naive_fallback"] = should_fallback
+    extras["candidate_skill"] = candidate_skill
+    state.extras = extras
+    state.save(update_fields=["extras", "updated_at"])
+    if changed:
+        logger.warning(
+            "next-close serving gate: candidate skill_vs_naive=%.4f over n=%d live settles -> serve_naive_fallback=%s",
+            cskill,
+            candidate_skill.get("n", 0),
+            should_fallback,
+        )
+
+
 def generate_forecasts_for_as_of(as_of: date | None = None, limit: int | None = None) -> dict:
     """After close on `as_of`, write next-day close forecasts for active stocks."""
     as_of = as_of or timezone.localdate()
@@ -543,6 +669,9 @@ def generate_forecasts_for_as_of(as_of: date | None = None, limit: int | None = 
     target = next_trading_day(as_of)
     liquid = liquid_stock_ids()
     _clear_context_cache()
+
+    state = get_learn_state()
+    naive_fallback_active = bool((state.extras or {}).get("serve_naive_fallback", False))
 
     qs = Stock.objects.filter(is_active=True, exchange__in=enabled_exchanges()).order_by("trading_code")
     if limit:
@@ -573,16 +702,26 @@ def generate_forecasts_for_as_of(as_of: date | None = None, limit: int | None = 
             skipped += 1
             continue
 
+        candidate_return = pred["predicted_return"]
+        if naive_fallback_active:
+            served_close = pred["last_close"]
+            served_return = 0.0
+            served_method = f"{pred['method']}+naive_gate"
+        else:
+            served_close = pred["predicted_close"]
+            served_return = candidate_return
+            served_method = pred["method"]
+
         _, was_created = NextDayCloseForecast.objects.update_or_create(
             stock=stock,
             target_date=target,
             defaults={
                 "as_of": as_of,
                 "last_close": pred["last_close"],
-                "predicted_close": pred["predicted_close"],
-                "predicted_return": pred["predicted_return"],
+                "predicted_close": served_close,
+                "predicted_return": served_return,
                 "confidence": pred["confidence"],
-                "method": pred["method"],
+                "method": served_method,
                 "features": {
                     **pred["features"],
                     "raw_return": pred["raw_return"],
@@ -591,6 +730,7 @@ def generate_forecasts_for_as_of(as_of: date | None = None, limit: int | None = 
                     "stock_bias": s_bias,
                     "liquid": stock.id in liquid,
                     "analogue_samples": pred["samples"],
+                    "candidate_return": candidate_return,
                 },
             },
         )
@@ -661,13 +801,15 @@ def settle_due_forecasts(through_date: date | None = None) -> dict:
             ):
                 dir_hits += 1
 
-        bias = (1 - BIAS_EMA_ALPHA) * bias + BIAS_EMA_ALPHA * ret_err
+        bias = float(np.clip((1 - BIAS_EMA_ALPHA) * bias + BIAS_EMA_ALPHA * ret_err, -RETURN_BIAS_CAP, RETURN_BIAS_CAP))
 
         # Per-stock bias for liquid names
         if fc.stock_id in liquid:
             st = get_learn_state(stock_bias_key(fc.stock_id))
             sb = float(st.return_bias or 0.0)
-            st.return_bias = (1 - STOCK_BIAS_ALPHA) * sb + STOCK_BIAS_ALPHA * ret_err
+            st.return_bias = float(
+                np.clip((1 - STOCK_BIAS_ALPHA) * sb + STOCK_BIAS_ALPHA * ret_err, -RETURN_BIAS_CAP, RETURN_BIAS_CAP)
+            )
             st.settled_count = int(st.settled_count or 0) + 1
             st.last_settled_at = timezone.now()
             st.save(update_fields=["return_bias", "settled_count", "last_settled_at", "updated_at"])
@@ -705,9 +847,15 @@ def settle_due_forecasts(through_date: date | None = None) -> dict:
         state.extras = {**(state.extras or {}), "skill": skill}
         state.save(update_fields=["extras", "updated_at"])
 
+    # Separately fetched/saved so it can't clobber (or be clobbered by) the
+    # extras write above — see _maybe_toggle_naive_fallback's docstring.
+    candidate_skill = compute_candidate_skill()
+    _maybe_toggle_naive_fallback(candidate_skill)
+
     return {
         "ok": True,
         "settled": settled,
+        "candidate_skill": candidate_skill,
         "return_bias": round(bias, 6),
         "mae": round(float(state.mae), 4),
         "mape": round(float(state.mape), 4),
@@ -742,7 +890,14 @@ def _build_next_close_panel(exchange: str, limit_stocks: int = 80) -> pd.DataFra
         end = pd.Timestamp(tech["date"].iloc[-1]).date()
         out = _attach_market_features(tech, stock.exchange, stock.sector or "", start=start, end=end)
         out["fwd_ret_1"] = out["close"].shift(-1) / out["close"] - 1
-        cols = out[["date", "stock_ret_1d"] + FEATURE_COLS + ["fwd_ret_1"]].replace([np.inf, -np.inf], np.nan).dropna()
+        out["direction_label"] = np.select(
+            [out["fwd_ret_1"] < -FLAT_RETURN_THRESHOLD, out["fwd_ret_1"] > FLAT_RETURN_THRESHOLD],
+            [0, 2], default=1,
+        )
+        # Require genuinely tradable current and next sessions.
+        out["next_volume"] = out["volume"].shift(-1)
+        cols = out[["date", "stock_ret_1d"] + FEATURE_COLS + ["fwd_ret_1", "direction_label", "next_volume"]].replace([np.inf, -np.inf], np.nan).dropna()
+        cols = cols[(cols["volume_acceleration"] > 0) & (cols["next_volume"] > 0)]
         if cols.empty:
             continue
         cols = cols.copy()
@@ -884,6 +1039,69 @@ def _walk_forward_evaluate_next_close(panel: pd.DataFrame, n_folds: int = 5) -> 
     }
 
 
+def _direction_model(kind: str):
+    if kind == "logistic":
+        return LogisticRegression(max_iter=1500, class_weight="balanced", random_state=42)
+    if kind == "random_forest":
+        return RandomForestClassifier(
+            n_estimators=120, max_depth=8, min_samples_leaf=12, class_weight="balanced", random_state=42, n_jobs=-1
+        )
+    return XGBClassifier(
+        n_estimators=160, max_depth=4, learning_rate=0.04, subsample=0.8, colsample_bytree=0.8,
+        reg_alpha=0.2, reg_lambda=2.0, objective="multi:softprob", num_class=3,
+        eval_metric="mlogloss", random_state=42, n_jobs=-1,
+    )
+
+
+def _direction_metrics(y_true, y_pred, probs=None) -> dict:
+    out = {
+        "n": int(len(y_true)),
+        "accuracy": round(float(np.mean(np.asarray(y_true) == np.asarray(y_pred))), 4),
+        "balanced_accuracy": round(float(balanced_accuracy_score(y_true, y_pred)), 4),
+        "macro_f1": round(float(f1_score(y_true, y_pred, average="macro", zero_division=0)), 4),
+        "macro_precision": round(float(precision_score(y_true, y_pred, average="macro", zero_division=0)), 4),
+        "direction_hit_rate": round(float(np.mean(np.asarray(y_true) == np.asarray(y_pred))), 4),
+    }
+    if probs is not None:
+        confident = np.max(probs, axis=1) >= MIN_DIRECTION_CONFIDENCE
+        out["coverage"] = round(float(confident.mean()), 4)
+        out["high_confidence_precision"] = round(float(np.mean(np.asarray(y_true)[confident] == np.asarray(y_pred)[confident])), 4) if confident.any() else None
+    return out
+
+
+def _evaluate_direction_candidate(panel: pd.DataFrame, *, kind: str, rolling_days: int, n_folds: int = 3) -> dict:
+    folds = walk_forward_folds(panel["date"], n_folds=n_folds, embargo_days=EMBARGO_CALENDAR_DAYS)
+    rows, metrics, baselines = [], [], []
+    for f in folds:
+        train_start = f.train_end - pd.Timedelta(days=rolling_days)
+        train = panel[(panel["date"] >= train_start) & (panel["date"] <= f.train_end)]
+        test = panel[(panel["date"] >= f.test_start) & (panel["date"] <= f.test_end)]
+        if len(train) < MIN_FOLD_TRAIN_ROWS or len(test) < MIN_FOLD_TEST_ROWS or train["direction_label"].nunique() < 3:
+            continue
+        X_train, X_test = train[FEATURE_COLS].clip(-50, 50), test[FEATURE_COLS].clip(-50, 50)
+        y_train = train["direction_label"].astype(int).to_numpy()
+        y_test = test["direction_label"].astype(int).to_numpy()
+        imputer = fit_median_imputer(X_train)
+        X_train_i, X_test_i = apply_imputer(imputer, X_train), apply_imputer(imputer, X_test)
+        model = _direction_model(kind)
+        model.fit(X_train_i, y_train)
+        probs = model.predict_proba(X_test_i)
+        pred = np.argmax(probs, axis=1)
+        m = _direction_metrics(y_test, pred, probs)
+        majority = int(pd.Series(y_train).mode().iloc[0])
+        b = _direction_metrics(y_test, np.full(len(y_test), majority))
+        metrics.append(m); baselines.append(b)
+        rows.append({"fold": f.fold, "train_start": train_start.date().isoformat(), "train_end": f.train_end.date().isoformat(), "test_start": f.test_start.date().isoformat(), "test_end": f.test_end.date().isoformat(), "train_rows": len(train), "test_rows": len(test), "metrics": m, "skill": round(m["balanced_accuracy"] - b["balanced_accuracy"], 4)})
+    if not rows:
+        return {"ok": False, "error": "no usable rolling folds", "model_kind": kind, "rolling_days": rolling_days}
+    keys = ("accuracy", "balanced_accuracy", "macro_f1", "macro_precision", "direction_hit_rate", "coverage", "high_confidence_precision")
+    agg = {k: round(float(np.mean([m[k] for m in metrics if m.get(k) is not None])), 4) if any(m.get(k) is not None for m in metrics) else None for k in keys}
+    agg["n"] = sum(m["n"] for m in metrics)
+    base = {k: round(float(np.mean([m[k] for m in baselines if m.get(k) is not None])), 4) if any(m.get(k) is not None for m in baselines) else None for k in keys}
+    skill = round(agg["balanced_accuracy"] - base["balanced_accuracy"], 4)
+    return {"ok": True, "model_kind": kind, "rolling_days": rolling_days, "n_folds_used": len(rows), "folds": rows, "model_metrics": agg, "baseline_metrics": {"majority_class": base}, "skill_vs_baseline": {"majority_class": skill}, "skill_vs_naive": skill, "recent_fold_skill": rows[-1]["skill"]}
+
+
 def _justify_combining_next_close(dse_eval: dict, cse_eval: dict) -> tuple[bool, str]:
     if not dse_eval.get("ok") or not cse_eval.get("ok"):
         return False, "one exchange had too little data to evaluate separately, so pooling can't be justified against it"
@@ -901,25 +1119,45 @@ def _justify_combining_next_close(dse_eval: dict, cse_eval: dict) -> tuple[bool,
 
 
 def _final_fit_and_save_next_close(panel: pd.DataFrame, eval_result: dict, *, exchange_scope: str, model_path: Path) -> dict:
+    rolling_days = int(eval_result.get("rolling_days", 730))
+    cutoff = panel["date"].max()
+    panel = panel[panel["date"] >= cutoff - pd.Timedelta(days=rolling_days)].copy()
     X = panel[FEATURE_COLS].clip(lower=-50, upper=50)
-    y = panel["fwd_ret_1"].clip(-0.2, 0.2).to_numpy()
+    y = panel["direction_label"].astype(int).to_numpy()
     imputer = fit_median_imputer(X)
     X_i = apply_imputer(imputer, X)
-    classifier, regressor = _fit_zero_inflated_next_close(X_i, y)
+    dates = np.sort(panel["date"].unique())
+    cal_start = pd.Timestamp(dates[max(1, int(len(dates) * 0.85))]) if len(dates) > 10 else cutoff
+    fit_mask = (panel["date"] < cal_start).to_numpy()
+    cal_mask = ~fit_mask
+    model = _direction_model(eval_result.get("model_kind", "xgboost"))
+    model.fit(X_i.loc[fit_mask], y[fit_mask])
+    calibrator = None
+    if cal_mask.sum() >= 100 and len(np.unique(y[cal_mask])) == 3:
+        calibrator = LogisticRegression(max_iter=1000, random_state=42)
+        calibrator.fit(model.predict_proba(X_i.loc[cal_mask]), y[cal_mask])
+    class_returns = [float(panel.loc[panel["direction_label"] == c, "fwd_ret_1"].median()) for c in (0, 1, 2)]
 
     skill = eval_result.get("skill_vs_naive")
-    is_active = skill is not None and skill > 0
+    model_metrics = eval_result.get("model_metrics", {})
+    is_active = bool(
+        skill is not None and skill > 0
+        and eval_result.get("recent_fold_skill", 0) > 0
+        and (model_metrics.get("high_confidence_precision") or 0) > (model_metrics.get("accuracy") or 0)
+    )
     status = STATUS_ACTIVE if is_active else STATUS_EXPERIMENTAL
 
     backup_path = backup_existing_model(model_path)
     version = new_version_tag()
     data_cutoff = panel["date"].max().date()
-    model_metrics = eval_result.get("model_metrics", {})
-
     joblib.dump(
         {
-            "classifier": classifier,
-            "regressor": regressor,
+            "task": "three_class_direction",
+            "model": model,
+            "calibrator": calibrator,
+            "class_returns": class_returns,
+            "flat_threshold": FLAT_RETURN_THRESHOLD,
+            "abstain_threshold": MIN_DIRECTION_CONFIDENCE,
             "imputer": imputer,
             "features": FEATURE_COLS,
             "version": version,
@@ -931,6 +1169,8 @@ def _final_fit_and_save_next_close(panel: pd.DataFrame, eval_result: dict, *, ex
             "mae": model_metrics.get("mae"),
             "direction_hit": model_metrics.get("direction_hit_rate"),
             "skill_vs_naive": skill,
+            "model_kind": eval_result.get("model_kind"),
+            "rolling_days": rolling_days,
         },
         model_path,
     )
@@ -952,7 +1192,7 @@ def _final_fit_and_save_next_close(panel: pd.DataFrame, eval_result: dict, *, ex
         },
         file_path=str(model_path),
         backup_path=backup_path,
-        notes="" if is_active else "Non-positive out-of-sample skill vs zero-return baseline; not deployed for confident output.",
+        notes="" if is_active else "Three-class candidate failed positive overall/recent skill or high-confidence precision gate; not deployed.",
     )
 
     if exchange_scope == "combined":
@@ -986,45 +1226,32 @@ def _final_fit_and_save_next_close(panel: pd.DataFrame, eval_result: dict, *, ex
 
 
 def train_next_close_model(limit_stocks: int = 80) -> dict:
-    """Evaluate + (re)train the next-day-close regressor. Always
-    evaluates DSE and CSE separately via chronological walk-forward CV;
-    only pools them into one deployed model when
-    _justify_combining_next_close() supports it."""
+    """Train a liquid-DSE Up/Flat/Down model with rolling model selection."""
     from market.services.exchange_config import enabled_exchanges
 
     enabled = enabled_exchanges()
     _clear_context_cache()
     dse_panel = _build_next_close_panel(Exchange.DSE, limit_stocks=limit_stocks) if Exchange.DSE in enabled else pd.DataFrame()
-    cse_panel = _build_next_close_panel(Exchange.CSE, limit_stocks=limit_stocks) if Exchange.CSE in enabled else pd.DataFrame()
-
-    if dse_panel.empty and cse_panel.empty:
+    if dse_panel.empty:
         return {"ok": False, "error": "Not enough data to train next-close model"}
-
-    dse_eval = _walk_forward_evaluate_next_close(dse_panel) if len(dse_panel) >= MIN_PANEL_ROWS else {"ok": False, "error": f"insufficient DSE rows ({len(dse_panel)})"}
-    cse_eval = _walk_forward_evaluate_next_close(cse_panel) if len(cse_panel) >= MIN_PANEL_ROWS else {"ok": False, "error": f"insufficient CSE rows ({len(cse_panel)})"}
-
-    panel_all = pd.concat([dse_panel, cse_panel], ignore_index=True) if not (dse_panel.empty or cse_panel.empty) else (dse_panel if not dse_panel.empty else cse_panel)
-    panel_all = panel_all.sort_values("date", kind="mergesort").reset_index(drop=True)
-    combined_eval = _walk_forward_evaluate_next_close(panel_all) if len(panel_all) >= MIN_PANEL_ROWS else {"ok": False, "error": f"insufficient combined rows ({len(panel_all)})"}
-
-    justified, reason = _justify_combining_next_close(dse_eval, cse_eval)
-    evaluation = {"dse": dse_eval, "cse": cse_eval, "combined": combined_eval, "combine_justified": justified, "combine_reason": reason}
-
-    deployed = {}
-    if justified and combined_eval.get("ok"):
-        deployed["combined"] = _final_fit_and_save_next_close(panel_all, combined_eval, exchange_scope="combined", model_path=MODEL_PATH)
-    else:
-        if dse_eval.get("ok") and len(dse_panel) >= MIN_PANEL_ROWS:
-            deployed["DSE"] = _final_fit_and_save_next_close(dse_panel, dse_eval, exchange_scope=Exchange.DSE, model_path=MODEL_PATH_BY_EXCHANGE[Exchange.DSE])
-        if cse_eval.get("ok") and len(cse_panel) >= MIN_PANEL_ROWS:
-            deployed["CSE"] = _final_fit_and_save_next_close(cse_panel, cse_eval, exchange_scope=Exchange.CSE, model_path=MODEL_PATH_BY_EXCHANGE[Exchange.CSE])
-        if not deployed:
-            return {"ok": False, "error": "neither exchange had enough data to evaluate/train separately", "evaluation": evaluation}
-
-    result = {"ok": True, "evaluation": evaluation, "deployed": deployed}
-    if "combined" in deployed:
-        result.update({k: v for k, v in deployed["combined"].items() if k != "ok"})
-    return result
+    candidates = []
+    for window in ROLLING_WINDOW_DAYS:
+        for kind in ("logistic", "random_forest", "xgboost"):
+            candidates.append(_evaluate_direction_candidate(dse_panel, kind=kind, rolling_days=window))
+    usable = [c for c in candidates if c.get("ok")]
+    if not usable:
+        return {"ok": False, "error": "no rolling model candidate could be evaluated", "candidates": candidates}
+    best = max(usable, key=lambda c: (c["model_metrics"].get("macro_f1") or 0, c.get("skill_vs_naive") or -1))
+    evaluation = {
+        "dse": best,
+        "cse": {"ok": False, "error": "intentionally disabled for next-day modelling"},
+        "combined": {"ok": False, "error": "DSE-only design"},
+        "combine_justified": False,
+        "combine_reason": "Next-day model intentionally trains only on liquid DSE shares.",
+        "candidate_comparison": candidates,
+    }
+    deployed = {"DSE": _final_fit_and_save_next_close(dse_panel, best, exchange_scope=Exchange.DSE, model_path=MODEL_PATH_BY_EXCHANGE[Exchange.DSE])}
+    return {"ok": True, "evaluation": evaluation, "deployed": deployed, "selected_model": best["model_kind"], "rolling_days": best["rolling_days"]}
 
 
 def run_close_learn_cycle(as_of: date | None = None, train: bool = True) -> dict:
@@ -1069,6 +1296,8 @@ def learn_status() -> dict:
         "stock_bias_active": stock_bias_n,
         "liquid_universe": len(liquid_stock_ids()),
         "skill": skill,
+        "naive_fallback_active": bool((state.extras or {}).get("serve_naive_fallback", False)),
+        "candidate_skill": (state.extras or {}).get("candidate_skill"),
         "extras": state.extras or {},
         "latest_settled": (
             {
@@ -1158,9 +1387,15 @@ def backfill_learn_from_history(lookback_days: int = 60, limit_stocks: int = 40)
             fc.settled_at = timezone.now()
             fc.save()
             settled += 1
-            bias = (1 - BIAS_EMA_ALPHA) * bias + BIAS_EMA_ALPHA * ret_err
+            bias = float(np.clip((1 - BIAS_EMA_ALPHA) * bias + BIAS_EMA_ALPHA * ret_err, -RETURN_BIAS_CAP, RETURN_BIAS_CAP))
             if stock.id in liquid:
-                stock_bias = (1 - STOCK_BIAS_ALPHA) * stock_bias + STOCK_BIAS_ALPHA * ret_err
+                stock_bias = float(
+                    np.clip(
+                        (1 - STOCK_BIAS_ALPHA) * stock_bias + STOCK_BIAS_ALPHA * ret_err,
+                        -RETURN_BIAS_CAP,
+                        RETURN_BIAS_CAP,
+                    )
+                )
                 stock_settles += 1
 
         if stock.id in liquid and stock_settles:

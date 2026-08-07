@@ -25,14 +25,14 @@ def _print_walk_forward(stdout, style, label: str, evaluation: dict):
 
 class Command(BaseCommand):
     help = (
-        "Retrain both ML models (forward-return classifier, next-close regressor) using "
+        "Retrain both ML models (forward-return classifier, next-day direction classifier) using "
         "chronological walk-forward validation and print a walk-forward evaluation report. "
         "Models are only deployed active if out-of-sample skill vs. their naive baseline is positive."
     )
 
     def add_arguments(self, parser):
         parser.add_argument("--forward-return-only", action="store_true", help="Only retrain the 10d forward-return classifier.")
-        parser.add_argument("--next-close-only", action="store_true", help="Only retrain the next-close regressor.")
+        parser.add_argument("--next-close-only", action="store_true", help="Only retrain the next-day direction model.")
         parser.add_argument("--limit", type=int, default=120, help="Stock limit per exchange for training.")
         parser.add_argument("--json", action="store_true", help="Print the full raw result as JSON instead of a summary.")
 

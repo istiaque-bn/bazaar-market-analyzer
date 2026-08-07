@@ -307,6 +307,8 @@ AUTO_INTRADAY_ANALYSIS_INTERVAL=900  # minimum seconds between intraday passes
 AUTO_DAILY_APPEND=True            # scheduled 10:05/14:05 OHLCV append, on/off
 AUTO_ANALYZE_AFTER_APPEND=True    # run full analysis right after a successful append
 AUTO_CLOSE_LEARN=True             # forecast settlement + next-session forecast, on/off
+AUTO_PAPER_TRADING=True           # admin-only virtual trading; no broker transactions
+AUTO_PAPER_TRADING_INTERVAL=900   # seconds between decisions from 10:00 until 14:25
 
 AUTO_ML_TRAINING=True             # daily model retrain, on/off
 AUTO_ML_TRAINING_TIME=00:30       # 24h HH:MM, Asia/Dhaka — well before the 10:00 market open
@@ -333,6 +335,7 @@ skip rather than doing wasted work.
 | `market.tasks.append_daily_bars` | 10:05 & 14:05, Sun–Thu | `AUTO_DAILY_APPEND` (+`AUTO_ANALYZE_AFTER_APPEND`) |
 | `market.tasks.close_learn_settlement` | 14:45, Sun–Thu | `AUTO_CLOSE_LEARN` |
 | `market.tasks.assess_ml_reliability` | 15:20, Sun–Thu | — |
+| `market.tasks.run_paper_trading` | every 60s tick; operates 10:00–14:25 Sun–Thu and self-throttles to `AUTO_PAPER_TRADING_INTERVAL` | `AUTO_PAPER_TRADING` |
 | `notifications.tasks.send_daily_digest` | 15:00, Sun–Thu | — |
 | `market.tasks.sync_pe_ratios` | 10:10, Sun–Thu | — |
 | `market.tasks.sync_holiday_calendar` | 28th–31st, 23:30 (self-filters to the true last day) | — |

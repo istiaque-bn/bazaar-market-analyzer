@@ -12,6 +12,12 @@ from market.models import (
     MLModelVersion,
     NextDayCloseForecast,
     PatternHit,
+    PaperEquitySnapshot,
+    PaperCashSettlement,
+    PaperLearningFeedback,
+    PaperPosition,
+    PaperTrade,
+    PaperTradingAccount,
     PredictionSnapshot,
     PriceHistory,
     PriceHistoryRevision,
@@ -77,6 +83,46 @@ admin.site.register(TechnicalSnapshot)
 admin.site.register(PatternHit)
 admin.site.register(MarketSnapshot)
 admin.site.register(Watchlist)
+
+
+@admin.register(PaperTradingAccount)
+class PaperTradingAccountAdmin(admin.ModelAdmin):
+    list_display = ("name", "initial_cash", "cash", "is_active", "last_run_at", "updated_at")
+    readonly_fields = ("initial_cash", "cash", "last_run_at", "created_at", "updated_at")
+
+
+@admin.register(PaperPosition)
+class PaperPositionAdmin(admin.ModelAdmin):
+    list_display = ("stock", "quantity", "entry_price", "opened_on", "is_open", "closed_on", "realized_pnl", "exit_reason")
+    list_filter = ("is_open", "stock__exchange", "exit_reason")
+    readonly_fields = [f.name for f in PaperPosition._meta.fields]
+
+
+@admin.register(PaperTrade)
+class PaperTradeAdmin(admin.ModelAdmin):
+    list_display = ("trade_date", "side", "stock", "quantity", "execution_price", "fee", "cash_effect", "reason")
+    list_filter = ("side", "stock__exchange", "reason")
+    readonly_fields = [f.name for f in PaperTrade._meta.fields]
+
+
+@admin.register(PaperEquitySnapshot)
+class PaperEquitySnapshotAdmin(admin.ModelAdmin):
+    list_display = ("as_of", "cash", "holdings_value", "total_equity", "realized_pnl", "unrealized_pnl", "open_positions")
+    readonly_fields = [f.name for f in PaperEquitySnapshot._meta.fields]
+
+
+@admin.register(PaperLearningFeedback)
+class PaperLearningFeedbackAdmin(admin.ModelAdmin):
+    list_display = ("outcome_date", "stock", "predicted_probability", "net_return_pct", "profitable_after_costs", "holding_sessions", "exit_reason")
+    list_filter = ("profitable_after_costs", "exit_reason", "stock__exchange")
+    readonly_fields = [f.name for f in PaperLearningFeedback._meta.fields]
+
+
+@admin.register(PaperCashSettlement)
+class PaperCashSettlementAdmin(admin.ModelAdmin):
+    list_display = ("settlement_date", "account", "amount", "is_settled", "settled_at")
+    list_filter = ("is_settled", "settlement_date")
+    readonly_fields = [f.name for f in PaperCashSettlement._meta.fields]
 
 
 @admin.register(MarketHoliday)

@@ -102,6 +102,17 @@ app.conf.beat_schedule = {
         "task": "market.tasks.assess_ml_reliability",
         "schedule": crontab(hour=15, minute=20, day_of_week=_BD_WEEK),
     },
+    # Autonomous virtual trading ticks every minute, but its task only runs
+    # between 10:00 and five minutes before the 14:30 exchange close and
+    # self-throttles to AUTO_PAPER_TRADING_INTERVAL.
+    "run-paper-trading": {
+        "task": "market.tasks.run_paper_trading",
+        "schedule": 60.0,
+    },
+    "finalize-paper-trading-1425": {
+        "task": "market.tasks.finalize_paper_trading_day",
+        "schedule": crontab(hour=14, minute=25, day_of_week=_BD_WEEK),
+    },
     # Refresh the DSE holiday calendar (market.models.MarketHoliday) so next
     # month's holidays are on record before they're needed. Fires daily on
     # the 28th-31st at 23:30; the task itself only proceeds on the actual

@@ -177,6 +177,7 @@
                   <a href="{% url 'data_quality' %}">Data QA</a>
                   <a href="{% url 'ops_report' %}">Operations</a>
                   {% if is_admin_role %}<a href="{% url 'ml_reliability' %}">ML Reliability</a>{% endif %}
+                  {% if is_admin_role %}<a href="{% url 'paper_trading' %}">Paper Trading</a>{% endif %}
                   {% if is_admin_role %}<a href="/admin/">Django Admin</a>{% endif %}
                 </div>
               </li>

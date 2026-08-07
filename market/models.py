@@ -35,6 +35,7 @@ class DataSource(models.TextChoices):
     UNKNOWN = "unknown", "Unknown (legacy / unspecified)"
     DSE_LIVE = "dse_live", "DSE live quote"
     DSE_HISTORY = "dse_history", "DSE historical archive/bdshare"
+    DSE_RESEARCH_BACKFILL = "dse_research_backfill", "DSE external research backfill (CC BY 4.0)"
     CSE_LIVE = "cse_live", "CSE live quote"
     CSE_HISTORY = "cse_history", "CSE historical bulk download"
     CSE_MIRROR_FALLBACK = "cse_mirror_fallback", "CSE mirrored from DSE (not real CSE data)"
@@ -259,6 +260,135 @@ class AnalysisResult(models.Model):
         if price is None or self.expected_return_pct is None:
             return None
         return round(float(price) * (1 + float(self.expected_return_pct) / 100.0), 2)
+
+
+class PaperTradingAccount(models.Model):
+    """Singleton-like autonomous virtual account. It never connects to a broker."""
+
+    name = models.CharField(max_length=64, unique=True, default="Admin autonomous paper fund")
+    initial_cash = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal("100000.00"))
+    cash = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal("100000.00"))
+    is_active = models.BooleanField(default=True, db_index=True)
+    strategy_config = models.JSONField(default=dict, blank=True)
+    last_run_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return self.name
+
+
+class PaperPosition(models.Model):
+    account = models.ForeignKey(PaperTradingAccount, on_delete=models.CASCADE, related_name="positions")
+    stock = models.ForeignKey(Stock, on_delete=models.PROTECT, related_name="paper_positions")
+    quantity = models.PositiveIntegerField()
+    entry_price = models.DecimalField(max_digits=14, decimal_places=4)
+    entry_fee = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal("0"))
+    opened_on = models.DateField(db_index=True)
+    maturity_date = models.DateField(null=True, blank=True, db_index=True, help_text="First session on which the virtual shares may be sold")
+    signal = models.ForeignKey(AnalysisResult, null=True, blank=True, on_delete=models.SET_NULL, related_name="paper_entries")
+    is_open = models.BooleanField(default=True, db_index=True)
+    closed_on = models.DateField(null=True, blank=True, db_index=True)
+    exit_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    exit_fee = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal("0"))
+    realized_pnl = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    exit_reason = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-opened_on", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["account", "stock"], condition=models.Q(is_open=True), name="one_open_paper_position_per_stock"),
+        ]
+
+    def __str__(self):
+        return f"{self.stock} x {self.quantity} ({'open' if self.is_open else 'closed'})"
+
+
+class PaperTrade(models.Model):
+    class Side(models.TextChoices):
+        BUY = "BUY", "Buy"
+        SELL = "SELL", "Sell"
+
+    account = models.ForeignKey(PaperTradingAccount, on_delete=models.CASCADE, related_name="trades")
+    position = models.ForeignKey(PaperPosition, on_delete=models.CASCADE, related_name="trades")
+    stock = models.ForeignKey(Stock, on_delete=models.PROTECT, related_name="paper_trades")
+    side = models.CharField(max_length=4, choices=Side.choices)
+    trade_date = models.DateField(db_index=True)
+    settlement_date = models.DateField(null=True, blank=True, db_index=True)
+    quantity = models.PositiveIntegerField()
+    market_price = models.DecimalField(max_digits=14, decimal_places=4)
+    execution_price = models.DecimalField(max_digits=14, decimal_places=4)
+    fee = models.DecimalField(max_digits=14, decimal_places=2)
+    cash_effect = models.DecimalField(max_digits=14, decimal_places=2, help_text="Negative for buys, positive for sells")
+    reason = models.CharField(max_length=128)
+    signal = models.ForeignKey(AnalysisResult, null=True, blank=True, on_delete=models.SET_NULL, related_name="paper_trades")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-trade_date", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["position", "side"], name="one_paper_trade_per_position_side"),
+        ]
+
+
+class PaperLearningFeedback(models.Model):
+    """Settled, immutable outcome for a prediction acted on by paper trading."""
+
+    position = models.OneToOneField(PaperPosition, on_delete=models.CASCADE, related_name="learning_feedback")
+    stock = models.ForeignKey(Stock, on_delete=models.PROTECT, related_name="paper_learning_feedback")
+    signal_date = models.DateField(db_index=True)
+    outcome_date = models.DateField(db_index=True)
+    predicted_probability = models.FloatField(null=True, blank=True)
+    predicted_confidence = models.FloatField(null=True, blank=True)
+    predicted_score = models.FloatField(null=True, blank=True)
+    gross_return_pct = models.FloatField()
+    net_return_pct = models.FloatField()
+    profitable_after_costs = models.BooleanField(db_index=True)
+    holding_sessions = models.PositiveIntegerField()
+    exit_reason = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-outcome_date", "-id"]
+
+    def __str__(self):
+        return f"{self.stock} {self.signal_date}: {self.net_return_pct:+.2f}%"
+
+
+class PaperCashSettlement(models.Model):
+    """Virtual sale proceeds that cannot be reused until exchange settlement."""
+
+    account = models.ForeignKey(PaperTradingAccount, on_delete=models.CASCADE, related_name="cash_settlements")
+    trade = models.OneToOneField(PaperTrade, on_delete=models.CASCADE, related_name="cash_settlement")
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    settlement_date = models.DateField(db_index=True)
+    is_settled = models.BooleanField(default=False, db_index=True)
+    settled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["settlement_date", "id"]
+
+
+class PaperEquitySnapshot(models.Model):
+    account = models.ForeignKey(PaperTradingAccount, on_delete=models.CASCADE, related_name="equity_snapshots")
+    as_of = models.DateField(db_index=True)
+    cash = models.DecimalField(max_digits=14, decimal_places=2)
+    holdings_value = models.DecimalField(max_digits=14, decimal_places=2)
+    total_equity = models.DecimalField(max_digits=14, decimal_places=2)
+    realized_pnl = models.DecimalField(max_digits=14, decimal_places=2)
+    unrealized_pnl = models.DecimalField(max_digits=14, decimal_places=2)
+    open_positions = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-as_of"]
+        constraints = [models.UniqueConstraint(fields=["account", "as_of"], name="one_paper_equity_snapshot_per_day")]
 
 
 class BacktestRun(models.Model):

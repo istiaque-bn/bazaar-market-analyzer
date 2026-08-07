@@ -348,6 +348,8 @@ AUTO_INTRADAY_ANALYSIS_INTERVAL = _positive_int("AUTO_INTRADAY_ANALYSIS_INTERVAL
 AUTO_DAILY_APPEND = _bool_env("AUTO_DAILY_APPEND", "True")
 AUTO_ANALYZE_AFTER_APPEND = _bool_env("AUTO_ANALYZE_AFTER_APPEND", "True")
 AUTO_CLOSE_LEARN = _bool_env("AUTO_CLOSE_LEARN", "True")
+AUTO_PAPER_TRADING = _bool_env("AUTO_PAPER_TRADING", "True")
+AUTO_PAPER_TRADING_INTERVAL = _positive_int("AUTO_PAPER_TRADING_INTERVAL", "900")  # seconds while its session window is open
 
 # Daily ML training — retrains once a day at a fixed off-hours time
 # (well before the 10:00 Asia/Dhaka market open, so it never collides

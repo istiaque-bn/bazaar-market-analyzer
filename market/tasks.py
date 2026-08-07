@@ -153,6 +153,51 @@ def append_daily_bars():
 
 
 @shared_task(
+    name="market.tasks.run_paper_trading",
+    autoretry_for=_TRANSIENT_ERRORS,
+    retry_backoff=True,
+    max_retries=2,
+    time_limit=120,
+    soft_time_limit=100,
+)
+@record_task_run("market.tasks.run_paper_trading")
+def run_paper_trading(force: bool = False):
+    """Execute one virtual-only cycle from stored predictions and prices."""
+    from django.conf import settings
+    from market.services.autosync import exclusive_db_write
+    from django.utils import timezone
+    from market.services.paper_trading import ensure_account, run_autonomous_cycle, trading_window_status
+
+    if not getattr(settings, "AUTO_PAPER_TRADING", True) and not force:
+        return {"ok": True, "skipped": "disabled"}
+    if not force:
+        window = trading_window_status()
+        if not window["is_open"]:
+            return {"ok": True, "skipped": "outside_paper_trading_window", "window": window}
+        account = ensure_account()
+        interval = int(getattr(settings, "AUTO_PAPER_TRADING_INTERVAL", 900))
+        if account.last_run_at and (timezone.now() - account.last_run_at).total_seconds() < interval:
+            return {"ok": True, "skipped": "interval_not_elapsed", "interval_seconds": interval}
+    with exclusive_db_write(blocking=True, timeout=90):
+        return run_autonomous_cycle(force=force)
+
+
+@shared_task(name="market.tasks.finalize_paper_trading_day", time_limit=60, soft_time_limit=45)
+@record_task_run("market.tasks.finalize_paper_trading_day")
+def finalize_paper_trading_day():
+    """Record the 14:25 virtual closing statement without placing trades."""
+    from django.conf import settings
+    from market.services.autosync import exclusive_db_write
+    from market.services.paper_trading import ensure_account, record_equity_snapshot
+
+    if not getattr(settings, "AUTO_PAPER_TRADING", True):
+        return {"ok": True, "skipped": "disabled"}
+    with exclusive_db_write(blocking=True, timeout=45):
+        summary = record_equity_snapshot(ensure_account())
+    return {"ok": True, "equity": str(summary["total_equity"]), "profit_loss": str(summary["total_return"])}
+
+
+@shared_task(
     name="market.tasks.sync_pe_ratios",
     autoretry_for=_TRANSIENT_ERRORS,
     retry_backoff=True,

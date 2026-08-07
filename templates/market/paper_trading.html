@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Autonomous Paper Trading{% endblock %}
+{% block extra_head %}
+<style>
+  .paper-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1rem;margin:1.25rem 0}
+  .paper-card,.paper-panel{background:var(--surface,#fff);border:1px solid rgba(120,120,120,.2);border-radius:14px;padding:1rem}
+  .paper-card small{display:block;opacity:.7}.paper-card strong{font-size:1.45rem}.paper-actions{display:flex;gap:.6rem;flex-wrap:wrap;margin:1rem 0}
+  .paper-actions form{display:inline}.paper-table{width:100%;border-collapse:collapse}.paper-table th,.paper-table td{padding:.65rem;border-bottom:1px solid rgba(120,120,120,.16);text-align:left}
+  .paper-warning{padding:1rem;border-radius:12px;background:rgba(205,145,20,.12);border:1px solid rgba(205,145,20,.3)}
+  .paper-status{display:inline-block;padding:.25rem .6rem;border-radius:999px;background:rgba(40,150,90,.15)}.paper-status.paused{background:rgba(150,150,150,.18)}
+  .paper-section{margin-top:1.5rem;overflow-x:auto}.positive{color:#16834c}.negative{color:#c13d3d}
+</style>
+{% endblock %}
+{% block content %}
+<main class="container">
+  <div class="page-header">
+    <div><p class="eyebrow">Admin only · simulation</p><h1>Autonomous Paper Trading</h1></div>
+    <span class="paper-status {% if not account.is_active %}paused{% endif %}">{% if account.is_active %}Running{% else %}Paused{% endif %}</span>
+  </div>
+
+  <div class="paper-warning"><strong>No real money or broker transactions.</strong> This simulator uses stored predictions and prices. Virtual fills include estimated fees and adverse slippage.</div>
+
+  <div class="paper-actions">
+    <form method="post" action="{% url 'paper_trading_control' %}">{% csrf_token %}<input type="hidden" name="action" value="{% if account.is_active %}pause{% else %}start{% endif %}"><button class="btn" type="submit">{% if account.is_active %}Pause automation{% else %}Start automation{% endif %}</button></form>
+    <form method="post" action="{% url 'paper_trading_control' %}">{% csrf_token %}<input type="hidden" name="action" value="run"><button class="btn btn-secondary" type="submit">Run virtual cycle now</button></form>
+  </div>
+
+  <div class="paper-grid">
+    <div class="paper-card"><small>Starting cash</small><strong>৳{{ account.initial_cash|floatformat:2 }}</strong></div>
+    <div class="paper-card"><small>Available cash</small><strong>৳{{ cash|floatformat:2 }}</strong></div>
+    <div class="paper-card"><small>Unsettled sale proceeds</small><strong>৳{{ unsettled_cash|floatformat:2 }}</strong></div>
+    <div class="paper-card"><small>Holdings value</small><strong>৳{{ holdings_value|floatformat:2 }}</strong></div>
+    <div class="paper-card"><small>Total equity</small><strong>৳{{ total_equity|floatformat:2 }}</strong></div>
+    <div class="paper-card"><small>Total return</small><strong class="{% if total_return >= 0 %}positive{% else %}negative{% endif %}">৳{{ total_return|floatformat:2 }} ({{ total_return_pct|floatformat:2 }}%)</strong></div>
+    <div class="paper-card"><small>Open positions</small><strong>{{ open_positions }} / 10</strong></div>
+  </div>
+
+  <section class="paper-panel paper-section"><h2>Open positions</h2>
+    <table class="paper-table"><thead><tr><th>Share</th><th>Opened</th><th>Matures</th><th>Quantity</th><th>Entry</th><th>Current</th><th>Unrealized P/L</th></tr></thead><tbody>
+      {% for row in position_rows %}<tr><td><a href="{% url 'stock_detail' row.position.stock.exchange row.position.stock.trading_code %}">{{ row.position.stock.trading_code }}</a></td><td>{{ row.position.opened_on }}</td><td>{{ row.position.maturity_date }}</td><td>{{ row.position.quantity }}</td><td>৳{{ row.position.entry_price|floatformat:2 }}</td><td>৳{{ row.current_price|floatformat:2 }}</td><td class="{% if row.unrealized_pnl >= 0 %}positive{% else %}negative{% endif %}">৳{{ row.unrealized_pnl|floatformat:2 }}</td></tr>
+      {% empty %}<tr><td colspan="7">No positions yet. The strategy waits for sufficiently strong safe-BUY predictions.</td></tr>{% endfor %}
+    </tbody></table>
+  </section>
+
+  <section class="paper-panel paper-section"><h2>Virtual trade log</h2>
+    <table class="paper-table"><thead><tr><th>Date</th><th>Side</th><th>Share</th><th>Quantity</th><th>Execution</th><th>Fee</th><th>Reason</th></tr></thead><tbody>
+      {% for trade in trades %}<tr><td>{{ trade.trade_date }}</td><td>{{ trade.side }}</td><td>{{ trade.stock.trading_code }}</td><td>{{ trade.quantity }}</td><td>৳{{ trade.execution_price|floatformat:2 }}</td><td>৳{{ trade.fee|floatformat:2 }}</td><td>{{ trade.reason }}</td></tr>
+      {% empty %}<tr><td colspan="7">No virtual trades have been executed.</td></tr>{% endfor %}
+    </tbody></table>
+  </section>
+
+  <section class="paper-panel paper-section"><h2>Strategy guardrails</h2><p>Minimum probability and confidence: 60% · 5% equity per position · maximum 10 positions · 5% observed-volume fill cap · stop loss 5% · take profit 8% · maximum holding period 10 trading sessions · no short selling or margin.</p><p>A/B/G/N shares mature on T+2; Z-category shares use T+3. Unmatured shares cannot be sold and sale proceeds cannot be reused before settlement. Operating window: 10:00 AM–2:25 PM Asia/Dhaka, Sunday–Thursday. A closing P/L statement is recorded at 2:25 PM. Last run: {{ account.last_run_at|default:"Never" }}.</p></section>
+  <section class="paper-panel paper-section"><h2>Learning feedback</h2><p>Settled trades: {{ feedback_stats.count|default:0 }} · after-cost win rate: {% if feedback_stats.win_rate != None %}{{ feedback_stats.win_rate|floatformat:2 }}%{% else %}—{% endif %} · average net return: {% if feedback_stats.avg_net_return != None %}{{ feedback_stats.avg_net_return|floatformat:2 }}%{% else %}—{% endif %}.</p><p>Only closed trades become feedback. The original prediction is preserved beside the realized, after-cost outcome so later model and threshold experiments remain auditable and do not leak unfinished outcomes.</p></section>
+</main>
+{% endblock %}

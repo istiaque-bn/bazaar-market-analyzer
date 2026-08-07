@@ -90,6 +90,60 @@ def dashboard(request):
     )
 
 
+@admin_required
+def paper_trading_view(request):
+    from django.db.models import Avg, Count, Q
+    from market.models import PaperLearningFeedback
+    from market.services.paper_trading import account_summary, ensure_account
+
+    account = ensure_account()
+    summary = account_summary(account)
+    feedback_stats = PaperLearningFeedback.objects.aggregate(
+        count=Count("id"), wins=Count("id", filter=Q(profitable_after_costs=True)), avg_net_return=Avg("net_return_pct")
+    )
+    feedback_stats["win_rate"] = (
+        round(feedback_stats["wins"] / feedback_stats["count"] * 100, 2) if feedback_stats["count"] else None
+    )
+    positions = account.positions.filter(is_open=True).select_related("stock", "signal")
+    position_rows = []
+    for position in positions:
+        current = position.stock.last_price or float(position.entry_price)
+        pnl = (float(current) - float(position.entry_price)) * position.quantity - float(position.entry_fee)
+        position_rows.append({"position": position, "current_price": current, "unrealized_pnl": pnl})
+    return render(
+        request,
+        "market/paper_trading.html",
+        {
+            **summary,
+            "position_rows": position_rows,
+            "trades": account.trades.select_related("stock", "position")[:50],
+            "snapshots": account.equity_snapshots.all()[:30],
+            "feedback_stats": feedback_stats,
+        },
+    )
+
+
+@admin_required
+@require_POST
+def paper_trading_control(request):
+    from market.services.paper_trading import ensure_account
+
+    account = ensure_account()
+    action = request.POST.get("action")
+    if action in {"start", "pause"}:
+        account.is_active = action == "start"
+        account.save(update_fields=["is_active", "updated_at"])
+        messages.success(request, "Autonomous paper trading started." if account.is_active else "Autonomous paper trading paused.")
+    elif action == "run":
+        from market.tasks import run_paper_trading
+
+        run_paper_trading.delay(force=True)
+        messages.success(request, "Paper-trading cycle queued. It will remain virtual and use stored prices only.")
+    else:
+        messages.error(request, "Unknown paper-trading action.")
+    return redirect("paper_trading")
+
+
 def _dashboard_health_issue(as_of) -> str | None:
     """Cheap, staff-only pre-flight for the dashboard banner — deliberately
     NOT the full ops_alerts.evaluate_alerts()/ops_summary(), since that
@@ -1095,5 +1149,3 @@ def portfolio_quotes_json(request, portfolio_id):
             "generated_at": timezone.now().isoformat(),
         }
     )
-
-
