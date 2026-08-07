@@ -127,10 +127,10 @@ class DseOnlyPublicPagesTests(TestCase):
             stock=self.cse_stock, as_of=date(2026, 1, 1), action=SignalAction.BUY, score=90, confidence=0.9,
         )
 
-    def test_authenticated_root_redirects_to_role_panel(self):
+    def test_authenticated_root_redirects_to_dashboard(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/panel/user/", response.url)
+        self.assertIn("/dashboard/", response.url)
 
     def test_footer_shows_dse_only_wording(self):
         html = self.client.get("/stocks/").content.decode()

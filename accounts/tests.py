@@ -160,26 +160,26 @@ class AnonymousAccessTests(TestCase):
 
 
 class LoginRedirectTests(TestCase):
-    def test_admin_redirected_to_admin_panel(self):
+    def test_admin_redirected_to_dashboard(self):
         make_admin("redir_admin")
         response = self.client.post(reverse("login"), {"username": "redir_admin", "password": PASSWORD})
-        self.assertRedirects(response, reverse("admin_panel"))
+        self.assertRedirects(response, reverse("dashboard"))
 
-    def test_staff_redirected_to_staff_panel(self):
+    def test_staff_redirected_to_dashboard(self):
         make_staff("redir_staff")
         response = self.client.post(reverse("login"), {"username": "redir_staff", "password": PASSWORD})
-        self.assertRedirects(response, reverse("staff_panel"))
+        self.assertRedirects(response, reverse("dashboard"))
 
-    def test_user_redirected_to_user_panel(self):
+    def test_user_redirected_to_dashboard(self):
         make_user("redir_user")
         response = self.client.post(reverse("login"), {"username": "redir_user", "password": PASSWORD})
-        self.assertRedirects(response, reverse("user_panel"))
+        self.assertRedirects(response, reverse("dashboard"))
 
-    def test_authenticated_visiting_login_is_redirected_to_own_panel(self):
+    def test_authenticated_visiting_login_is_redirected_to_dashboard(self):
         make_user("already_in")
         self.client.login(username="already_in", password=PASSWORD)
         response = self.client.get(reverse("login"))
-        self.assertRedirects(response, reverse("user_panel"))
+        self.assertRedirects(response, reverse("dashboard"))
 
     def test_inactive_user_cannot_log_in(self):
         u = make_user("inactive_login")
@@ -196,7 +196,7 @@ class LoginRedirectTests(TestCase):
             {"username": "safe_next_user", "password": PASSWORD, "next": "https://evil.example.com"},
         )
         self.assertNotEqual(response.url, "https://evil.example.com")
-        self.assertRedirects(response, reverse("user_panel"))
+        self.assertRedirects(response, reverse("dashboard"))
 
     def test_protocol_relative_next_is_rejected(self):
         make_user("safe_next_user2")
@@ -204,7 +204,7 @@ class LoginRedirectTests(TestCase):
             reverse("login"),
             {"username": "safe_next_user2", "password": PASSWORD, "next": "//evil.example.com/phish"},
         )
-        self.assertRedirects(response, reverse("user_panel"))
+        self.assertRedirects(response, reverse("dashboard"))
 
     def test_safe_internal_next_is_honored(self):
         make_user("safe_next_user3")

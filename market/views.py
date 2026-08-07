@@ -35,9 +35,8 @@ from notifications.models import Alert
 
 def home(request):
     """Anonymous visitors get only Login (+ static assets); there is no
-    public marketing page any more — see accounts/roles.py for why
-    authenticated users land on their role panel rather than a fixed
-    page."""
+    public marketing page any more — authenticated visitors land on the
+    Market dashboard regardless of role (accounts.roles.role_home_url)."""
     if request.user.is_authenticated:
         return redirect(role_home_url(request.user))
     return redirect("login")

@@ -50,11 +50,11 @@ ACCOUNT_EVENT_ACTIONS = [
 
 
 class BazaarLoginView(LoginView):
-    """Redirects an already-authenticated visitor straight to their role
-    panel (redirect_authenticated_user), and — absent a safe `next` —
-    sends a freshly-logged-in user to their role panel too, instead of a
-    single fixed LOGIN_REDIRECT_URL. `next` itself is still validated by
-    the base LoginView/SuccessURLAllowedHostsMixin machinery
+    """Redirects an already-authenticated visitor straight to the Market
+    dashboard (redirect_authenticated_user), and — absent a safe `next` —
+    sends a freshly-logged-in user there too, instead of a single fixed
+    LOGIN_REDIRECT_URL. `next` itself is still validated by the base
+    LoginView/SuccessURLAllowedHostsMixin machinery
     (url_has_allowed_host_and_scheme), which already rejects external and
     protocol-relative targets — nothing here weakens that check."""
 

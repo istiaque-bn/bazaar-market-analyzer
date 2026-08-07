@@ -64,7 +64,10 @@ def role_name_for(target_user) -> str:
 
 
 def role_home_url_name(user) -> str:
-    return {ADMIN: "admin_panel", STAFF: "staff_panel", USER: "user_panel"}.get(role_name(user), "login")
+    """Every role's "home" is the Market dashboard — role panels
+    (admin_panel/staff_panel/user_panel) are still reachable from nav,
+    just not the landing page for login/root/logo-click/etc."""
+    return "dashboard" if role_name(user) is not None else "login"
 
 
 def role_home_url(user) -> str:
