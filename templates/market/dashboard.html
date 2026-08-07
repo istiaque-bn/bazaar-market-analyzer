@@ -7,7 +7,7 @@
     <p class="muted">As of {{ summary.as_of }} · {{ summary.total }} scored instruments</p>
     <p class="muted">
       Data last updated at
-      {% if data_last_updated %}{{ data_last_updated|date:"d M Y, h:i A" }}{% else %}—{% endif %}
+      <span id="dataLastUpdated" data-iso="{% if data_last_updated %}{{ data_last_updated|date:'c' }}{% endif %}">{% if data_last_updated %}{{ data_last_updated|date:"d M Y, h:i A" }}{% else %}—{% endif %}</span>
     </p>
     {% if health_issue %}
     <p class="health-warning">⚠ {{ health_issue }} <a href="{% url 'ops_report' %}">See ops report</a></p>

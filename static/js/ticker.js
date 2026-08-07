@@ -80,6 +80,29 @@
     track.dataset.duplicated = "1";
   }
 
+  function updateDataLastUpdated(sync) {
+    const el = document.getElementById("dataLastUpdated");
+    if (!el || !sync || !sync.last_success) return;
+    if (el.dataset.iso === sync.last_success) return; // no change since last render
+    try {
+      const fmt = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Dhaka",
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      });
+      const parts = {};
+      fmt.formatToParts(new Date(sync.last_success)).forEach((p) => { parts[p.type] = p.value; });
+      el.textContent = `${parts.day} ${parts.month} ${parts.year}, ${parts.hour}:${parts.minute} ${parts.dayPeriod}`;
+      el.dataset.iso = sync.last_success;
+    } catch (_) {
+      /* keep existing text */
+    }
+  }
+
   function updateMarketStatus(hours) {
     if (!statusBox || !hours) return;
     ["dse", "cse"].forEach((key) => {
@@ -106,6 +129,7 @@
     updateBadge(badgeDse, "DSE", payload.sync, payload.market_hours && payload.market_hours.dse && payload.market_hours.dse.message);
     updateBadge(badgeCse, "CSE", payload.sync, payload.market_hours && payload.market_hours.cse && payload.market_hours.cse.message);
     updateMarketStatus(payload.market_hours);
+    updateDataLastUpdated(payload.sync);
   }
 
   function duplicateInitial(track) {

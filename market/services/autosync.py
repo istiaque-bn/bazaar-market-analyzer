@@ -57,10 +57,16 @@ def get_last_success_at():
 
 
 def get_sync_status() -> dict:
+    # last_success goes through get_last_success_at() (not the raw _state
+    # entry) so this reflects reality on a `web` process too — sync only
+    # ever runs inside celery-worker/celery-beat, so _state["last_success"]
+    # is permanently None in every other process's memory; the on-disk
+    # state file is the only thing they share.
+    last_success = get_last_success_at()
     return {
         "enabled": getattr(settings, "AUTO_MARKET_SYNC", True),
         "last_attempt": _state["last_attempt"].isoformat() if _state["last_attempt"] else None,
-        "last_success": _state["last_success"].isoformat() if _state["last_success"] else None,
+        "last_success": last_success.isoformat() if last_success else None,
         "last_error": _state["last_error"],
         "running": _state["running"],
         "source": _state["source"],
