@@ -1,6 +1,10 @@
+from datetime import timedelta
+from unittest import mock
+
 from django.contrib.auth.models import User
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from accounts.models import UserProfile
 from accounts.roles import is_admin, is_regular_user, is_staff_member, role_name
@@ -275,7 +279,14 @@ class AdminAccountManagementTests(TestCase):
     def test_admin_can_create_user(self):
         response = self.client.post(
             reverse("account_create_user"),
-            {"username": "new_plain_user", "first_name": "N", "last_name": "U", "email": "npu@example.com", "is_active": "on"},
+            {
+                "username": "new_plain_user",
+                "first_name": "N",
+                "last_name": "U",
+                "email": "npu@example.com",
+                "telegram_chat_id": "100200301",
+                "is_active": "on",
+            },
         )
         self.assertEqual(response.status_code, 200)
         u = User.objects.get(username="new_plain_user")
@@ -287,7 +298,14 @@ class AdminAccountManagementTests(TestCase):
     def test_admin_can_create_staff(self):
         response = self.client.post(
             reverse("account_create_staff"),
-            {"username": "new_staff", "first_name": "N", "last_name": "S", "email": "ns@example.com", "is_active": "on"},
+            {
+                "username": "new_staff",
+                "first_name": "N",
+                "last_name": "S",
+                "email": "ns@example.com",
+                "telegram_chat_id": "100200302",
+                "is_active": "on",
+            },
         )
         self.assertEqual(response.status_code, 200)
         u = User.objects.get(username="new_staff")
@@ -349,12 +367,153 @@ class AdminAccountManagementTests(TestCase):
     def test_account_creation_generates_audit_event(self):
         self.client.post(
             reverse("account_create_user"),
-            {"username": "audited_create", "first_name": "", "last_name": "", "email": "", "is_active": "on"},
+            {
+                "username": "audited_create",
+                "first_name": "",
+                "last_name": "",
+                "email": "",
+                "telegram_chat_id": "100200303",
+                "is_active": "on",
+            },
         )
         u = User.objects.get(username="audited_create")
         self.assertTrue(
             AdminAuditLog.objects.filter(action=AdminAuditAction.ACCOUNT_CREATED, target_user=u).exists()
         )
+
+
+class TempPasswordTelegramTests(TestCase):
+    """Username/temp-password delivery via Telegram, and the 15-minute
+    expiry on that temp password as a login credential."""
+
+    def setUp(self):
+        self.admin = make_admin("tg_admin")
+        self.client.login(username="tg_admin", password=PASSWORD)
+
+    def test_telegram_chat_id_is_required_to_create_an_account(self):
+        response = self.client.post(
+            reverse("account_create_user"),
+            {"username": "no_chat_id_user", "first_name": "", "last_name": "", "email": "", "is_active": "on"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(User.objects.filter(username="no_chat_id_user").exists())
+        self.assertContains(response, "Telegram chat ID")
+
+    def test_non_numeric_chat_id_is_rejected(self):
+        response = self.client.post(
+            reverse("account_create_user"),
+            {
+                "username": "bad_chat_id_user",
+                "first_name": "",
+                "last_name": "",
+                "email": "",
+                "telegram_chat_id": "not-a-number",
+                "is_active": "on",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(User.objects.filter(username="bad_chat_id_user").exists())
+
+    @override_settings(TELEGRAM_BOT_TOKEN="main-bot-token", TELEGRAM_SECURITY_BOT_TOKEN="security-bot-token")
+    @mock.patch("accounts.services.send_telegram_message", return_value=True)
+    def test_creation_sends_username_and_temp_password_via_telegram(self, mock_send):
+        self.client.post(
+            reverse("account_create_user"),
+            {
+                "username": "tg_new_user",
+                "first_name": "",
+                "last_name": "",
+                "email": "",
+                "telegram_chat_id": "555000111",
+                "is_active": "on",
+            },
+        )
+        u = User.objects.get(username="tg_new_user")
+        self.assertEqual(u.profile.telegram_chat_id, "555000111")
+        self.assertIsNotNone(u.profile.temp_password_expires_at)
+        mock_send.assert_called_once()
+        chat_id, text = mock_send.call_args[0]
+        self.assertEqual(chat_id, "555000111")
+        self.assertIn("tg_new_user", text)
+        self.assertIn("15 minutes", text)
+        # Delivered through the dedicated security bot, not the main one.
+        self.assertEqual(mock_send.call_args.kwargs["token"], "security-bot-token")
+
+    @mock.patch("accounts.services.send_telegram_message", return_value=False)
+    def test_creation_still_shows_password_on_screen_if_telegram_delivery_fails(self, mock_send):
+        response = self.client.post(
+            reverse("account_create_user"),
+            {
+                "username": "tg_fail_user",
+                "first_name": "",
+                "last_name": "",
+                "email": "",
+                "telegram_chat_id": "555000112",
+                "is_active": "on",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(User.objects.filter(username="tg_fail_user").exists())
+        self.assertContains(response, "temp-password-value")
+
+    @mock.patch("accounts.services.send_telegram_message", return_value=True)
+    def test_reset_password_sends_new_temp_password_via_telegram(self, mock_send):
+        target = make_user("tg_reset_target")
+        target.profile.telegram_chat_id = "555000113"
+        target.profile.save(update_fields=["telegram_chat_id"])
+        self.client.post(reverse("account_reset_password", args=[target.id]))
+        mock_send.assert_called_once()
+        chat_id, text = mock_send.call_args[0]
+        self.assertEqual(chat_id, "555000113")
+        self.assertIn("tg_reset_target", text)
+        target.profile.refresh_from_db()
+        self.assertIsNotNone(target.profile.temp_password_expires_at)
+
+    def test_expired_temp_password_cannot_be_used_to_log_in(self):
+        target = make_user("tg_expired_target")
+        target.set_password("Temp-Pass-1234!")
+        target.save(update_fields=["password"])
+        target.profile.must_change_password = True
+        target.profile.temp_password_expires_at = timezone.now() - timedelta(minutes=1)
+        target.profile.save(update_fields=["must_change_password", "temp_password_expires_at"])
+
+        client = Client()
+        response = client.post(reverse("login"), {"username": "tg_expired_target", "password": "Temp-Pass-1234!"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "expired")
+        self.assertFalse(response.wsgi_request.user.is_authenticated)
+
+    def test_unexpired_temp_password_can_still_log_in(self):
+        target = make_user("tg_fresh_target")
+        target.set_password("Temp-Pass-5678!")
+        target.save(update_fields=["password"])
+        target.profile.must_change_password = True
+        target.profile.temp_password_expires_at = timezone.now() + timedelta(minutes=10)
+        target.profile.save(update_fields=["must_change_password", "temp_password_expires_at"])
+
+        client = Client()
+        response = client.post(
+            reverse("login"), {"username": "tg_fresh_target", "password": "Temp-Pass-5678!"}, follow=True
+        )
+        self.assertEqual(response.request["PATH_INFO"], reverse("force_password_change"))
+
+    def test_password_change_clears_the_expiry(self):
+        target = make_user("tg_clear_target")
+        target.set_password("Temp-Pass-9999!")
+        target.save(update_fields=["password"])
+        target.profile.must_change_password = True
+        target.profile.temp_password_expires_at = timezone.now() + timedelta(minutes=10)
+        target.profile.save(update_fields=["must_change_password", "temp_password_expires_at"])
+
+        client = Client()
+        client.login(username="tg_clear_target", password="Temp-Pass-9999!")
+        client.post(
+            reverse("force_password_change"),
+            {"new_password1": "Brand-New-Pass-42!", "new_password2": "Brand-New-Pass-42!"},
+        )
+        target.profile.refresh_from_db()
+        self.assertFalse(target.profile.must_change_password)
+        self.assertIsNone(target.profile.temp_password_expires_at)
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +529,14 @@ class StaffAccountManagementTests(TestCase):
     def test_staff_can_create_user(self):
         response = self.client.post(
             reverse("account_create_user"),
-            {"username": "staff_created_user", "first_name": "", "last_name": "", "email": "", "is_active": "on"},
+            {
+                "username": "staff_created_user",
+                "first_name": "",
+                "last_name": "",
+                "email": "",
+                "telegram_chat_id": "100200304",
+                "is_active": "on",
+            },
         )
         self.assertEqual(response.status_code, 200)
         u = User.objects.get(username="staff_created_user")
@@ -381,7 +547,14 @@ class StaffAccountManagementTests(TestCase):
         self.assertEqual(response.status_code, 403)
         response = self.client.post(
             reverse("account_create_staff"),
-            {"username": "staff_tries_staff", "first_name": "", "last_name": "", "email": "", "is_active": "on"},
+            {
+                "username": "staff_tries_staff",
+                "first_name": "",
+                "last_name": "",
+                "email": "",
+                "telegram_chat_id": "100200305",
+                "is_active": "on",
+            },
         )
         self.assertEqual(response.status_code, 403)
         self.assertFalse(User.objects.filter(username="staff_tries_staff").exists())
@@ -394,6 +567,7 @@ class StaffAccountManagementTests(TestCase):
                 "first_name": "",
                 "last_name": "",
                 "email": "",
+                "telegram_chat_id": "100200306",
                 "is_active": "on",
                 "is_staff": "on",
                 "is_superuser": "on",

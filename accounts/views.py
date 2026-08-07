@@ -7,6 +7,7 @@ from django.contrib.auth.views import LoginView
 from django.core.paginator import Paginator
 from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views.decorators.http import require_http_methods, require_POST
 
 from accounts.decorators import admin_required, staff_or_admin_required
@@ -67,6 +68,20 @@ class BazaarLoginView(LoginView):
             return role_home_url(self.request.user)
         return super().get_default_redirect_url()
 
+    def form_valid(self, form):
+        """Blocks sign-in with a temp password past its 15-minute
+        deadline (accounts.services.TEMP_PASSWORD_TTL) — checked here,
+        before the base LoginView calls auth_login(), so an expired temp
+        password never even gets a session. A normal (non-temp) password
+        has no expiry and is unaffected."""
+        user = form.get_user()
+        profile = getattr(user, "profile", None)
+        expires_at = getattr(profile, "temp_password_expires_at", None)
+        if profile is not None and profile.must_change_password and expires_at and timezone.now() > expires_at:
+            form.add_error(None, "Your temporary password has expired. Contact an administrator for a new one.")
+            return self.form_invalid(form)
+        return super().form_valid(form)
+
 
 def signup_disabled(request):
     """Tombstone for the old public-registration URL. GET and POST both
@@ -92,7 +107,8 @@ def force_password_change(request):
             request.user.set_password(form.cleaned_data["new_password2"])
             request.user.save(update_fields=["password"])
             profile.must_change_password = False
-            profile.save(update_fields=["must_change_password"])
+            profile.temp_password_expires_at = None
+            profile.save(update_fields=["must_change_password", "temp_password_expires_at"])
             update_session_auth_hash(request, request.user)
             record_admin_action(
                 request, AdminAuditAction.FIRST_LOGIN_PASSWORD_CHANGED, {}, target_user=request.user
@@ -363,12 +379,13 @@ def account_create(request, target_role: str):
         if form.is_valid():
             data = form.cleaned_data
             try:
-                user, temp_password = create_account(
+                user, temp_password, telegram_sent = create_account(
                     request.user,
                     username=data["username"],
                     first_name=data["first_name"],
                     last_name=data["last_name"],
                     email=data["email"],
+                    telegram_chat_id=data["telegram_chat_id"],
                     role=target_role,
                     is_active=data["is_active"],
                     request=request,
@@ -376,10 +393,19 @@ def account_create(request, target_role: str):
             except Exception as exc:
                 messages.error(request, str(exc))
             else:
+                if not telegram_sent:
+                    messages.warning(
+                        request, "Couldn't deliver the temporary password via Telegram — share it from below instead."
+                    )
                 return render(
                     request,
                     "accounts/account_created.html",
-                    {"created_user": user, "temp_password": temp_password, "role": role_display(user)},
+                    {
+                        "created_user": user,
+                        "temp_password": temp_password,
+                        "role": role_display(user),
+                        "telegram_sent": telegram_sent,
+                    },
                 )
     else:
         form = form_cls()
@@ -479,12 +505,16 @@ def account_demote(request, user_id):
 def account_reset_password(request, user_id):
     target = _get_manageable_or_404(request, user_id)
     try:
-        temp_password = reset_password(request.user, target, request)
+        temp_password, telegram_sent = reset_password(request.user, target, request)
     except Exception as exc:
         messages.error(request, str(exc))
         return redirect("account_detail", user_id=target.id)
+    if not telegram_sent:
+        messages.warning(
+            request, "Couldn't deliver the temporary password via Telegram — share it from below instead."
+        )
     return render(
         request,
         "accounts/account_password_reset.html",
-        {"target": target, "temp_password": temp_password},
+        {"target": target, "temp_password": temp_password, "telegram_sent": telegram_sent},
     )

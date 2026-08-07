@@ -1,8 +1,12 @@
+import re
+
 from django import forms
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.models import User
 
 from market.models import Exchange
+
+_TELEGRAM_CHAT_ID_RE = re.compile(r"^-?\d+$")
 
 
 class ProfileForm(forms.Form):
@@ -66,6 +70,16 @@ class _BaseAccountCreateForm(forms.Form):
     first_name = forms.CharField(max_length=150, required=False)
     last_name = forms.CharField(max_length=150, required=False)
     email = forms.EmailField(required=False)
+    # Required, not optional — the temp password is delivered by Telegram
+    # DM, not shown to the account holder any other way, so there is no
+    # usable account without it on file up front.
+    telegram_chat_id = forms.CharField(
+        max_length=64,
+        label="Telegram chat ID",
+        help_text="The new account's own Telegram chat ID — their username and "
+        "temporary password are sent there, nowhere else. They can get it from "
+        "@userinfobot on Telegram.",
+    )
     is_active = forms.BooleanField(required=False, initial=True)
 
     def clean_username(self):
@@ -73,6 +87,14 @@ class _BaseAccountCreateForm(forms.Form):
         if User.objects.filter(username__iexact=username).exists():
             raise forms.ValidationError("That username is already taken.")
         return username
+
+    def clean_telegram_chat_id(self):
+        chat_id = self.cleaned_data["telegram_chat_id"].strip()
+        if not _TELEGRAM_CHAT_ID_RE.match(chat_id):
+            raise forms.ValidationError(
+                "Enter a numeric Telegram chat ID (get it from @userinfobot on Telegram)."
+            )
+        return chat_id
 
     def clean_email(self):
         # Email-uniqueness policy: a blank email is always allowed (kept

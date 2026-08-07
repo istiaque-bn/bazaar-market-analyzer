@@ -64,13 +64,16 @@ def _post_telegram_message(token: str, chat_id: str, text: str) -> dict:
     return payload.get("result") or {}
 
 
-def send_telegram_message(chat_id: str, text: str) -> bool:
+def send_telegram_message(chat_id: str, text: str, *, token: str | None = None) -> bool:
     """Best-effort send for the existing lightweight alert call sites
     (daily digest, feedback notifications) — never raises; logs
-    (token-redacted) and returns False on any failure. Unchanged
-    signature/behavior from before — see send_telegram_message_tracked
-    for callers that need to know exactly what happened."""
-    token = settings.TELEGRAM_BOT_TOKEN
+    (token-redacted) and returns False on any failure. Defaults to the
+    main bot (TELEGRAM_BOT_TOKEN); pass `token=` to send through a
+    different bot instead (e.g. the dedicated security bot used for temp
+    password delivery — see accounts.services) — see
+    send_telegram_message_tracked for callers that need to know exactly
+    what happened."""
+    token = token if token is not None else settings.TELEGRAM_BOT_TOKEN
     if not token or not chat_id:
         logger.info("Telegram not configured; skipping send")
         return False

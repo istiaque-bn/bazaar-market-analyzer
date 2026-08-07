@@ -28,6 +28,13 @@ class UserProfile(models.Model):
     # accounts.middleware.AccountStateMiddleware) before they can reach
     # anything else. Never set for self-service password changes.
     must_change_password = models.BooleanField(default=False)
+    # Deadline for logging in *with* the temp password itself (see
+    # accounts.views.BazaarLoginView.form_valid) — set alongside
+    # must_change_password whenever one is assigned, cleared once the
+    # holder actually changes it. Doesn't gate anything after a
+    # successful login; only the temp password's usability as a
+    # credential expires, not the follow-up password-change step.
+    temp_password_expires_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"Profile({self.user.username})"

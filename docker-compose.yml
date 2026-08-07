@@ -58,6 +58,9 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TELEGRAM_ADMIN_CHAT_ID: ${TELEGRAM_ADMIN_CHAT_ID:-}
+      # Dedicated bot for account-credential delivery — deliberately
+      # separate from TELEGRAM_BOT_TOKEN above (see accounts/services.py).
+      TELEGRAM_SECURITY_BOT_TOKEN: ${TELEGRAM_SECURITY_BOT_TOKEN:-}
       TELEGRAM_ML_DAILY_REPORT: ${TELEGRAM_ML_DAILY_REPORT:-True}
       TELEGRAM_ML_REPORT_TIME: ${TELEGRAM_ML_REPORT_TIME:-17:00}
       TELEGRAM_ML_REPORT_TIMEZONE: ${TELEGRAM_ML_REPORT_TIMEZONE:-Asia/Dhaka}

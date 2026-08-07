@@ -250,6 +250,13 @@ CELERY_TASK_ROUTES = {
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# Separate bot, deliberately never shared with TELEGRAM_BOT_TOKEN above —
+# used only for account-credential delivery (accounts.services), so a
+# leaked/compromised general-notification bot token can't be used to
+# phish temp passwords, and vice versa. Falls back to "not configured"
+# (temp password shown on-screen only) exactly like the main bot when
+# unset — see notifications.services.send_telegram_message's `token=`.
+TELEGRAM_SECURITY_BOT_TOKEN = os.getenv("TELEGRAM_SECURITY_BOT_TOKEN", "")
 
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 EMAIL_HOST = os.getenv("EMAIL_HOST", "")

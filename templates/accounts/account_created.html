@@ -6,10 +6,10 @@
   <p><strong>{{ created_user.username }}</strong> ({{ role }}) has been created{% if created_user.is_active %} and is active{% else %} but is inactive until activated{% endif %}.</p>
 
   <div class="temp-password-box">
-    <p class="muted" style="margin-top:0;">One-time temporary password — share it securely and note it now, it will not be shown again:</p>
+    <p class="muted" style="margin-top:0;">One-time temporary password{% if telegram_sent %} (also sent to their Telegram){% endif %} — share it securely and note it now, it will not be shown again:</p>
     <div class="temp-password-value">{{ temp_password }}</div>
   </div>
-  <p class="muted">The new account must change this password the first time it signs in.</p>
+  <p class="muted">Valid for 15 minutes. The new account must sign in with it and change it before then.</p>
 
   <a class="btn" href="{% url 'account_detail' created_user.id %}">View account</a>
   <a class="btn btn-ghost" href="{% url 'account_list' %}">Back to accounts</a>

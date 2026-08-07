@@ -7,20 +7,34 @@ call site forgetting to add them.
 """
 from __future__ import annotations
 
+import logging
+from datetime import timedelta
+
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.urls import reverse
+from django.utils import timezone
 from django.utils.crypto import get_random_string
 
 from accounts.models import UserProfile
 from accounts.roles import is_admin, is_staff_member
 from market.models import AdminAuditAction
 from market.services.audit import record_admin_action
+from notifications.services import send_telegram_message
+
+logger = logging.getLogger(__name__)
 
 # Unambiguous charset for a temp password shown once on screen — no
 # 0/O/1/l/I, so a support call reading it aloud doesn't hit an
 # ambiguous character.
 _TEMP_PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789!@#$%"
+
+# How long a freshly assigned temp password is a valid login credential
+# for — see accounts.views.BazaarLoginView.form_valid, which is what
+# actually enforces this deadline.
+TEMP_PASSWORD_TTL = timedelta(minutes=15)
 
 
 class AccountActionError(Exception):
@@ -37,8 +51,31 @@ def active_admin_count() -> int:
     return User.objects.filter(is_superuser=True, is_staff=True, is_active=True).count()
 
 
+def _deliver_temp_password_telegram(*, request, chat_id: str, username: str, temp_password: str, reason: str) -> bool:
+    """Fire-and-forget delivery of a freshly (re)generated temp password —
+    the one and only place these credentials leave the server. Runs the
+    same Telegram bot as every other notification in this project (no
+    second bot/token), and is always called via transaction.on_commit so
+    nothing is ever sent for a User row that then gets rolled back."""
+    login_url = request.build_absolute_uri(reverse("login")) if request is not None else "/accounts/login/"
+    verb = "created" if reason == "account_created" else "reset"
+    text = (
+        f"\U0001f511 Your Bazaar account was just {verb}.\n"
+        f"Username: {username}\n"
+        f"Temporary password: {temp_password}\n\n"
+        f"This password is only valid for {int(TEMP_PASSWORD_TTL.total_seconds() // 60)} minutes — "
+        f"sign in now and set a new password before then:\n{login_url}"
+    )
+    sent = send_telegram_message(chat_id, text, token=settings.TELEGRAM_SECURITY_BOT_TOKEN)
+    if not sent:
+        logger.warning("Temp password Telegram delivery failed for %s (%s)", username, reason)
+    return sent
+
+
 @transaction.atomic
-def create_account(actor, *, username, first_name, last_name, email, role: str, is_active: bool, request):
+def create_account(
+    actor, *, username, first_name, last_name, email, telegram_chat_id: str, role: str, is_active: bool, request
+):
     """`role` is "user" or "staff" — never "admin"; Admin accounts are
     only ever created via `manage.py createsuperuser` (see docs), so
     there is no code path here that can mint one."""
@@ -62,8 +99,12 @@ def create_account(actor, *, username, first_name, last_name, email, role: str, 
     # already created the profile — fetch, don't re-create.
     profile = user.profile
     profile.created_by = actor if getattr(actor, "is_authenticated", False) else None
+    profile.telegram_chat_id = telegram_chat_id
     profile.must_change_password = True
-    profile.save(update_fields=["created_by", "must_change_password"])
+    profile.temp_password_expires_at = timezone.now() + TEMP_PASSWORD_TTL
+    profile.save(
+        update_fields=["created_by", "telegram_chat_id", "must_change_password", "temp_password_expires_at"]
+    )
 
     record_admin_action(
         request,
@@ -77,7 +118,14 @@ def create_account(actor, *, username, first_name, last_name, email, role: str, 
         {"reason": "account_created"},
         target_user=user,
     )
-    return user, temp_password
+    telegram_sent = _deliver_temp_password_telegram(
+        request=request,
+        chat_id=telegram_chat_id,
+        username=username,
+        temp_password=temp_password,
+        reason="account_created",
+    )
+    return user, temp_password, telegram_sent
 
 
 @transaction.atomic
@@ -133,9 +181,12 @@ def demote_to_user(actor, target: User, request):
 
 
 @transaction.atomic
-def reset_password(actor, target: User, request) -> str:
+def reset_password(actor, target: User, request) -> tuple[str, bool]:
     """Admin can reset a Staff or User's password; Staff can only reset a
-    regular User's password (mirrors set_active's role guard)."""
+    regular User's password (mirrors set_active's role guard). Returns
+    (temp_password, telegram_sent) — telegram_sent is False (not an
+    error) when the account has no telegram_chat_id on file yet, e.g.
+    one created before this feature existed."""
     if not (is_admin(actor) or is_staff_member(actor)):
         raise PermissionDenied("Only Admin and Staff accounts can reset another account's password.")
     if is_admin(target) and not is_admin(actor):
@@ -148,6 +199,19 @@ def reset_password(actor, target: User, request) -> str:
     target.save(update_fields=["password"])
     profile, _ = UserProfile.objects.get_or_create(user=target)
     profile.must_change_password = True
-    profile.save(update_fields=["must_change_password"])
+    profile.temp_password_expires_at = timezone.now() + TEMP_PASSWORD_TTL
+    profile.save(update_fields=["must_change_password", "temp_password_expires_at"])
     record_admin_action(request, AdminAuditAction.PASSWORD_RESET_INITIATED, {}, target_user=target)
-    return temp_password
+
+    telegram_sent = False
+    if profile.telegram_chat_id:
+        telegram_sent = _deliver_temp_password_telegram(
+            request=request,
+            chat_id=profile.telegram_chat_id,
+            username=target.username,
+            temp_password=temp_password,
+            reason="password_reset",
+        )
+    else:
+        logger.warning("No telegram_chat_id on file for %s; temp password shown on screen only", target.username)
+    return temp_password, telegram_sent

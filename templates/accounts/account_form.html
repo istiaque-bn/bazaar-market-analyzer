@@ -9,7 +9,7 @@
     {% else %}
       New User accounts can browse stocks, track a portfolio, and manage their own watchlist and alerts.
     {% endif %}
-    A temporary password is generated automatically and shown once after creation — the new account must change it at first login.
+    A temporary password is generated automatically and sent to the Telegram chat ID below — it's valid for 15 minutes, and the new account must change it at first login.
   </p>
   <form method="post" class="form" id="accountCreateForm">
     {% csrf_token %}
@@ -18,6 +18,8 @@
     <label>First name{{ form.first_name }}{{ form.first_name.errors }}</label>
     <label>Last name{{ form.last_name }}{{ form.last_name.errors }}</label>
     <label>Email{{ form.email }}{{ form.email.errors }}</label>
+    <label>Telegram chat ID{{ form.telegram_chat_id }}{{ form.telegram_chat_id.errors }}</label>
+    <p class="muted" style="margin-top:-0.5rem;">{{ form.telegram_chat_id.help_text }}</p>
     <label style="display:flex;flex-direction:row;align-items:center;gap:0.5rem;">{{ form.is_active }} Active immediately</label>
     <button class="btn" type="submit" id="accountCreateSubmit">Create account</button>
   </form>
