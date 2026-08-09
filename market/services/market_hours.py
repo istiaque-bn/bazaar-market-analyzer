@@ -56,7 +56,7 @@ def _format_when(now_local: datetime, next_at: datetime) -> str:
     next_local = timezone.localtime(next_at)
     today = now_local.date()
     target = next_local.date()
-    clock = next_local.strftime("%I:%M %p").lstrip("0")
+    clock = next_local.strftime("%H:%M")
     if target == today:
         return f"today {clock}"
     if target == today + timedelta(days=1):
