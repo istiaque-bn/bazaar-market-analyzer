@@ -68,6 +68,12 @@ app.conf.beat_schedule = {
         "task": "notifications.tasks.send_ml_daily_report",
         "schedule": 60.0,
     },
+    # Check operational health frequently, but the task sends a Telegram
+    # alert only for new/re-fired conditions and applies its own cooldown.
+    "send-ops-alerts-to-admin": {
+        "task": "notifications.tasks.send_ops_alerts_to_admin",
+        "schedule": 300.0,
+    },
     # Automatic daily append — no dashboard Fetch button required. The
     # task itself (run_scheduled_append) honors AUTO_DAILY_APPEND.
     "append-market-1005": {

@@ -16,6 +16,48 @@
   <code>docs/RUNBOOKS.md</code> for how to investigate and act on any non-healthy status.
 </div>
 
+<section class="panel" style="margin-top:1.2rem;">
+  <div class="section-title">
+    <div>
+      <h3>Training at a glance</h3>
+      <p class="muted">Automatic check: every day at {{ training.schedule }} Asia/Dhaka · showing active-market models only</p>
+    </div>
+    <span class="badge {% if not training.enabled %}badge-sell{% elif training.last_run.status == 'failure' %}badge-sell{% elif training.last_run.status == 'started' %}badge-watch{% else %}badge-buy{% endif %}">
+      {% if not training.enabled %}OFF{% elif training.last_run %}{{ training.last_run.status|upper }}{% else %}WAITING{% endif %}
+    </span>
+  </div>
+  <p>{{ training.message }}</p>
+  {% if training.last_run %}
+    <p class="muted">
+      Last check: {{ training.last_run.started_at|date:"d M Y, h:i A" }}
+      {% if training.last_run.finished_at %}· finished {{ training.last_run.finished_at|date:"h:i A" }}{% endif %}
+      {% if training.last_run.error %}· Error: {{ training.last_run.error }}{% endif %}
+    </p>
+  {% endif %}
+  <p class="muted">Why a normal skip happens: this model learns from a result 10 trading days in the future. New price data becomes usable only after that result is known.</p>
+
+  {% if training.active_models %}
+  <div class="table-wrap" style="margin-top:0.8rem;">
+    <table>
+      <thead><tr><th>Active model</th><th>Market</th><th>Trained</th><th>Newest data it learned from</th><th>Training rows</th></tr></thead>
+      <tbody>
+        {% for model in training.active_models %}
+        <tr>
+          <td>{{ model.display_name }}</td>
+          <td>{{ model.exchange_scope }}</td>
+          <td>{{ model.trained_at|date:"d M Y, h:i A" }}</td>
+          <td>{{ model.data_cutoff }}</td>
+          <td>{{ model.train_rows }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">No model is active yet. Bazaar will keep using rule-based analysis until a model passes its quality checks.</p>
+  {% endif %}
+</section>
+
 {% for g in groups %}
 {% with a=g.latest %}
 <section class="panel" style="margin-top:1.2rem;">
@@ -70,6 +112,32 @@
   {% endif %}
   {% endif %}
   {% endwith %}
+
+  {% if g.chart.points|length > 1 %}
+  <div style="margin-top:1rem;">
+    <h4>{{ g.chart.label }} trend</h4>
+    <p class="muted">Each point is a completed reliability assessment. 0.50 is roughly chance-level for a balanced two-way direction test.</p>
+    <svg id="mlChart{{ forloop.counter }}" viewBox="0 0 760 240" role="img" aria-label="{{ g.chart.label }} trend" style="width:100%;height:auto;min-height:190px"></svg>
+    {{ g.chart.points|json_script:g.chart.id }}
+    <script>
+    (() => {
+      const data = JSON.parse(document.getElementById("{{ g.chart.id }}").textContent);
+      const svg = document.getElementById("mlChart{{ forloop.counter }}");
+      if (!svg || data.length < 2) return;
+      const ns = "http://www.w3.org/2000/svg", w=760, h=240, p={l:52,r:18,t:18,b:38};
+      const vals=data.map(d=>d.value), low=Math.max(0,Math.min(.5,...vals)-.04), high=Math.min(1,Math.max(.5,...vals)+.04);
+      const x=i=>p.l+i*(w-p.l-p.r)/(data.length-1), y=v=>p.t+(high-v)*(h-p.t-p.b)/(high-low || .1);
+      const add=(tag,a,t)=>{const e=document.createElementNS(ns,tag);Object.entries(a).forEach(([k,v])=>e.setAttribute(k,v));if(t)e.textContent=t;svg.appendChild(e)};
+      add("line",{x1:p.l,y1:y(.5),x2:w-p.r,y2:y(.5),stroke:"currentColor","stroke-opacity":".3","stroke-dasharray":"4 4"});
+      add("path",{d:data.map((d,i)=>`${i?"L":"M"}${x(i)},${y(d.value)}`).join(" "),fill:"none",stroke:"#16834c","stroke-width":"3"});
+      data.forEach((d,i)=>add("circle",{cx:x(i),cy:y(d.value),r:4,fill:"#16834c"}));
+      add("text",{x:p.l,y:h-10,fill:"currentColor","font-size":"12"},data[0].date);
+      add("text",{x:w-p.r,y:h-10,fill:"currentColor","font-size":"12","text-anchor":"end"},data[data.length-1].date);
+      add("text",{x:p.l-7,y:y(.5)+4,fill:"currentColor","font-size":"12","text-anchor":"end"},"0.50");
+    })();
+    </script>
+  </div>
+  {% endif %}
 
   {% with econ=a.metrics.economic %}
   {% if econ.n %}

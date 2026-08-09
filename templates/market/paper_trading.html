@@ -42,6 +42,16 @@
     </tbody></table>
   </section>
 
+  <section class="paper-panel paper-section">
+    <h2>Portfolio performance</h2>
+    <p class="muted">Closing equity, including estimated fees and slippage. This is a simulation, not real investment performance.</p>
+    {% if equity_chart|length > 1 %}
+      <svg id="equityChart" viewBox="0 0 760 280" role="img" aria-label="Paper trading portfolio equity over time" style="width:100%;height:auto;min-height:220px"></svg>
+    {% else %}
+      <p class="muted">The chart will appear after at least two daily closing snapshots.</p>
+    {% endif %}
+  </section>
+
   <section class="paper-panel paper-section"><h2>Virtual trade log</h2>
     <table class="paper-table"><thead><tr><th>Date</th><th>Side</th><th>Share</th><th>Quantity</th><th>Execution</th><th>Fee</th><th>Reason</th></tr></thead><tbody>
       {% for trade in trades %}<tr><td>{{ trade.trade_date }}</td><td>{{ trade.side }}</td><td>{{ trade.stock.trading_code }}</td><td>{{ trade.quantity }}</td><td>৳{{ trade.execution_price|floatformat:2 }}</td><td>৳{{ trade.fee|floatformat:2 }}</td><td>{{ trade.reason }}</td></tr>
@@ -52,4 +62,25 @@
   <section class="paper-panel paper-section"><h2>Strategy guardrails</h2><p>Minimum probability and confidence: 60% · 5% equity per position · maximum 10 positions · 5% observed-volume fill cap · stop loss 5% · take profit 8% · maximum holding period 10 trading sessions · no short selling or margin.</p><p>A/B/G/N shares mature on T+2; Z-category shares use T+3. Unmatured shares cannot be sold and sale proceeds cannot be reused before settlement. Operating window: 10:00 AM–2:25 PM Asia/Dhaka, Sunday–Thursday. A closing P/L statement is recorded at 2:25 PM. Last run: {{ account.last_run_at|default:"Never" }}.</p></section>
   <section class="paper-panel paper-section"><h2>Learning feedback</h2><p>Settled trades: {{ feedback_stats.count|default:0 }} · after-cost win rate: {% if feedback_stats.win_rate != None %}{{ feedback_stats.win_rate|floatformat:2 }}%{% else %}—{% endif %} · average net return: {% if feedback_stats.avg_net_return != None %}{{ feedback_stats.avg_net_return|floatformat:2 }}%{% else %}—{% endif %}.</p><p>Only closed trades become feedback. The original prediction is preserved beside the realized, after-cost outcome so later model and threshold experiments remain auditable and do not leak unfinished outcomes.</p></section>
 </main>
+{{ equity_chart|json_script:"equity-chart-data" }}
+<script>
+(() => {
+  const points = JSON.parse(document.getElementById("equity-chart-data").textContent);
+  const svg = document.getElementById("equityChart");
+  if (!svg || points.length < 2) return;
+  const ns = "http://www.w3.org/2000/svg", w = 760, h = 280, pad = {l:62, r:20, t:22, b:42};
+  const values = points.map(p => p.equity), min = Math.min(...values), max = Math.max(...values);
+  const span = max - min || Math.max(1, max * 0.02), low = min - span * .12, high = max + span * .12;
+  const x = i => pad.l + i * (w - pad.l - pad.r) / (points.length - 1);
+  const y = v => pad.t + (high - v) * (h - pad.t - pad.b) / (high - low);
+  const add = (tag, attrs, text) => { const el = document.createElementNS(ns, tag); Object.entries(attrs).forEach(([k,v]) => el.setAttribute(k,v)); if (text) el.textContent = text; svg.appendChild(el); };
+  add("line", {x1:pad.l,y1:h-pad.b,x2:w-pad.r,y2:h-pad.b,stroke:"currentColor","stroke-opacity":".35"});
+  add("line", {x1:pad.l,y1:pad.t,x2:pad.l,y2:h-pad.b,stroke:"currentColor","stroke-opacity":".35"});
+  add("path", {d:points.map((p,i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.equity).toFixed(1)}`).join(" "),fill:"none",stroke:"#16834c","stroke-width":"3"});
+  add("text", {x:pad.l,y:h-12,fill:"currentColor","font-size":"12"}, points[0].date);
+  add("text", {x:w-pad.r,y:h-12,fill:"currentColor","font-size":"12","text-anchor":"end"}, points[points.length-1].date);
+  add("text", {x:pad.l-8,y:pad.t+5,fill:"currentColor","font-size":"12","text-anchor":"end"}, `৳${high.toFixed(0)}`);
+  add("text", {x:pad.l-8,y:h-pad.b,fill:"currentColor","font-size":"12","text-anchor":"end"}, `৳${low.toFixed(0)}`);
+})();
+</script>
 {% endblock %}

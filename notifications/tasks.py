@@ -302,6 +302,82 @@ def send_ml_daily_report(self, force: bool = False, manual: bool = False):
 
 
 # ---------------------------------------------------------------------------
+# Telegram operational alerts
+# ---------------------------------------------------------------------------
+
+
+@shared_task(
+    bind=True,
+    name="notifications.tasks.send_ops_alerts_to_admin",
+    autoretry_for=(TelegramTransientError,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+    max_retries=5,
+    time_limit=90,
+    soft_time_limit=60,
+)
+@record_task_run("notifications.tasks.send_ops_alerts_to_admin")
+def send_ops_alerts_to_admin(self):
+    """Send newly-firing operational alerts to the private admin Telegram
+    chat. An alert must remain absent for the cooldown window before it can
+    notify again, so a continuing outage is visible without becoming spam."""
+    from datetime import timedelta
+
+    from market.services.locking import LockBusy, distributed_lock
+    from market.services.ops_alerts import evaluate_alerts
+
+    if not getattr(settings, "TELEGRAM_OPS_ALERTS", True):
+        return {"ok": True, "skipped": "disabled"}
+    if not (settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_ADMIN_CHAT_ID):
+        return {"ok": True, "skipped": "not_configured"}
+
+    try:
+        with distributed_lock("telegram-ops-alerts", timeout=90, blocking_timeout=0):
+            cooldown_start = timezone.now() - timedelta(minutes=settings.TELEGRAM_OPS_ALERT_COOLDOWN_MINUTES)
+            fresh = []
+            for alert in evaluate_alerts():
+                title = f"Ops alert: {alert['key']}"
+                already_notified = Alert.objects.filter(
+                    user__isnull=True,
+                    channel=AlertChannel.TELEGRAM,
+                    title=title,
+                    created_at__gte=cooldown_start,
+                ).exists()
+                if not already_notified:
+                    fresh.append(alert)
+
+            if not fresh:
+                return {"ok": True, "skipped": "no_new_alerts"}
+
+            lines = ["⚠️ Bazaar operational alert"]
+            for alert in fresh[:10]:
+                lines.append(f"• {alert['severity'].upper()}: {alert['message']}")
+            if len(fresh) > 10:
+                lines.append(f"• Plus {len(fresh) - 10} more alerts — open /ops/ for details.")
+            text = "\n".join(lines)
+            send_telegram_message_tracked(settings.TELEGRAM_ADMIN_CHAT_ID, text)
+
+            now = timezone.now()
+            Alert.objects.bulk_create(
+                [
+                    Alert(
+                        user=None,
+                        channel=AlertChannel.TELEGRAM,
+                        title=f"Ops alert: {alert['key']}",
+                        message=alert["message"],
+                        is_sent=True,
+                        sent_at=now,
+                    )
+                    for alert in fresh
+                ]
+            )
+            return {"ok": True, "sent": len(fresh)}
+    except LockBusy:
+        return {"ok": True, "skipped": "already_running"}
+
+
+# ---------------------------------------------------------------------------
 # Telegram market open/close notices
 # ---------------------------------------------------------------------------
 

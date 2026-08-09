@@ -164,6 +164,7 @@
                 <a href="{% url 'dashboard' %}">Market screener</a>
                 <a href="{% url 'backtests' %}">Backtests</a>
                 <a href="{% url 'alerts' %}">Alerts</a>
+                {% if is_admin_role %}<a href="{% url 'feedback_admin_dashboard' %}">Feedback</a>{% endif %}
               </div>
             </li>
 

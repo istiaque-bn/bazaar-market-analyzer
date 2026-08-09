@@ -109,6 +109,14 @@ def paper_trading_view(request):
         current = position.stock.last_price or float(position.entry_price)
         pnl = (float(current) - float(position.entry_price)) * position.quantity - float(position.entry_fee)
         position_rows.append({"position": position, "current_price": current, "unrealized_pnl": pnl})
+    equity_chart = [
+        {
+            "date": row["as_of"].isoformat(),
+            "equity": float(row["total_equity"]),
+            "return_pct": round(float((row["total_equity"] / account.initial_cash - 1) * 100), 2) if account.initial_cash else 0,
+        }
+        for row in account.equity_snapshots.order_by("as_of").values("as_of", "total_equity")[:90]
+    ]
     return render(
         request,
         "market/paper_trading.html",
@@ -117,6 +125,7 @@ def paper_trading_view(request):
             "position_rows": position_rows,
             "trades": account.trades.select_related("stock", "position")[:50],
             "snapshots": account.equity_snapshots.all()[:30],
+            "equity_chart": equity_chart,
             "feedback_stats": feedback_stats,
         },
     )
@@ -526,16 +535,85 @@ def ml_reliability_view(request):
     deployed model/exchange/horizon/window, skill vs. baseline,
     calibration, drift warnings, economic diagnostics, recommendations,
     and assessment history."""
+    from django.conf import settings
+
+    from market.models import MLModelVersion, TaskRun, TaskStatus
+    from market.services.exchange_config import enabled_exchanges
     from market.services.reliability_report import assessment_history, latest_assessments
 
+    last_training = TaskRun.objects.filter(task_name="market.tasks.train_ml_model").order_by("-started_at").first()
+    training_message = "No automatic ML training check has been recorded yet."
+    if last_training:
+        skipped_reason = (last_training.detail or {}).get("skipped")
+        if last_training.status == TaskStatus.SUCCESS:
+            training_message = "Training completed successfully. A new model may be active if it passed the quality checks."
+        elif last_training.status == TaskStatus.SKIPPED and skipped_reason == "no new label-resolvable data since last train":
+            training_message = (
+                "Normal skip: there is no new 10-trading-day outcome to learn from yet. "
+                "The system will check again automatically."
+            )
+        elif last_training.status == TaskStatus.SKIPPED and skipped_reason == "disabled":
+            training_message = "Automatic ML training is turned off in the server settings."
+        elif last_training.status == TaskStatus.SKIPPED and skipped_reason == "already_running":
+            training_message = "Another ML training run was already in progress, so this duplicate check was safely skipped."
+        elif last_training.status == TaskStatus.SKIPPED:
+            training_message = "This check was safely skipped: " + (str(skipped_reason) if skipped_reason else "no work was needed.")
+        elif last_training.status == TaskStatus.FAILURE:
+            training_message = "Training failed. Check the error message below and retry only after fixing the cause."
+        elif last_training.status == TaskStatus.STARTED:
+            training_message = "Training is currently running."
+
+    enabled = set(enabled_exchanges())
     groups = [
         {
             "latest": a,
             "history": assessment_history(a.model_family, a.exchange, a.horizon_trading_days, a.window_label, limit=10)[1:],
         }
         for a in latest_assessments()
+        if a.exchange in enabled
     ]
-    return render(request, "market/ml_reliability.html", {"groups": groups})
+    for index, group in enumerate(groups, start=1):
+        assessments = list(reversed(group["history"])) + [group["latest"]]
+        points = []
+        metric_label = ""
+        for assessment in assessments:
+            metrics = assessment.metrics or {}
+            classification = metrics.get("classification") or {}
+            regression = metrics.get("regression") or {}
+            if classification.get("model", {}).get("balanced_accuracy") is not None:
+                metric_label = "Balanced accuracy"
+                value = classification["model"]["balanced_accuracy"]
+            elif regression.get("model", {}).get("direction_hit_rate") is not None:
+                metric_label = "Direction hit rate"
+                value = regression["model"]["direction_hit_rate"]
+            else:
+                continue
+            points.append({"date": assessment.run_at.date().isoformat(), "value": float(value)})
+        group["chart"] = {"label": metric_label, "points": points, "id": f"ml-chart-data-{index}"}
+    model_labels = {
+        "forward_return_rf": "10-Day Price Direction",
+        "next_close_rf": "Next-Day Price Change",
+    }
+    active_models = list(
+        MLModelVersion.objects.filter(is_active=True, exchange_scope__in=enabled).order_by("model_name", "exchange_scope")
+    )
+    for model in active_models:
+        model.display_name = model_labels.get(model.model_name, model.model_name)
+
+    return render(
+        request,
+        "market/ml_reliability.html",
+        {
+            "groups": groups,
+            "training": {
+                "enabled": getattr(settings, "AUTO_ML_TRAINING", True),
+                "schedule": getattr(settings, "AUTO_ML_TRAINING_TIME", "00:30"),
+                "last_run": last_training,
+                "message": training_message,
+                "active_models": active_models,
+            },
+        },
+    )
 
 
 @admin_required

@@ -309,6 +309,11 @@ TELEGRAM_ML_DAILY_REPORT = _bool_env("TELEGRAM_ML_DAILY_REPORT", "True")
 TELEGRAM_ML_REPORT_TIME = os.getenv("TELEGRAM_ML_REPORT_TIME", "17:00").strip()
 TELEGRAM_ML_REPORT_TIMEZONE = os.getenv("TELEGRAM_ML_REPORT_TIMEZONE", "Asia/Dhaka").strip()
 TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip()
+# Operational alerts (stale data, failed jobs, database/model health) use
+# the same private admin chat as the ML report. A cooldown prevents a noisy
+# outage from sending the same alert every scheduler tick.
+TELEGRAM_OPS_ALERTS = _bool_env("TELEGRAM_OPS_ALERTS", "True")
+TELEGRAM_OPS_ALERT_COOLDOWN_MINUTES = _positive_int("TELEGRAM_OPS_ALERT_COOLDOWN_MINUTES", "360")
 
 try:
     _ml_report_hour, _ml_report_minute = (int(p) for p in TELEGRAM_ML_REPORT_TIME.split(":", 1))

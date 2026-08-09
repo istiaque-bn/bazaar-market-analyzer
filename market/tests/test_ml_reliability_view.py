@@ -7,7 +7,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 
-from market.models import Exchange, MLModelVersion, PredictionSnapshot
+from market.models import Exchange, MLModelVersion, PredictionSnapshot, ReliabilityAssessment
 from market.services.ml_model import FEATURE_COLS
 from market.services.reliability_metrics import MIN_SAMPLES_WATCH
 from market.tests.test_reliability_report import _make_settled_snapshots
@@ -42,6 +42,8 @@ class MlReliabilityViewAccessTests(TestCase):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"ML Reliability Monitor", response.content)
+        self.assertIn(b"Training at a glance", response.content)
+        self.assertIn(b"New price data becomes usable only after that result is known", response.content)
         self.assertIn(b"No assessments have run yet", response.content)
 
 
@@ -67,6 +69,15 @@ class MlReliabilityViewContentTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"HEALTHY", response.content)
         self.assertIn(b"Forward Return Classifier", response.content)
+
+    def test_hides_assessments_for_disabled_exchange(self):
+        assessment = ReliabilityAssessment.objects.first()
+        assessment.exchange = Exchange.CSE
+        assessment.save(update_fields=["exchange"])
+
+        response = self.client.get(reverse("ml_reliability"))
+
+        self.assertNotIn(b"Forward Return Classifier", response.content)
 
     def test_never_claims_safe_or_guaranteed(self):
         response = self.client.get(reverse("ml_reliability"))

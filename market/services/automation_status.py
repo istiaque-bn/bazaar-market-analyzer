@@ -43,7 +43,7 @@ def _run_summary(run) -> dict | None:
     }
 
 
-def automation_status_snapshot() -> dict:
+def automation_status_snapshot(*, summary: dict | None = None, alerts: list[dict] | None = None) -> dict:
     from market.services.autosync import get_sync_status, is_market_hours
     from market.services.exchange_config import enabled_exchanges
     from market.services.ml_training import active_model_version
@@ -78,13 +78,17 @@ def automation_status_snapshot() -> dict:
         # instead of the combined one — see market.services.ml_model.
         active_model = active_model_version("forward_return_rf", exchange_scope=enabled[0])
 
-    summary = None
-    alerts = []
-    try:
-        summary = ops_summary()
-        alerts = evaluate_alerts(summary)
-    except Exception:
-        summary = None
+    # The Admin panel already calculates these expensive aggregates for its
+    # own cards. Accepting them here avoids running the same DB-heavy work a
+    # second time during one page request; callers outside that page retain
+    # the original standalone behavior.
+    if summary is None or alerts is None:
+        try:
+            summary = ops_summary()
+            alerts = evaluate_alerts(summary)
+        except Exception:
+            summary = None
+            alerts = []
 
     return {
         "generated_at": timezone.now().isoformat(),

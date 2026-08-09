@@ -157,7 +157,6 @@ def profile(request):
 
 @admin_required
 def admin_panel(request):
-    from market.services.data_quality import provenance_report
     from market.services.market_hours import both_exchanges_status
     from market.services.ops_alerts import evaluate_alerts
     from market.services.ops_metrics import ops_summary
@@ -185,12 +184,6 @@ def admin_panel(request):
     except Exception:
         summary = None
 
-    quality = None
-    try:
-        quality = provenance_report()
-    except Exception:
-        quality = None
-
     ml_groups = []
     try:
         from market.services.reliability_report import latest_assessments
@@ -207,7 +200,7 @@ def admin_panel(request):
     try:
         from market.services.automation_status import automation_status_snapshot
 
-        automation = automation_status_snapshot()
+        automation = automation_status_snapshot(summary=summary, alerts=alerts)
     except Exception:
         automation = None
 
@@ -237,7 +230,10 @@ def admin_panel(request):
             "market_hours": both_exchanges_status(),
             "ops_summary": summary,
             "ops_alerts": alerts,
-            "quality": quality,
+            # The panel links to the dedicated data-quality report. Do not
+            # build that report here too: it can be expensive and was only
+            # used to decide whether to show this always-useful link.
+            "quality": True,
             "ml_groups": ml_groups,
             "recent_tasks": recent_tasks,
             "automation": automation,
