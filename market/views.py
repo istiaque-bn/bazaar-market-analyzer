@@ -45,6 +45,7 @@ def home(request):
 @login_required
 def dashboard(request):
     from market.services.exchange_config import enabled_exchanges
+    from market.services.market_hours import session_status
 
     enabled = enabled_exchanges()
     summary = screen_summary()
@@ -84,6 +85,7 @@ def dashboard(request):
             "close_learn": close_learn,
             "edge": edge,
             "data_last_updated": get_last_success_at(),
+            "dse_session": session_status("DSE"),
             "health_issue": health_issue,
         },
     )
