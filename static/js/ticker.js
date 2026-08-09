@@ -85,18 +85,18 @@
     if (!el || !sync || !sync.last_success) return;
     if (el.dataset.iso === sync.last_success) return; // no change since last render
     try {
-      const fmt = new Intl.DateTimeFormat("en-US", {
+      const fmt = new Intl.DateTimeFormat("en-GB", {
         timeZone: "Asia/Dhaka",
         day: "2-digit",
         month: "short",
         year: "numeric",
         hour: "2-digit",
         minute: "2-digit",
-        hour12: true,
+        hour12: false,
       });
       const parts = {};
       fmt.formatToParts(new Date(sync.last_success)).forEach((p) => { parts[p.type] = p.value; });
-      el.textContent = `${parts.day} ${parts.month} ${parts.year}, ${parts.hour}:${parts.minute} ${parts.dayPeriod}`;
+      el.textContent = `${parts.day} ${parts.month} ${parts.year}, ${parts.hour}:${parts.minute}`;
       el.dataset.iso = sync.last_success;
     } catch (_) {
       /* keep existing text */
