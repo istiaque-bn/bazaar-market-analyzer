@@ -22,6 +22,7 @@
 
   <div class="paper-actions">
     <form method="post" action="{% url 'paper_trading_control' %}">{% csrf_token %}<input type="hidden" name="action" value="{% if account.is_active %}pause{% else %}start{% endif %}"><button class="btn" type="submit">{% if account.is_active %}Pause automation{% else %}Start automation{% endif %}</button></form>
+    {% if paper_config.strategy != "three_day_book_rules" %}<form method="post" action="{% url 'paper_trading_control' %}">{% csrf_token %}<input type="hidden" name="action" value="use_book_rules"><button class="btn btn-secondary" type="submit">Use 3-day trend rules</button></form>{% endif %}
     <form method="post" action="{% url 'paper_trading_control' %}">{% csrf_token %}<input type="hidden" name="action" value="run"><button class="btn btn-secondary" type="submit">Run virtual cycle now</button></form>
   </div>
 
@@ -32,13 +33,13 @@
     <div class="paper-card"><small>Holdings value</small><strong>৳{{ holdings_value|floatformat:2 }}</strong></div>
     <div class="paper-card"><small>Total equity</small><strong>৳{{ total_equity|floatformat:2 }}</strong></div>
     <div class="paper-card"><small>Total return</small><strong class="{% if total_return >= 0 %}positive{% else %}negative{% endif %}">৳{{ total_return|floatformat:2 }} ({{ total_return_pct|floatformat:2 }}%)</strong></div>
-    <div class="paper-card"><small>Open positions</small><strong>{{ open_positions }} / 10</strong></div>
+    <div class="paper-card"><small>Open positions</small><strong>{{ open_positions }} / {{ paper_config.max_positions }}</strong></div>
   </div>
 
   <section class="paper-panel paper-section"><h2>Open positions</h2>
     <table class="paper-table"><thead><tr><th>Share</th><th>Opened</th><th>Matures</th><th>Quantity</th><th>Entry</th><th>Current</th><th>Unrealized P/L</th></tr></thead><tbody>
       {% for row in position_rows %}<tr><td><a href="{% url 'stock_detail' row.position.stock.exchange row.position.stock.trading_code %}">{{ row.position.stock.trading_code }}</a></td><td>{{ row.position.opened_on }}</td><td>{{ row.position.maturity_date }}</td><td>{{ row.position.quantity }}</td><td>৳{{ row.position.entry_price|floatformat:2 }}</td><td>৳{{ row.current_price|floatformat:2 }}</td><td class="{% if row.unrealized_pnl >= 0 %}positive{% else %}negative{% endif %}">৳{{ row.unrealized_pnl|floatformat:2 }}</td></tr>
-      {% empty %}<tr><td colspan="7">No positions yet. The strategy waits for sufficiently strong safe-BUY predictions.</td></tr>{% endfor %}
+      {% empty %}<tr><td colspan="7">No positions yet. The strategy waits for a strong safe-BUY, an established uptrend, a 20-session breakout, and normal liquidity.</td></tr>{% endfor %}
     </tbody></table>
   </section>
 
@@ -59,8 +60,10 @@
     </tbody></table>
   </section>
 
-  <section class="paper-panel paper-section"><h2>Strategy guardrails</h2><p>Minimum probability and confidence: 60% · 5% equity per position · maximum 10 positions · 5% observed-volume fill cap · stop loss 5% · take profit 8% · maximum holding period 10 trading sessions · no short selling or margin.</p><p>A/B/G/N shares mature on T+2; Z-category shares use T+3. Unmatured shares cannot be sold and sale proceeds cannot be reused before settlement. Operating window: 10:00 AM–2:25 PM Asia/Dhaka, Sunday–Thursday. A closing P/L statement is recorded at 2:25 PM. Last run: {{ account.last_run_at|default:"Never" }}.</p></section>
+  <section class="paper-panel paper-section"><h2>Strategy guardrails</h2><p><strong>Three-day trend candidate.</strong> It buys only when the ML says safe-BUY with at least 70% probability and 70% confidence, price is above its 20- and 50-session trends, price breaks above the prior {{ paper_config.breakout_lookback_sessions }}-session closing high, and the share is not in the limited-data/low-liquidity group.</p><p>{{ paper_config.position_size_pct|floatformat:0 }}% equity per position · maximum {{ paper_config.max_positions }} positions · 5% observed-volume fill cap · stop loss {{ paper_config.stop_loss_pct|floatformat:1 }}% · take-profit check {{ paper_config.take_profit_pct|floatformat:1 }}% · maximum holding period {{ paper_config.max_holding_sessions }} trading sessions · no short selling or margin. This controls risk; it cannot guarantee profit.</p><p>A/B/G/N shares mature on T+2; Z-category shares use T+3. Unmatured shares cannot be sold and sale proceeds cannot be reused before settlement. Operating window: 10:00 AM–2:25 PM Asia/Dhaka, Sunday–Thursday. A closing P/L statement is recorded at 2:25 PM. Last run: {{ account.last_run_at|default:"Never" }}.</p></section>
   <section class="paper-panel paper-section"><h2>Learning feedback</h2><p>Settled trades: {{ feedback_stats.count|default:0 }} · after-cost win rate: {% if feedback_stats.win_rate != None %}{{ feedback_stats.win_rate|floatformat:2 }}%{% else %}—{% endif %} · average net return: {% if feedback_stats.avg_net_return != None %}{{ feedback_stats.avg_net_return|floatformat:2 }}%{% else %}—{% endif %}.</p><p>Only closed trades become feedback. The original prediction is preserved beside the realized, after-cost outcome so later model and threshold experiments remain auditable and do not leak unfinished outcomes.</p></section>
+
+  <section class="paper-panel paper-section"><h2>What the paper trades are teaching us</h2><p class="muted">This is advice only. It never automatically changes the ML model or paper-trade rules.</p><p>{{ learning_report.recommendation }}</p>{% if learning_report.confidence_rows %}<table class="paper-table"><thead><tr><th>ML confidence at entry</th><th>Completed trades</th><th>After-cost win rate</th><th>Average net return</th></tr></thead><tbody>{% for row in learning_report.confidence_rows %}<tr><td>{{ row.label }}</td><td>{{ row.count }}</td><td>{{ row.win_rate|floatformat:1 }}%</td><td class="{% if row.average_net_return >= 0 %}positive{% else %}negative{% endif %}">{{ row.average_net_return|floatformat:2 }}%</td></tr>{% endfor %}</tbody></table>{% endif %}</section>
 </main>
 {{ equity_chart|json_script:"equity-chart-data" }}
 <script>

@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Stocks{% endblock %}
 {% block content %}
-<div class="section-title"><h2>All stocks</h2></div>
-<form class="filters" method="get">
+<div class="section-title"><h2>Stocks</h2></div>
+<form class="filters" method="get" id="stockFilterForm">
   <select name="exchange">
     <option value="">All exchanges</option>
     <option value="DSE" {% if exchange == "DSE" %}selected{% endif %}>DSE</option>
@@ -15,17 +15,19 @@
     <option value="WATCH" {% if action == "WATCH" %}selected{% endif %}>WATCH</option>
     <option value="HOLD" {% if action == "HOLD" %}selected{% endif %}>HOLD</option>
   </select>
-  <input type="search" name="q" value="{{ q }}" placeholder="Search code or name">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search code or name" id="stockSearchInput">
   <button class="btn btn-small" type="submit">Filter</button>
 </form>
 <div class="panel">
+  <h3>Regularly traded shares</h3>
+  <p class="muted">These shares have enough recent trading data for the normal market view. This is not investment advice.</p>
   <div class="table-wrap">
     <table>
       <thead>
         <tr><th>Code</th><th>Company</th><th>Price</th><th>Action</th><th>Score</th><th>Mature</th><th>Peak</th><th>ML</th></tr>
       </thead>
       <tbody>
-        {% for stock, analysis in rows %}
+        {% for stock, analysis, quality in main_rows %}
         <tr>
           <td><a href="{% url 'stock_detail' stock.exchange stock.trading_code %}">{{ stock.trading_code }}</a> <span class="muted">{{ stock.exchange }}</span></td>
           <td>{{ stock.company_name|default:"—" }}</td>
@@ -37,7 +39,46 @@
           <td>{% if analysis and analysis.ml_score %}{{ analysis.ml_score|floatformat:0 }}{% else %}—{% endif %}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="8" class="muted">No stocks loaded.</td></tr>
+        <tr><td colspan="8" class="muted">No regularly traded shares match these filters.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<script>
+  (() => {
+    const form = document.getElementById('stockFilterForm');
+    const search = document.getElementById('stockSearchInput');
+    if (!form || !search) return;
+    // Chromium/Safari fire `search` when the native × clear control is used.
+    // Submit only once the field is empty, so normal typing still waits for
+    // the user to press Filter or Enter.
+    search.addEventListener('search', () => {
+      if (!search.value) form.requestSubmit();
+    });
+  })();
+</script>
+
+<div class="panel" style="margin-top:1rem;">
+  <h3>Limited data / low liquidity shares</h3>
+  <p class="muted">These shares remain visible, but their recent trading data is limited. Treat any indicator with extra caution; they are not removed from Bazaar.</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Code</th><th>Company</th><th>Price</th><th>Why shown here</th><th>Recent trading days</th><th>ML caution</th></tr>
+      </thead>
+      <tbody>
+        {% for stock, analysis, quality in limited_rows %}
+        <tr>
+          <td><a href="{% url 'stock_detail' stock.exchange stock.trading_code %}">{{ stock.trading_code }}</a> <span class="muted">{{ stock.exchange }}</span></td>
+          <td>{{ stock.company_name|default:"—" }}</td>
+          <td>{% if stock.last_price %}{{ stock.last_price|floatformat:2 }}{% else %}—{% endif %}</td>
+          <td>{{ quality.reasons|join:" · " }}</td>
+          <td>{{ quality.recent_sessions }} / 60-day window</td>
+          <td><span class="badge badge-watch">Limited confidence</span></td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6" class="muted">No limited-data or low-liquidity shares match these filters.</td></tr>
         {% endfor %}
       </tbody>
     </table>

@@ -17,6 +17,7 @@ from market.models import (
     PriceHistory,
     SignalAction,
     Stock,
+    TechnicalSnapshot,
 )
 from market.services.paper_trading import ensure_account, run_autonomous_cycle, trading_window_status
 
@@ -25,13 +26,17 @@ class PaperTradingServiceTests(TestCase):
     def setUp(self):
         self.day = date(2026, 8, 3)
         self.stock = Stock.objects.create(
-            exchange=Exchange.DSE, trading_code="PAPER", company_name="Paper Ltd", last_price=100, last_volume=100000
+            exchange=Exchange.DSE, trading_code="PAPER", company_name="Paper Ltd", last_price=125, last_volume=100000
         )
-        for i in range(15):
-            d = self.day - timedelta(days=20 - i)
+        for i in range(90):
+            d = self.day - timedelta(days=89 - i)
+            close = 100 + i
             PriceHistory.objects.create(
-                stock=self.stock, date=d, open=100, high=102, low=99, close=100, volume=100000
+                stock=self.stock, date=d, open=close - 1, high=close + 1, low=close - 2, close=close, volume=100000
             )
+        TechnicalSnapshot.objects.create(
+            stock=self.stock, as_of=self.day, sma_20=174, sma_50=158, volume_sma_20=90000,
+        )
         self.buy_signal = AnalysisResult.objects.create(
             stock=self.stock, as_of=self.day, action=SignalAction.BUY, score=60,
             confidence=0.75, probability=0.70, risk_level="low", is_safe_buy=True,
@@ -64,7 +69,7 @@ class PaperTradingServiceTests(TestCase):
             stock=self.stock, as_of=next_day, action=SignalAction.SELL, score=-50,
             confidence=0.8, probability=0.2, risk_level="medium", is_safe_buy=False,
         )
-        self.stock.last_price = 110
+        self.stock.last_price = 140
         self.stock.save(update_fields=["last_price"])
 
         run_autonomous_cycle(as_of=next_day)
@@ -84,6 +89,15 @@ class PaperTradingServiceTests(TestCase):
         self.buy_signal.probability = 0.55
         self.buy_signal.save(update_fields=["probability"])
         run_autonomous_cycle(as_of=self.day)
+        self.assertFalse(PaperPosition.objects.exists())
+
+    def test_book_rules_reject_a_share_that_is_not_above_its_trend(self):
+        technical = TechnicalSnapshot.objects.get(stock=self.stock, as_of=self.day)
+        technical.sma_20 = 126
+        technical.save(update_fields=["sma_20"])
+
+        run_autonomous_cycle(as_of=self.day)
+
         self.assertFalse(PaperPosition.objects.exists())
 
     def test_unmatured_shares_cannot_be_sold(self):
@@ -135,3 +149,7 @@ class PaperTradingAccessTests(TestCase):
         response = self.client.post(reverse("paper_trading_control"), {"action": "pause"})
         self.assertEqual(response.status_code, 302)
         self.assertFalse(ensure_account().is_active)
+
+        response = self.client.post(reverse("paper_trading_control"), {"action": "use_book_rules"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(ensure_account().strategy_config["strategy"], "three_day_book_rules")

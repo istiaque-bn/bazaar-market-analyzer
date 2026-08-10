@@ -22,16 +22,22 @@ from market.models import (
     PaperTrade,
     PaperTradingAccount,
     SignalAction,
+    TechnicalSnapshot,
 )
 
 DEFAULT_CONFIG = {
-    "min_probability": 0.60,
-    "min_confidence": 0.60,
-    "position_size_pct": 5.0,
-    "max_positions": 10,
-    "stop_loss_pct": 5.0,
-    "take_profit_pct": 8.0,
-    "max_holding_sessions": 10,
+    # This is deliberately a paper-only, conservative candidate.  It combines
+    # a trend/breakout entry rule with the application's own safe-BUY signal;
+    # it is not a promise that any three-day period will be profitable.
+    "strategy": "three_day_book_rules",
+    "min_probability": 0.70,
+    "min_confidence": 0.70,
+    "position_size_pct": 3.0,
+    "max_positions": 3,
+    "stop_loss_pct": 2.5,
+    "take_profit_pct": 4.5,
+    "max_holding_sessions": 3,
+    "breakout_lookback_sessions": 20,
     "fee_pct_per_side": 0.35,
     "slippage_pct_per_side": 0.10,
     "liquidity_limit_pct": 5.0,
@@ -54,7 +60,13 @@ def ensure_account() -> PaperTradingAccount:
         name="Admin autonomous paper fund",
         defaults={"initial_cash": Decimal("100000.00"), "cash": Decimal("100000.00"), "strategy_config": DEFAULT_CONFIG},
     )
-    merged = {**DEFAULT_CONFIG, **(account.strategy_config or {})}
+    stored_config = account.strategy_config or {}
+    # Accounts created before the three-day strategy keep their existing
+    # behaviour until an admin explicitly switches them.  This avoids an
+    # unreviewed rule change to an already-running simulation.
+    if not created and "strategy" not in stored_config:
+        stored_config = {**stored_config, "strategy": "legacy_ml_only"}
+    merged = {**DEFAULT_CONFIG, **stored_config}
     if created or merged != account.strategy_config:
         account.strategy_config = merged
         account.save(update_fields=["strategy_config", "updated_at"])
@@ -127,6 +139,83 @@ def _holding_sessions(position: PaperPosition, as_of) -> int:
 
 def _latest_signal(stock_id: int, as_of):
     return AnalysisResult.objects.filter(stock_id=stock_id, as_of__lte=as_of).order_by("-as_of").first()
+
+
+def _passes_three_day_book_rules(signal, cfg: dict) -> bool:
+    """Require a liquid, established uptrend before a short paper-trade entry.
+
+    The rule is intentionally stricter than a raw ML BUY: the close must be
+    above both 20- and 50-session averages and must break the prior 20-session
+    closing high.  Position and exit limits remain in ``DEFAULT_CONFIG``.
+    """
+    lookback = max(2, int(cfg.get("breakout_lookback_sessions", 20)))
+    technical = (
+        TechnicalSnapshot.objects.filter(stock_id=signal.stock_id, as_of__lte=signal.as_of)
+        .order_by("-as_of")
+        .first()
+    )
+    if not technical or any(value is None for value in (technical.sma_20, technical.sma_50)):
+        return False
+
+    closes = list(
+        signal.stock.prices.live()
+        .filter(date__lte=signal.as_of)
+        .order_by("-date")
+        .values_list("close", flat=True)[: lookback + 1]
+    )
+    if len(closes) < lookback + 1 or closes[0] is None or any(close is None for close in closes[1:]):
+        return False
+    close = float(closes[0])
+    if not (close > float(technical.sma_20) > float(technical.sma_50)):
+        return False
+    if close <= max(float(value) for value in closes[1:]):
+        return False
+    if technical.volume_sma_20 and (signal.stock.last_volume or 0) < technical.volume_sma_20:
+        return False
+    return True
+
+
+def _eligible_entry_signals(*, as_of, cfg: dict, excluded_stock_ids: set[int], slots: int):
+    """Return ranked candidates, applying the selected paper strategy only."""
+    from market.services.exchange_config import enabled_exchanges
+
+    latest_as_of = (
+        AnalysisResult.objects.filter(as_of__lte=as_of)
+        .order_by("-as_of")
+        .values_list("as_of", flat=True)
+        .first()
+    )
+    if not latest_as_of or not slots:
+        return []
+    base = (
+        AnalysisResult.objects.filter(
+            as_of=latest_as_of, action=SignalAction.BUY, is_safe_buy=True,
+            confidence__gte=float(cfg["min_confidence"]), probability__gte=float(cfg["min_probability"]),
+            stock__is_active=True, stock__exchange__in=enabled_exchanges(),
+        )
+        .exclude(risk_level="high")
+        .exclude(stock_id__in=excluded_stock_ids)
+        .select_related("stock")
+        .order_by("-probability", "-confidence", "-score")
+    )
+    if cfg.get("strategy") != "three_day_book_rules":
+        return list(base[:slots])
+
+    # Do this once for the candidate set, so shares already marked as limited
+    # on the Stocks page cannot quietly enter the paper portfolio.
+    from market.services.stock_quality import assess_stock_quality
+
+    signals = list(base)
+    quality = assess_stock_quality([signal.stock for signal in signals])
+    accepted = []
+    for signal in signals:
+        if quality.get(signal.stock_id, {}).get("limited"):
+            continue
+        if _passes_three_day_book_rules(signal, cfg):
+            accepted.append(signal)
+            if len(accepted) >= slots:
+                break
+    return accepted
 
 
 def _equity(account: PaperTradingAccount) -> tuple[Decimal, Decimal, Decimal]:
@@ -282,22 +371,12 @@ def run_autonomous_cycle(*, force: bool = False, as_of=None) -> dict:
     opened_stock_ids = set(account.positions.filter(is_open=True).values_list("stock_id", flat=True))
     # Never churn out and back into the same share during one session.
     traded_stock_ids_today = set(account.trades.filter(trade_date=as_of).values_list("stock_id", flat=True))
-    latest_as_of = AnalysisResult.objects.filter(as_of__lte=as_of).order_by("-as_of").values_list("as_of", flat=True).first()
-    candidates = AnalysisResult.objects.none()
-    if latest_as_of and slots:
-        from market.services.exchange_config import enabled_exchanges
-
-        candidates = (
-            AnalysisResult.objects.filter(
-                as_of=latest_as_of, action=SignalAction.BUY, is_safe_buy=True,
-                confidence__gte=float(cfg["min_confidence"]), probability__gte=float(cfg["min_probability"]),
-                stock__is_active=True, stock__exchange__in=enabled_exchanges(),
-            )
-            .exclude(risk_level="high")
-            .exclude(stock_id__in=opened_stock_ids | traded_stock_ids_today)
-            .select_related("stock")
-            .order_by("-probability", "-confidence", "-score")[:slots]
-        )
+    candidates = _eligible_entry_signals(
+        as_of=as_of,
+        cfg=cfg,
+        excluded_stock_ids=opened_stock_ids | traded_stock_ids_today,
+        slots=slots,
+    )
 
     bought = []
     budget = _money(total_equity * _d(cfg["position_size_pct"]) / 100)

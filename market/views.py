@@ -95,7 +95,8 @@ def dashboard(request):
 def paper_trading_view(request):
     from django.db.models import Avg, Count, Q
     from market.models import PaperLearningFeedback
-    from market.services.paper_trading import account_summary, ensure_account
+    from market.services.paper_learning import paper_learning_report
+    from market.services.paper_trading import DEFAULT_CONFIG, account_summary, ensure_account
 
     account = ensure_account()
     summary = account_summary(account)
@@ -129,6 +130,8 @@ def paper_trading_view(request):
             "snapshots": account.equity_snapshots.all()[:30],
             "equity_chart": equity_chart,
             "feedback_stats": feedback_stats,
+            "learning_report": paper_learning_report(),
+            "paper_config": {**DEFAULT_CONFIG, **(account.strategy_config or {})},
         },
     )
 
@@ -136,7 +139,7 @@ def paper_trading_view(request):
 @admin_required
 @require_POST
 def paper_trading_control(request):
-    from market.services.paper_trading import ensure_account
+    from market.services.paper_trading import DEFAULT_CONFIG, ensure_account
 
     account = ensure_account()
     action = request.POST.get("action")
@@ -144,6 +147,10 @@ def paper_trading_control(request):
         account.is_active = action == "start"
         account.save(update_fields=["is_active", "updated_at"])
         messages.success(request, "Autonomous paper trading started." if account.is_active else "Autonomous paper trading paused.")
+    elif action == "use_book_rules":
+        account.strategy_config = dict(DEFAULT_CONFIG)
+        account.save(update_fields=["strategy_config", "updated_at"])
+        messages.success(request, "Three-day trend paper rules enabled. This remains a virtual-only simulation.")
     elif action == "run":
         from market.tasks import run_paper_trading
 
@@ -194,6 +201,7 @@ def _get_stock_for_public_route(exchange: str, code: str) -> Stock:
 @login_required
 def stock_list(request):
     from market.services.exchange_config import enabled_exchanges
+    from market.services.stock_quality import assess_stock_quality
 
     exchange = request.GET.get("exchange", "")
     q = request.GET.get("q", "").strip()
@@ -209,12 +217,20 @@ def stock_list(request):
     if action:
         stocks = [s for s in stocks if analyses.get(s.id) and analyses[s.id].action == action]
     else:
-        stocks = list(stocks[:200])
-    rows = [(s, analyses.get(s.id)) for s in stocks]
+        stocks = list(stocks)
+    quality = assess_stock_quality(stocks)
+    main_rows = [(s, analyses.get(s.id), quality[s.id]) for s in stocks if not quality[s.id]["limited"]]
+    limited_rows = [(s, analyses.get(s.id), quality[s.id]) for s in stocks if quality[s.id]["limited"]]
     return render(
         request,
         "market/stock_list.html",
-        {"rows": rows, "exchange": exchange, "q": q, "action": action},
+        {
+            "main_rows": main_rows,
+            "limited_rows": limited_rows,
+            "exchange": exchange,
+            "q": q,
+            "action": action,
+        },
     )
 
 
