@@ -13,9 +13,10 @@ import requests
 from celery import shared_task
 from django.db.utils import OperationalError
 from django.test import TestCase
+from django.utils import timezone
 
 from market.models import Exchange, PriceHistory, Stock, TaskRun, TaskStatus
-from market.services.task_status import record_task_run
+from market.services.task_status import ORPHAN_GRACE_SECONDS, record_task_run, reconcile_orphaned_task_runs
 from market.tasks import (
     _TRANSIENT_ERRORS,
     append_daily_bars,
@@ -164,6 +165,29 @@ class TaskStatusRecordingTests(TestCase):
         noop()
         noop()
         self.assertEqual(TaskRun.objects.filter(task_name="test.repeated_task").count(), 2)
+
+    def test_orphaned_started_run_is_closed_after_hard_limit_and_grace(self):
+        run = TaskRun.objects.create(task_name="market.tasks.fetch_all_market_data", status=TaskStatus.STARTED)
+        now = timezone.now()
+        run.started_at = now - timedelta(seconds=600 + ORPHAN_GRACE_SECONDS + 1)
+        run.save(update_fields=["started_at"])
+
+        result = reconcile_orphaned_task_runs(now=now)
+
+        self.assertEqual(result["run_ids"], [run.id])
+        run.refresh_from_db()
+        self.assertEqual(run.status, TaskStatus.FAILURE)
+        self.assertIsNotNone(run.finished_at)
+        self.assertIn("Orphaned task record", run.error)
+
+    def test_recent_started_run_is_not_reconciled(self):
+        run = TaskRun.objects.create(task_name="market.tasks.fetch_all_market_data", status=TaskStatus.STARTED)
+
+        result = reconcile_orphaned_task_runs(now=timezone.now())
+
+        self.assertEqual(result["reconciled"], 0)
+        run.refresh_from_db()
+        self.assertEqual(run.status, TaskStatus.STARTED)
 
 
 class TaskLockingIntegrationTests(TestCase):

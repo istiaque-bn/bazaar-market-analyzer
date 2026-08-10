@@ -74,6 +74,13 @@ app.conf.beat_schedule = {
         "task": "notifications.tasks.send_ops_alerts_to_admin",
         "schedule": 300.0,
     },
+    # A hard time limit can kill a worker child before its TaskRun decorator
+    # records the failure. Reconcile those durable rows before they become
+    # permanent false "stuck job" alerts.
+    "reconcile-orphaned-task-runs": {
+        "task": "market.tasks.reconcile_orphaned_task_runs",
+        "schedule": 300.0,
+    },
     # Automatic daily append — no dashboard Fetch button required. The
     # task itself (run_scheduled_append) honors AUTO_DAILY_APPEND.
     "append-market-1005": {

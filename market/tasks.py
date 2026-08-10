@@ -80,9 +80,26 @@ def run_intraday_analysis():
 def fetch_all_market_data(include_history: bool = False):
     from market.services.analyzer import fetch_all
     from market.services.autosync import exclusive_db_write
+    from market.services.locking import LockBusy, distributed_lock
 
-    with exclusive_db_write(blocking=True, timeout=180):
-        return fetch_all(use_demo_if_empty=False, include_history=include_history)
+    try:
+        # A full fetch is expensive and must never queue behind another full
+        # fetch.  Waiting consumed the task's time budget and produced stale
+        # STARTED rows when the worker was later killed at its hard limit.
+        with distributed_lock("full-market-fetch", timeout=660, blocking_timeout=0):
+            with exclusive_db_write(blocking=True, timeout=180):
+                return fetch_all(use_demo_if_empty=False, include_history=include_history)
+    except LockBusy:
+        return {"ok": True, "skipped": "already_running"}
+
+
+@shared_task(name="market.tasks.reconcile_orphaned_task_runs", time_limit=60, soft_time_limit=45)
+@record_task_run("market.tasks.reconcile_orphaned_task_runs")
+def reconcile_orphaned_task_runs_task():
+    """Mark TaskRun rows abandoned by a hard-killed worker as failures."""
+    from market.services.task_status import reconcile_orphaned_task_runs
+
+    return reconcile_orphaned_task_runs()
 
 
 @shared_task(

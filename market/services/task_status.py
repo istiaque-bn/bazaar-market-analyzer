@@ -2,10 +2,29 @@
 from __future__ import annotations
 
 from functools import wraps
+from datetime import timedelta
 
 from django.utils import timezone
 
 from market.models import TaskRun, TaskStatus
+
+
+# A hard time limit kills the Celery child process immediately.  Code in the
+# task's ``except`` block then cannot run, leaving its durable TaskRun row as
+# ``started`` forever.  The reconciler below is deliberately independent of
+# Celery's result backend so operations status can heal after that failure.
+TASK_HARD_LIMIT_SECONDS = {
+    "market.tasks.sync_live_market": 90,
+    "market.tasks.run_intraday_analysis": 120,
+    "market.tasks.fetch_all_market_data": 600,
+    "market.tasks.run_full_analysis": 900,
+    "market.tasks.append_daily_bars": 600,
+    "market.tasks.train_ml_model": 600,
+    "market.tasks.close_learn_settlement": 600,
+    "market.tasks.assess_ml_reliability": 600,
+    "market.tasks.run_end_of_day_pipeline": 1800,
+}
+ORPHAN_GRACE_SECONDS = 120
 
 
 def _status_for_result(result) -> str:
@@ -55,3 +74,31 @@ def record_task_run(task_name: str):
         return wrapper
 
     return decorator
+
+
+def reconcile_orphaned_task_runs(*, now=None) -> dict:
+    """Close records whose Celery process could no longer write its result.
+
+    This does not guess about recent jobs: a row is changed only after its
+    task-specific hard limit plus a two-minute grace period.  Rows are kept
+    for audit purposes and become normal failures with a clear explanation.
+    """
+    now = now or timezone.now()
+    reconciled: list[int] = []
+    started = TaskRun.objects.filter(status=TaskStatus.STARTED).order_by("started_at")
+    for run in started.iterator():
+        hard_limit = TASK_HARD_LIMIT_SECONDS.get(run.task_name, 600)
+        cutoff = now - timedelta(seconds=hard_limit + ORPHAN_GRACE_SECONDS)
+        if run.started_at > cutoff:
+            continue
+        updated = TaskRun.objects.filter(pk=run.pk, status=TaskStatus.STARTED).update(
+            status=TaskStatus.FAILURE,
+            finished_at=now,
+            error=(
+                "Orphaned task record: no completion was written after the "
+                f"{hard_limit}-second hard limit plus grace period; the Celery worker process likely ended."
+            ),
+        )
+        if updated:
+            reconciled.append(run.pk)
+    return {"ok": True, "reconciled": len(reconciled), "run_ids": reconciled}
