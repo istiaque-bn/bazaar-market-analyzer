@@ -17,11 +17,15 @@ from django.contrib import messages
 from django.contrib.auth import logout
 from django.shortcuts import redirect
 from django.urls import NoReverseMatch, resolve, reverse
+from django.utils import timezone
 
 # url names reachable by an authenticated user who must change their
 # password before anything else, or that must never trigger the
 # deactivated-account bounce (logout itself, static assets).
 _PASSWORD_CHANGE_EXEMPT = {"force_password_change", "logout"}
+
+_IDLE_TIMEOUT_SECONDS = 30 * 60
+_SESSION_LAST_ACTIVITY_KEY = "bazaar_last_activity_at"
 
 
 class AccountStateMiddleware:
@@ -50,6 +54,35 @@ class AccountStateMiddleware:
                         return redirect(reverse("force_password_change"))
                     except NoReverseMatch:
                         pass
+
+        return self.get_response(request)
+
+
+class SessionSecurityMiddleware:
+    """End a signed-in browser session after 30 minutes without activity.
+
+    ``SESSION_EXPIRE_AT_BROWSER_CLOSE`` handles browser-close sign-out;
+    this rolling server-side check handles an open but unattended tab.
+    Static/media requests never count as activity, so page assets cannot
+    silently keep a session alive.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.path.startswith("/static/") or request.path.startswith("/media/"):
+            return self.get_response(request)
+
+        user = getattr(request, "user", None)
+        if user is not None and getattr(user, "is_authenticated", False):
+            now = timezone.now().timestamp()
+            previous = request.session.get(_SESSION_LAST_ACTIVITY_KEY)
+            if previous is not None and now - float(previous) >= _IDLE_TIMEOUT_SECONDS:
+                logout(request)
+                messages.info(request, "You were logged out after 30 minutes of inactivity.")
+                return redirect("login")
+            request.session[_SESSION_LAST_ACTIVITY_KEY] = now
 
         return self.get_response(request)
 

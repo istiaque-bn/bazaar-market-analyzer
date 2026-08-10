@@ -33,6 +33,13 @@ def _clear_task_logging_context(**kwargs):
 _BD_WEEK = "0-4"
 
 app.conf.beat_schedule = {
+    # Admin-created reminders. The task checks each minute for reminders
+    # due today and marks each one delivered, so duplicate beat ticks do
+    # not create duplicate in-app or Telegram messages.
+    "deliver-admin-reminders": {
+        "task": "notifications.tasks.deliver_admin_reminders",
+        "schedule": 60.0,
+    },
     # Live DSE/CSE quote sync. Ticks every 60s every day; the task itself
     # (market.services.autosync.maybe_sync) no-ops unless
     # AUTO_SYNC_INTERVAL_MARKET/_OFF has actually elapsed, so this one

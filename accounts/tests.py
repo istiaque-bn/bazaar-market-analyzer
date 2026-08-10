@@ -250,6 +250,41 @@ class NoStoreAfterLogoutTests(TestCase):
         self.assertRedirects(response, f"{reverse('login')}?next={reverse('dashboard')}")
 
 
+class SessionSecurityTests(TestCase):
+    def setUp(self):
+        self.user = make_user("idle_session_user")
+        self.client.login(username="idle_session_user", password=PASSWORD)
+
+    def test_browser_session_cookie_has_no_persistent_expiry(self):
+        response = self.client.get(reverse("dashboard"))
+        cookie = response.cookies["sessionid"]
+        self.assertEqual(cookie.get("max-age", ""), "")
+        self.assertEqual(cookie.get("expires", ""), "")
+
+    def test_user_is_logged_out_after_30_minutes_without_activity(self):
+        from accounts.middleware import _IDLE_TIMEOUT_SECONDS
+
+        self.client.get(reverse("dashboard"))
+        session = self.client.session
+        session["bazaar_last_activity_at"] = timezone.now().timestamp() - _IDLE_TIMEOUT_SECONDS
+        session.save()
+
+        response = self.client.get(reverse("stock_list"), follow=True)
+        self.assertEqual(response.request["PATH_INFO"], reverse("login"))
+        self.assertFalse(response.wsgi_request.user.is_authenticated)
+        self.assertContains(response, "30 minutes of inactivity")
+
+    def test_activity_renews_the_idle_window(self):
+        self.client.get(reverse("dashboard"))
+        session = self.client.session
+        session["bazaar_last_activity_at"] = timezone.now().timestamp() - (29 * 60)
+        session.save()
+
+        response = self.client.get(reverse("stock_list"))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.wsgi_request.user.is_authenticated)
+
+
 class DeactivatedAccountSessionTests(TestCase):
     """A deactivated account must lose access on its very next request,
     even mid-session (see accounts.middleware.AccountStateMiddleware)."""

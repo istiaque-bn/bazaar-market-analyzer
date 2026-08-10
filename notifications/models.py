@@ -48,6 +48,19 @@ class Alert(models.Model):
         return self.title
 
 
+class AdminReminder(models.Model):
+    admin = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="admin_reminders")
+    remind_on = models.DateField(db_index=True)
+    action = models.TextField(max_length=1000)
+    telegram_enabled = models.BooleanField(default=True)
+    email_enabled = models.BooleanField(default=False)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["remind_on", "id"]
+
+
 class MlDailyReportStatus(models.TextChoices):
     PENDING = "pending", "Pending"
     SENT = "sent", "Sent"

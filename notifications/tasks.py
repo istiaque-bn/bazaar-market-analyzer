@@ -15,8 +15,39 @@ from market.services.predictor import RESEARCH_DISCLAIMER
 from market.services.screener import potential_shares, safe_buys, screen_summary, sell_candidates
 from market.services.signal_status import market_edge_status
 from market.services.task_status import record_task_run
-from notifications.models import Alert, AlertChannel, MlDailyReportDelivery, MlDailyReportStatus, mask_recipient
+from notifications.models import Alert, AlertChannel, AdminReminder, MlDailyReportDelivery, MlDailyReportStatus, mask_recipient
 from notifications.services import TelegramPermanentError, TelegramTransientError, send_telegram_message, send_telegram_message_tracked
+
+
+@shared_task(name="notifications.tasks.deliver_admin_reminders")
+@record_task_run("notifications.tasks.deliver_admin_reminders")
+def deliver_admin_reminders():
+    due = AdminReminder.objects.filter(remind_on__lte=timezone.localdate(), delivered_at__isnull=True).select_related("admin")
+    delivered = 0
+    for reminder in due:
+        # Re-check before delivery. In normal operation there is one beat
+        # process, and delivered_at makes retries harmless; this extra
+        # lookup also protects a stale queryset from a concurrent worker.
+        if not AdminReminder.objects.filter(pk=reminder.pk, delivered_at__isnull=True).exists():
+            continue
+        text = f"Bazaar reminder for {reminder.remind_on}:\n{reminder.action}"
+        now = timezone.now()
+        Alert.objects.create(
+            user=reminder.admin,
+            channel=AlertChannel.IN_APP,
+            title="Admin reminder",
+            message=text,
+            is_sent=True,
+            sent_at=now,
+        )
+        if reminder.telegram_enabled:
+            send_telegram_message(getattr(settings, "TELEGRAM_ADMIN_CHAT_ID", ""), text)
+        # ``email_enabled`` records the admin's future preference only.
+        # Reminder emails intentionally remain disabled until the separate
+        # email-delivery feature is approved and implemented.
+        AdminReminder.objects.filter(pk=reminder.pk, delivered_at__isnull=True).update(delivered_at=now)
+        delivered += 1
+    return {"ok": True, "delivered": delivered}
 
 
 def _digest_text() -> str:

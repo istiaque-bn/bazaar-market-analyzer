@@ -42,6 +42,7 @@ urlpatterns = [
     path("ml-reliability/", views.ml_reliability_view, name="ml_reliability"),
     path("paper-trading/", views.paper_trading_view, name="paper_trading"),
     path("paper-trading/control/", views.paper_trading_control, name="paper_trading_control"),
+    path("tools/reminders/", views.admin_reminders_view, name="admin_reminders"),
     path("health/", views.health, name="health"),
     path("health/live/", views.liveness_view, name="health_live"),
     path("health/ready/", views.readiness_view, name="health_ready"),

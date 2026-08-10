@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Admin reminders{% endblock %}
+
+{% block content %}
+  <div class="section-title">
+    <div>
+      <h2>Admin reminders</h2>
+      <p class="muted">Private reminders with optional Telegram delivery.</p>
+    </div>
+  </div>
+
+  <section class="panel">
+    <form method="post">
+      {% csrf_token %}
+      {{ form.non_field_errors }}
+      <p>
+        <label for="{{ form.remind_on.id_for_label }}">Date</label><br>
+        {{ form.remind_on }}
+        {{ form.remind_on.errors }}
+      </p>
+      <p>
+        <label for="{{ form.action.id_for_label }}">Probable action</label><br>
+        {{ form.action }}
+        {{ form.action.errors }}
+      </p>
+      <p>
+        <label>{{ form.telegram_enabled }} Send Telegram message</label>
+      </p>
+      <p>
+        <label>{{ form.email_enabled }} Send email message</label><br>
+        <small class="muted">Email reminder delivery is planned but not active yet.</small>
+      </p>
+      <button class="btn" type="submit">Save reminder</button>
+    </form>
+  </section>
+
+  <section class="panel" style="margin-top: 1rem">
+    <table>
+      <thead><tr><th>Date</th><th>Action</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for reminder in reminders %}
+          <tr>
+            <td>{{ reminder.remind_on }}</td>
+            <td>{{ reminder.action }}</td>
+            <td>{% if reminder.delivered_at %}Delivered{% else %}Pending{% endif %}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="3">No reminders yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endblock %}

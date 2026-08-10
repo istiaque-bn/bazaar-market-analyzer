@@ -12,6 +12,7 @@ from datetime import datetime
 from accounts.decorators import admin_required, staff_or_admin_required
 from accounts.roles import role_home_url
 from market.forms import PortfolioForm, TransactionForm
+from market.forms import AdminReminderForm
 from market.models import (
     AnalysisResult,
     BacktestRun,
@@ -159,6 +160,17 @@ def paper_trading_control(request):
     else:
         messages.error(request, "Unknown paper-trading action.")
     return redirect("paper_trading")
+
+
+@admin_required
+def admin_reminders_view(request):
+    from notifications.models import AdminReminder
+    form = AdminReminderForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        AdminReminder.objects.create(admin=request.user, **form.cleaned_data)
+        messages.success(request, "Reminder saved. You will receive it on the selected date.")
+        return redirect("admin_reminders")
+    return render(request, "market/admin_reminders.html", {"form": form, "reminders": AdminReminder.objects.filter(admin=request.user)})
 
 
 def _dashboard_health_issue(as_of) -> str | None:

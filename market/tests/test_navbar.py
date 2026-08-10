@@ -107,6 +107,7 @@ class AdminNavTests(TestCase):
         self.assertIn('href="/data-quality/"', html)
         self.assertIn('href="/ops/"', html)
         self.assertIn('href="/ml-reliability/"', html)
+        self.assertIn('href="/tools/reminders/"', html)
         self.assertIn('href="/admin/"', html)
 
     def test_accounts_link_present(self):

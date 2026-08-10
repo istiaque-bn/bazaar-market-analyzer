@@ -63,15 +63,17 @@ MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
+    # Must run before our account/session gates so they can attach a clear
+    # sign-out reason with Django's message framework.
+    "django.contrib.messages.middleware.MessageMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     # After AuthenticationMiddleware (needs request.user): promptly logs
     # out a deactivated account's live session and forces a
     # temporary-password holder through the password-change screen.
     "accounts.middleware.AccountStateMiddleware",
-    # After auth is resolved so it can see request.user; before
-    # MessageMiddleware doesn't matter (it only touches headers, not body).
+    "accounts.middleware.SessionSecurityMiddleware",
+    # After auth is resolved so it can see request.user.
     "accounts.middleware.NoStoreForAuthenticatedMiddleware",
-    "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
@@ -135,6 +137,13 @@ LOGIN_URL = "login"
 # directly (e.g. the admin's "you're not staff" bounce).
 LOGIN_REDIRECT_URL = "login"
 LOGOUT_REDIRECT_URL = "login"
+
+# A Bazaar sign-in is deliberately a browser-session cookie: closing the
+# browser ends it.  The separate activity middleware renews this 30-minute
+# limit on real authenticated requests and logs a user out once idle.
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+SESSION_COOKIE_AGE = 30 * 60
+SESSION_SAVE_EVERY_REQUEST = False
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [

@@ -10,13 +10,14 @@ from rest_framework.authtoken.models import Token
 
 from accounts.models import UserProfile
 from market.models import AdminAuditAction, AdminAuditLog, MLModelVersion
-from notifications.models import Alert, AlertChannel, MlDailyReportDelivery, MlDailyReportStatus
+from notifications.models import AdminReminder, Alert, AlertChannel, MlDailyReportDelivery, MlDailyReportStatus
 from notifications.services import TelegramPermanentError, TelegramTransientError, send_telegram_message, send_telegram_message_tracked
 from notifications.tasks import (
     _compare_with_previous,
     _digest_text,
     _idempotency_key,
     send_daily_digest,
+    deliver_admin_reminders,
     send_market_close_notification,
     send_market_open_notification,
     send_ml_daily_report,
@@ -25,6 +26,54 @@ from notifications.tasks import (
 PASSWORD = "Correct-Horse-Battery-Staple-42"
 FIXED_NOW_BEFORE = datetime(2026, 8, 5, 4, 0, tzinfo=dt_timezone.utc)  # 10:00 Asia/Dhaka
 FIXED_NOW_AFTER = datetime(2026, 8, 5, 12, 0, tzinfo=dt_timezone.utc)  # 18:00 Asia/Dhaka
+
+
+@override_settings(TELEGRAM_ADMIN_CHAT_ID="999888777")
+class AdminReminderDeliveryTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_superuser(username="reminder_delivery_admin", password=PASSWORD)
+
+    @mock.patch("notifications.tasks.send_telegram_message", return_value=True)
+    def test_due_reminder_creates_in_app_alert_and_telegram_once(self, mock_telegram):
+        reminder = AdminReminder.objects.create(
+            admin=self.admin,
+            remind_on=timezone.localdate(),
+            action="Check the market data pipeline.",
+            telegram_enabled=True,
+        )
+        first = deliver_admin_reminders()
+        second = deliver_admin_reminders()
+
+        reminder.refresh_from_db()
+        self.assertEqual(first["delivered"], 1)
+        self.assertEqual(second["delivered"], 0)
+        self.assertIsNotNone(reminder.delivered_at)
+        self.assertEqual(Alert.objects.filter(user=self.admin, title="Admin reminder").count(), 1)
+        mock_telegram.assert_called_once()
+
+    @mock.patch("notifications.tasks.send_telegram_message")
+    def test_reminder_can_be_in_app_only(self, mock_telegram):
+        AdminReminder.objects.create(
+            admin=self.admin,
+            remind_on=timezone.localdate(),
+            action="Read the reliability report.",
+            telegram_enabled=False,
+        )
+        deliver_admin_reminders()
+        self.assertEqual(Alert.objects.filter(user=self.admin, title="Admin reminder").count(), 1)
+        mock_telegram.assert_not_called()
+
+    @mock.patch("notifications.tasks.send_mail")
+    def test_email_choice_is_saved_but_not_sent_until_email_delivery_is_enabled(self, mock_email):
+        AdminReminder.objects.create(
+            admin=self.admin,
+            remind_on=timezone.localdate(),
+            action="Email delivery will be enabled later.",
+            telegram_enabled=False,
+            email_enabled=True,
+        )
+        deliver_admin_reminders()
+        mock_email.assert_not_called()
 
 
 class DigestModelStatusTests(TestCase):

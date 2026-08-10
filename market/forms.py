@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from django import forms
 from django.db.models import Q
+from django.utils import timezone
 
 from market.models import Portfolio, Stock, TransactionType
 from market.services.exchange_config import enabled_exchanges
@@ -58,6 +59,7 @@ class TransactionForm(forms.Form):
     notes = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 2, "maxlength": 2000}))
     allow_fractional = forms.BooleanField(required=False, widget=forms.HiddenInput)
 
+
     def __init__(self, *args, portfolio: Portfolio | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         # New selections are limited to currently-enabled exchanges — a
@@ -96,3 +98,25 @@ class TransactionForm(forms.Form):
             if quantity != quantity.to_integral_value():
                 self.add_error("quantity", "DSE/CSE shares must be a whole number.")
         return cleaned
+
+
+class AdminReminderForm(forms.Form):
+    remind_on = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
+    action = forms.CharField(
+        max_length=1000,
+        widget=forms.Textarea(attrs={"rows": 3, "placeholder": "Probable action to take"}),
+    )
+    telegram_enabled = forms.BooleanField(required=False, initial=True)
+    email_enabled = forms.BooleanField(required=False, initial=False)
+
+    def clean_remind_on(self):
+        remind_on = self.cleaned_data["remind_on"]
+        if remind_on < timezone.localdate():
+            raise forms.ValidationError("Choose today or a future date.")
+        return remind_on
+
+    def clean_action(self):
+        action = (self.cleaned_data["action"] or "").strip()
+        if not action:
+            raise forms.ValidationError("Please describe the action to take.")
+        return action
