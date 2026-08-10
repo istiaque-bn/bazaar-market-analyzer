@@ -58,6 +58,13 @@
   {% endif %}
 </section>
 
+<section class="panel" style="margin-top:1.2rem;">
+  <div class="section-title"><div><h3>Next-day close: clean live evidence</h3><p class="muted">Uses only immutable forecasts captured before their outcome. It never changes the model.</p></div><span class="badge {% if next_close_diagnostics.ready %}badge-watch{% else %}badge-hold{% endif %}">{% if next_close_diagnostics.ready %}EARLY DATA{% else %}COLLECTING{% endif %}</span></div>
+  <p>{{ next_close_diagnostics.sample_count }} clean settled forecasts · need {{ next_close_diagnostics.minimum_sample }} before stock classifications can be trusted.</p>
+  {% if next_close_diagnostics.confidence %}<div class="table-wrap"><table><thead><tr><th>Confidence</th><th>Forecasts</th><th>MAPE</th><th>Direction hit</th><th>Positive outcomes</th></tr></thead><tbody>{% for row in next_close_diagnostics.confidence %}<tr><td>{{ row.bucket }}</td><td>{{ row.count }}</td><td>{% if row.mape != None %}{{ row.mape }}%{% else %}—{% endif %}</td><td>{% if row.direction_hit_rate != None %}{{ row.direction_hit_rate }}%{% else %}—{% endif %}</td><td>{% if row.win_rate != None %}{{ row.win_rate }}%{% else %}—{% endif %}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+  {% if next_close_diagnostics.stocks %}<details style="margin-top:1rem;"><summary>Stock diagnostics (Green / Yellow / Red)</summary><div class="table-wrap"><table><thead><tr><th>Stock</th><th>Status</th><th>Forecasts</th><th>MAPE</th><th>Direction hit</th></tr></thead><tbody>{% for row in next_close_diagnostics.stocks %}<tr><td>{{ row.stock }}</td><td>{{ row.status }}</td><td>{{ row.count }}</td><td>{{ row.mape|default:"—" }}</td><td>{{ row.direction_hit_rate|default:"—" }}</td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
+</section>
+
 {% for g in groups %}
 {% with a=g.latest %}
 <section class="panel" style="margin-top:1.2rem;">

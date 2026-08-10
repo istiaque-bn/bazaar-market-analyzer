@@ -558,6 +558,7 @@ def ml_reliability_view(request):
     from market.models import MLModelVersion, TaskRun, TaskStatus
     from market.services.exchange_config import enabled_exchanges
     from market.services.reliability_report import assessment_history, latest_assessments
+    from market.services.next_close_diagnostics import next_close_diagnostics
 
     last_training = TaskRun.objects.filter(task_name="market.tasks.train_ml_model").order_by("-started_at").first()
     training_message = "No automatic ML training check has been recorded yet."
@@ -630,6 +631,7 @@ def ml_reliability_view(request):
                 "message": training_message,
                 "active_models": active_models,
             },
+            "next_close_diagnostics": next_close_diagnostics(),
         },
     )
 
