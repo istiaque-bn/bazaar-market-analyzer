@@ -139,11 +139,12 @@ def stock_bias_key(stock_id: int) -> str:
     return f"stock:{stock_id}"
 
 
-def liquid_stock_ids(limit: int = LIQUID_TOP_N) -> set[int]:
-    """Top names by recent average volume (liquidity proxy)."""
+def liquid_stock_ids(limit: int = LIQUID_TOP_N, *, as_of: date | None = None) -> set[int]:
+    """Top names by recent average volume known on ``as_of`` only."""
+    as_of = as_of or timezone.localdate()
     qs = (
         PriceHistory.objects.live()
-        .filter(date__gte=timezone.localdate() - timedelta(days=45))
+        .filter(date__gte=as_of - timedelta(days=45), date__lte=as_of)
         .values("stock_id")
         .annotate(avg_vol=Avg("volume"))
         .order_by("-avg_vol")[:limit]
@@ -304,9 +305,17 @@ def _attach_market_features(
     out = tech.copy()
     out["date"] = pd.to_datetime(out["date"]).dt.normalize()
     ex = build_exchange_context(exchange, start=start, end=end)
-    sec = build_sector_context(exchange, sector, start=start, end=end)
     out = out.merge(ex[["date", "index_ret_1d", "breadth"]], on="date", how="left")
-    out = out.merge(sec[["date", "sector_ret_1d"]], on="date", how="left")
+    # Do not manufacture a sector signal from empty/missing sector labels.
+    # It remains a zeroed placeholder for compatibility with older artifacts
+    # until trustworthy sector coverage is imported.
+    from market.services.next_close_research import sector_data_is_usable
+
+    if sector_data_is_usable(exchange):
+        sec = build_sector_context(exchange, sector, start=start, end=end)
+        out = out.merge(sec[["date", "sector_ret_1d"]], on="date", how="left")
+    else:
+        out["sector_ret_1d"] = 0.0
     out["index_ret_1d"] = out["index_ret_1d"].fillna(0.0)
     out["sector_ret_1d"] = out["sector_ret_1d"].fillna(0.0)
     out["breadth"] = out["breadth"].fillna(0.5)
@@ -445,6 +454,7 @@ def forecast_next_close(
     *,
     exchange: str = "DSE",
     sector: str = "",
+    allow_ml: bool = True,
 ) -> dict | None:
     """Predict next trading day's close; applies combined return bias correction."""
     if df is None or df.empty or len(df) < MIN_HISTORY:
@@ -459,7 +469,9 @@ def forecast_next_close(
 
     analogue_ret, spread, samples = _analogue_one_day_return(data)
     feats = _feature_row(data, exchange=exchange, sector=sector)
-    ml_ret = _ml_one_day_return(feats, exchange=exchange) if feats else None
+    # Historical simulations must opt out: loading today's fitted artifact
+    # while replaying an old date would leak future training outcomes.
+    ml_ret = _ml_one_day_return(feats, exchange=exchange) if (allow_ml and feats) else None
 
     if ml_ret is not None:
         raw_ret = 0.50 * analogue_ret + 0.50 * ml_ret
@@ -667,7 +679,7 @@ def generate_forecasts_for_as_of(as_of: date | None = None, limit: int | None = 
     from market.services.exchange_config import enabled_exchanges
 
     target = next_trading_day(as_of)
-    liquid = liquid_stock_ids()
+    liquid = liquid_stock_ids(as_of=as_of)
     _clear_context_cache()
 
     state = get_learn_state()
@@ -1356,6 +1368,7 @@ def backfill_learn_from_history(lookback_days: int = 60, limit_stocks: int = 40)
                 return_bias=combined,
                 exchange=stock.exchange,
                 sector=stock.sector or "",
+                allow_ml=False,
             )
             if not pred:
                 continue
