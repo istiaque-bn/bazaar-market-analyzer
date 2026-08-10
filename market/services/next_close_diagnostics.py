@@ -42,4 +42,15 @@ def next_close_diagnostics(exchange=Exchange.DSE):
         if metrics["count"] >= MIN_DIAGNOSTIC_SAMPLE and metrics["direction_hit_rate"] is not None:
             status = "GREEN" if metrics["direction_hit_rate"] >= 53 and (metrics["mape"] or 999) < 2 else "RED" if metrics["direction_hit_rate"] < 50 else "YELLOW"
         stocks.append({"stock": code, "status": status, **metrics})
-    return {"sample_count": len(rows), "minimum_sample": MIN_DIAGNOSTIC_SAMPLE, "confidence": confidence, "stocks": sorted(stocks, key=lambda x: x["stock"]), "ready": len(rows) >= MIN_DIAGNOSTIC_SAMPLE}
+    all_metrics = _metrics(rows)
+    warnings = []
+    if len(rows) < MIN_DIAGNOSTIC_SAMPLE:
+        warnings.append(f"Only {len(rows)}/{MIN_DIAGNOSTIC_SAMPLE} clean settled forecasts: results are not yet trustworthy.")
+    elif all_metrics["direction_hit_rate"] is not None and all_metrics["direction_hit_rate"] < 50:
+        warnings.append(f"Direction hit rate is {all_metrics['direction_hit_rate']}%, below 50%.")
+    if rows:
+        model_err = [abs((r.predicted_return or 0) - (r.outcome_return or 0)) for r in rows if r.outcome_return is not None]
+        naive_err = [abs(r.outcome_return or 0) for r in rows if r.outcome_return is not None]
+        if model_err and np.mean(model_err) >= np.mean(naive_err):
+            warnings.append("Model is not currently beating the unchanged-close naive baseline on clean evidence.")
+    return {"sample_count": len(rows), "minimum_sample": MIN_DIAGNOSTIC_SAMPLE, "confidence": confidence, "stocks": sorted(stocks, key=lambda x: x["stock"]), "ready": len(rows) >= MIN_DIAGNOSTIC_SAMPLE, "metrics": all_metrics, "warnings": warnings}
