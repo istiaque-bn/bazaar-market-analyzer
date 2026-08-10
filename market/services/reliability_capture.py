@@ -32,6 +32,7 @@ from market.models import (
     PredictionSnapshot,
     Stock,
 )
+from market.services.close_learn import FEATURE_COLS as NEXT_CLOSE_FEATURE_COLS
 from market.services.close_learn import MODEL_NAME as NEXT_CLOSE_MODEL_NAME
 from market.services.indicators import prices_to_df
 from market.services.market_hours import TRADING_WEEKDAYS
@@ -186,23 +187,24 @@ def capture_next_close_snapshots(as_of: date | None = None) -> dict:
             skipped += 1
             continue
         version = _resolve_active_version(NEXT_CLOSE_MODEL_NAME, stock.exchange)
-        if version is None:
-            skipped += 1
-            continue
+        # The analogue/bias learner may legitimately be served while its ML
+        # challenger is experimental. Capture it too, using a stable baseline
+        # tag, so a missing active model can never erase point-in-time evidence.
+        version_tag = version.version if version is not None else "next-close-baseline-v1"
 
         analysis = AnalysisResult.objects.filter(stock=stock, as_of=as_of).first()
         dq_status, dq_notes = _data_quality(stock, analysis)
 
         _, was_created = PredictionSnapshot.objects.get_or_create(
             model_family=PredictionSnapshot.ModelFamily.NEXT_CLOSE_RF,
-            model_version_tag=version.version,
+            model_version_tag=version_tag,
             stock_trading_code=stock.trading_code,
             exchange=stock.exchange,
             data_cutoff_date=as_of,
             horizon_trading_days=1,
             defaults={
                 "model_version": version,
-                "feature_schema_version": _feature_schema_version(version.feature_schema),
+                "feature_schema_version": _feature_schema_version(version.feature_schema if version else NEXT_CLOSE_FEATURE_COLS),
                 "stock": stock,
                 "target_date": fc.target_date,
                 "reference_close": float(fc.last_close),

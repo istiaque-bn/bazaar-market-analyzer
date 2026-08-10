@@ -191,6 +191,16 @@ class NextCloseCaptureTests(TestCase):
         capture_next_close_snapshots(as_of=self.as_of)
         self.assertEqual(PredictionSnapshot.objects.count(), 1)
 
+    def test_captures_served_baseline_when_no_model_is_active(self):
+        self.version.delete()
+
+        result = capture_next_close_snapshots(as_of=self.as_of)
+
+        self.assertEqual(result["created"], 1)
+        snap = PredictionSnapshot.objects.get(model_family=PredictionSnapshot.ModelFamily.NEXT_CLOSE_RF)
+        self.assertEqual(snap.model_version, None)
+        self.assertEqual(snap.model_version_tag, "next-close-baseline-v1")
+
 
 class CapturePredictionsCombinesBothFamiliesTests(TestCase):
     def test_capture_predictions_runs_both_families(self):

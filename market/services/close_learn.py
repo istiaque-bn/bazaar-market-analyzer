@@ -677,7 +677,7 @@ def generate_forecasts_for_as_of(as_of: date | None = None, limit: int | None = 
     if limit:
         qs = qs[:limit]
 
-    created = updated = skipped = 0
+    created = skipped = 0
     for stock in qs.iterator():
         bars = stock.prices.live().filter(date__lte=as_of).order_by("date")
         df = prices_to_df(bars)
@@ -712,44 +712,51 @@ def generate_forecasts_for_as_of(as_of: date | None = None, limit: int | None = 
             served_return = candidate_return
             served_method = pred["method"]
 
-        _, was_created = NextDayCloseForecast.objects.update_or_create(
+        # A forecast is point-in-time evidence. A retry must never replace its
+        # prediction with later inputs/model state; only settlement is allowed
+        # to enrich it after creation.
+        if NextDayCloseForecast.objects.filter(stock=stock, target_date=target).exists():
+            skipped += 1
+            continue
+        NextDayCloseForecast.objects.create(
             stock=stock,
             target_date=target,
-            defaults={
-                "as_of": as_of,
-                "last_close": pred["last_close"],
-                "predicted_close": served_close,
-                "predicted_return": served_return,
-                "confidence": pred["confidence"],
-                "method": served_method,
-                "features": {
-                    **pred["features"],
-                    "raw_return": pred["raw_return"],
-                    "return_bias": pred["return_bias"],
-                    "global_bias": g_bias,
-                    "stock_bias": s_bias,
-                    "liquid": stock.id in liquid,
-                    "analogue_samples": pred["samples"],
-                    "candidate_return": candidate_return,
-                },
+            as_of=as_of,
+            last_close=pred["last_close"],
+            predicted_close=served_close,
+            predicted_return=served_return,
+            confidence=pred["confidence"],
+            method=served_method,
+            features={
+                **pred["features"],
+                "raw_return": pred["raw_return"],
+                "return_bias": pred["return_bias"],
+                "global_bias": g_bias,
+                "stock_bias": s_bias,
+                "liquid": stock.id in liquid,
+                "analogue_samples": pred["samples"],
+                "candidate_return": candidate_return,
             },
         )
-        if was_created:
-            created += 1
-        else:
-            updated += 1
+        created += 1
 
     state = get_learn_state()
     state.last_forecast_at = timezone.now()
     state.save(update_fields=["last_forecast_at", "updated_at"])
+    # Persist an immutable served-prediction record immediately. This runs
+    # after rows are created, never by re-running model inference.
+    from market.services.reliability_capture import capture_next_close_snapshots
+
+    snapshot_result = capture_next_close_snapshots(as_of=as_of)
     return {
         "ok": True,
         "as_of": as_of.isoformat(),
         "target_date": target.isoformat(),
         "created": created,
-        "updated": updated,
+        "updated": 0,
         "skipped": skipped,
         "liquid_universe": len(liquid),
+        "snapshots": snapshot_result,
     }
 
 
