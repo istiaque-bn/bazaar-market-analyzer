@@ -42,6 +42,14 @@
         <button class="btn btn-small btn-ghost" type="submit">Reset password</button>
       </form>
 
+      {% if is_admin_role and target_role != "Admin" %}
+      <form method="post" action="{% url 'account_delete' target.id %}" class="confirm-inline" onsubmit="return confirm('Permanently delete {{ target.username }}? This cannot be undone.');">
+        {% csrf_token %}
+        <input type="text" name="confirm_username" placeholder="Type &quot;{{ target.username }}&quot; to confirm" required>
+        <button class="btn btn-small btn-ghost" type="submit">Delete account</button>
+      </form>
+      {% endif %}
+
       {% if can_change_role %}
         {% if target_role == "User" %}
         <form method="post" action="{% url 'account_promote' target.id %}" class="confirm-inline" onsubmit="return confirm('Promote {{ target.username }} to Staff?');">

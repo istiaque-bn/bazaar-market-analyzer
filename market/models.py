@@ -788,6 +788,7 @@ class AdminAuditAction(models.TextChoices):
     ACCOUNT_CREATED = "account_created", "Account created"
     ACCOUNT_ACTIVATED = "account_activated", "Account activated"
     ACCOUNT_DEACTIVATED = "account_deactivated", "Account deactivated"
+    ACCOUNT_DELETED = "account_deleted", "Account deleted"
     ROLE_PROMOTED = "role_promoted", "Role promoted"
     ROLE_DEMOTED = "role_demoted", "Role demoted"
     PASSWORD_RESET_INITIATED = "password_reset_initiated", "Password reset initiated"

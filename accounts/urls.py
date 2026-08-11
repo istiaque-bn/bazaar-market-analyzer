@@ -20,6 +20,7 @@ urlpatterns = [
     path("manage/<int:user_id>/", views.account_detail, name="account_detail"),
     path("manage/<int:user_id>/activate/", views.account_activate, name="account_activate"),
     path("manage/<int:user_id>/deactivate/", views.account_deactivate, name="account_deactivate"),
+    path("manage/<int:user_id>/delete/", views.account_delete, name="account_delete"),
     path("manage/<int:user_id>/promote/", views.account_promote, name="account_promote"),
     path("manage/<int:user_id>/demote/", views.account_demote, name="account_demote"),
     path("manage/<int:user_id>/reset-password/", views.account_reset_password, name="account_reset_password"),

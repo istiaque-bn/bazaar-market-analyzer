@@ -6,6 +6,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
 from django.core.paginator import Paginator
 from django.db.models import Q
+from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods, require_POST
@@ -37,6 +38,7 @@ ACCOUNT_EVENT_ACTIONS = [
     AdminAuditAction.ACCOUNT_CREATED,
     AdminAuditAction.ACCOUNT_ACTIVATED,
     AdminAuditAction.ACCOUNT_DEACTIVATED,
+    AdminAuditAction.ACCOUNT_DELETED,
     AdminAuditAction.ROLE_PROMOTED,
     AdminAuditAction.ROLE_DEMOTED,
     AdminAuditAction.PASSWORD_RESET_INITIATED,
@@ -464,6 +466,27 @@ def account_deactivate(request, user_id):
     except Exception as exc:
         messages.error(request, str(exc))
     return redirect("account_detail", user_id=target.id)
+
+
+@admin_required
+@require_POST
+def account_delete(request, user_id):
+    """Permanently delete a regular/Staff account after typed confirmation.
+    Admin accounts are deliberately never deletable here; audit rows retain
+    the target username snapshot after the account is removed."""
+    target = get_object_or_404(User, id=user_id)
+    if target == request.user or is_admin(target):
+        messages.error(request, "Admin accounts cannot be deleted from account management.")
+        return redirect("account_detail", user_id=target.id)
+    if request.POST.get("confirm_username") != target.username:
+        messages.error(request, "Username didn't match — nothing was deleted.")
+        return redirect("account_detail", user_id=target.id)
+    username = target.username
+    with transaction.atomic():
+        record_admin_action(request, AdminAuditAction.ACCOUNT_DELETED, {"role": role_display(target)}, target_user=target)
+        target.delete()
+    messages.success(request, f"{username}'s account was permanently deleted.")
+    return redirect("account_list")
 
 
 @admin_required
