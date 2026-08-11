@@ -353,6 +353,8 @@ def send_ops_alerts_to_admin(self):
     """Send newly-firing operational alerts to the private admin Telegram
     chat. An alert must remain absent for the cooldown window before it can
     notify again, so a continuing outage is visible without becoming spam."""
+    from datetime import timedelta
+
     from market.services.locking import LockBusy, distributed_lock
     from market.services.ops_alerts import evaluate_alerts
     from market.models import TaskAlertState, TaskHealth
@@ -364,6 +366,7 @@ def send_ops_alerts_to_admin(self):
 
     try:
         with distributed_lock("telegram-ops-alerts", timeout=90, blocking_timeout=0):
+            cooldown_start = timezone.now() - timedelta(minutes=settings.TELEGRAM_OPS_ALERT_COOLDOWN_MINUTES)
             fresh = []
             health_notifications = []
             # These are durable transitions, not a repeated query over old
