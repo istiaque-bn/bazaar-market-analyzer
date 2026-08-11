@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone as dt_timezone
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 from unittest import mock
 
 from django.contrib.auth.models import User
@@ -9,7 +9,7 @@ from django.utils import timezone
 from rest_framework.authtoken.models import Token
 
 from accounts.models import UserProfile
-from market.models import AdminAuditAction, AdminAuditLog, MLModelVersion
+from market.models import AdminAuditAction, AdminAuditLog, MLModelVersion, TaskAlertState, TaskHealth, TaskHealthStatus
 from notifications.models import AdminReminder, Alert, AlertChannel, MlDailyReportDelivery, MlDailyReportStatus
 from notifications.services import TelegramPermanentError, TelegramTransientError, send_telegram_message, send_telegram_message_tracked
 from notifications.tasks import (
@@ -21,6 +21,7 @@ from notifications.tasks import (
     send_market_close_notification,
     send_market_open_notification,
     send_ml_daily_report,
+    send_ops_alerts_to_admin,
 )
 
 PASSWORD = "Correct-Horse-Battery-Staple-42"
@@ -192,6 +193,133 @@ class MarketSessionNotificationTests(TestCase):
             send_market_close_notification()
         self.assertEqual(Alert.objects.filter(user__isnull=True).count(), 2)
         self.assertEqual(mock_send.call_count, 2)
+
+
+# ---------------------------------------------------------------------------
+# Telegram operational alerts — delivery, cooldown, health-state transitions
+# ---------------------------------------------------------------------------
+
+
+@override_settings(TELEGRAM_BOT_TOKEN="tok-abc", TELEGRAM_ADMIN_CHAT_ID="999888777", TELEGRAM_OPS_ALERT_COOLDOWN_MINUTES=60)
+class OpsAlertDeliveryTests(TestCase):
+    """send_ops_alerts_to_admin used to reference an undefined
+    `cooldown_start` (fixed in ffe9a39) — the bug never surfaced in tests
+    because this task had no coverage at all, so a real Telegram alert
+    would silently NameError every time evaluate_alerts() returned
+    anything. These tests exercise the actual code path so a regression
+    here fails the suite instead of failing silently in production."""
+
+    @staticmethod
+    def _one_alert(key="database_unreachable", severity="critical"):
+        return [{"key": key, "severity": severity, "message": f"{key} is firing.", "detail": {}}]
+
+    @mock.patch("notifications.tasks.send_telegram_message_tracked", return_value={"message_id": 1})
+    @mock.patch("market.services.ops_alerts.evaluate_alerts")
+    def test_new_alert_is_sent_without_crashing(self, mock_evaluate, mock_send):
+        """The exact regression: a first-time-firing alert must reach
+        Telegram and record an Alert row, not raise NameError."""
+        mock_evaluate.return_value = self._one_alert()
+        result = send_ops_alerts_to_admin()
+        self.assertEqual(result.get("sent"), 1)
+        mock_send.assert_called_once()
+        self.assertTrue(
+            Alert.objects.filter(
+                user__isnull=True, channel=AlertChannel.TELEGRAM, title="Ops alert: database_unreachable"
+            ).exists()
+        )
+
+    @mock.patch("notifications.tasks.send_telegram_message_tracked", return_value={"message_id": 1})
+    @mock.patch("market.services.ops_alerts.evaluate_alerts")
+    def test_repeat_alert_within_cooldown_is_suppressed(self, mock_evaluate, mock_send):
+        mock_evaluate.return_value = self._one_alert()
+        first = send_ops_alerts_to_admin()
+        second = send_ops_alerts_to_admin()
+        self.assertEqual(first.get("sent"), 1)
+        self.assertEqual(second.get("skipped"), "no_new_alerts")
+        mock_send.assert_called_once()
+        self.assertEqual(Alert.objects.filter(channel=AlertChannel.TELEGRAM).count(), 1)
+
+    @mock.patch("notifications.tasks.send_telegram_message_tracked", return_value={"message_id": 1})
+    @mock.patch("market.services.ops_alerts.evaluate_alerts")
+    def test_alert_refires_once_cooldown_window_has_passed(self, mock_evaluate, mock_send):
+        mock_evaluate.return_value = self._one_alert()
+        stale = Alert.objects.create(
+            user=None,
+            channel=AlertChannel.TELEGRAM,
+            title="Ops alert: database_unreachable",
+            message="stale",
+            is_sent=True,
+        )
+        Alert.objects.filter(pk=stale.pk).update(created_at=timezone.now() - timedelta(minutes=61))
+        result = send_ops_alerts_to_admin()
+        self.assertEqual(result.get("sent"), 1)
+        mock_send.assert_called_once()
+
+    @mock.patch("notifications.tasks.send_telegram_message_tracked", return_value={"message_id": 1})
+    @mock.patch("market.services.ops_alerts.evaluate_alerts")
+    def test_repeated_failure_alerts_never_reach_telegram(self, mock_evaluate, mock_send):
+        """Covered instead by the TaskHealth failure/recovery state
+        machine below — sending both would double-page for one outage."""
+        mock_evaluate.return_value = self._one_alert(key="repeated_failure_market.tasks.fetch_all_market_data")
+        result = send_ops_alerts_to_admin()
+        self.assertEqual(result.get("skipped"), "no_new_alerts")
+        mock_send.assert_not_called()
+
+    @mock.patch("notifications.tasks.send_telegram_message_tracked", return_value={"message_id": 1})
+    @mock.patch("market.services.ops_alerts.evaluate_alerts", return_value=[])
+    def test_failure_pending_task_health_notifies_and_becomes_failure_sent(self, mock_evaluate, mock_send):
+        health = TaskHealth.objects.create(
+            task_name="market.tasks.fetch_all_market_data",
+            current_health_status=TaskHealthStatus.UNHEALTHY,
+            consecutive_failures=3,
+            last_error="boom",
+            alert_state=TaskAlertState.FAILURE_PENDING,
+        )
+        result = send_ops_alerts_to_admin()
+        self.assertEqual(result.get("sent"), 1)
+        mock_send.assert_called_once()
+        health.refresh_from_db()
+        self.assertEqual(health.alert_state, TaskAlertState.FAILURE_SENT)
+        self.assertIsNotNone(health.last_alert)
+
+    @mock.patch("notifications.tasks.send_telegram_message_tracked", return_value={"message_id": 1})
+    @mock.patch("market.services.ops_alerts.evaluate_alerts", return_value=[])
+    def test_recovery_pending_task_health_notifies_and_clears_to_none(self, mock_evaluate, mock_send):
+        health = TaskHealth.objects.create(
+            task_name="market.tasks.fetch_all_market_data",
+            current_health_status=TaskHealthStatus.HEALTHY,
+            alert_state=TaskAlertState.RECOVERY_PENDING,
+        )
+        result = send_ops_alerts_to_admin()
+        self.assertEqual(result.get("sent"), 1)
+        mock_send.assert_called_once()
+        health.refresh_from_db()
+        self.assertEqual(health.alert_state, TaskAlertState.NONE)
+
+    @mock.patch("notifications.tasks.send_telegram_message_tracked")
+    @mock.patch("market.services.ops_alerts.evaluate_alerts", return_value=[])
+    def test_nothing_firing_sends_no_telegram_message(self, mock_evaluate, mock_send):
+        result = send_ops_alerts_to_admin()
+        self.assertEqual(result.get("skipped"), "no_new_alerts")
+        mock_send.assert_not_called()
+
+    @override_settings(TELEGRAM_BOT_TOKEN="", TELEGRAM_ADMIN_CHAT_ID="")
+    @mock.patch("notifications.tasks.send_telegram_message_tracked")
+    @mock.patch("market.services.ops_alerts.evaluate_alerts")
+    def test_skips_when_not_configured(self, mock_evaluate, mock_send):
+        mock_evaluate.return_value = self._one_alert()
+        result = send_ops_alerts_to_admin()
+        self.assertEqual(result.get("skipped"), "not_configured")
+        mock_send.assert_not_called()
+
+    @override_settings(TELEGRAM_OPS_ALERTS=False)
+    @mock.patch("notifications.tasks.send_telegram_message_tracked")
+    @mock.patch("market.services.ops_alerts.evaluate_alerts")
+    def test_disabled_flag_skips_entirely(self, mock_evaluate, mock_send):
+        mock_evaluate.return_value = self._one_alert()
+        result = send_ops_alerts_to_admin()
+        self.assertEqual(result.get("skipped"), "disabled")
+        mock_send.assert_not_called()
 
 
 class AlertPrivacyTests(TestCase):
