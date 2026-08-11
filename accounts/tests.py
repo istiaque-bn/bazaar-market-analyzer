@@ -491,6 +491,28 @@ class TempPasswordTelegramTests(TestCase):
         self.assertTrue(User.objects.filter(username="tg_fail_user").exists())
         self.assertContains(response, "temp-password-value")
 
+    @override_settings(EMAIL_HOST="smtp.example.test", DEFAULT_FROM_EMAIL="noreply@example.test")
+    @mock.patch("accounts.services.send_mail", return_value=1)
+    @mock.patch("accounts.services.send_telegram_message", return_value=True)
+    def test_creation_sends_temp_password_by_email_when_smtp_is_configured(self, _mock_telegram, mock_mail):
+        response = self.client.post(
+            reverse("account_create_user"),
+            {
+                "username": "email_new_user",
+                "first_name": "",
+                "last_name": "",
+                "email": "new.user@example.test",
+                "telegram_chat_id": "555000114",
+                "is_active": "on",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "also sent by Telegram and email")
+        mock_mail.assert_called_once()
+        self.assertEqual(mock_mail.call_args.kwargs["recipient_list"], ["new.user@example.test"])
+        self.assertEqual(mock_mail.call_args.kwargs["from_email"], "noreply@example.test")
+        self.assertIn("email_new_user", mock_mail.call_args.kwargs["message"])
+
     @mock.patch("accounts.services.send_telegram_message", return_value=True)
     def test_reset_password_sends_new_temp_password_via_telegram(self, mock_send):
         target = make_user("tg_reset_target")

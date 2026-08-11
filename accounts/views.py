@@ -377,7 +377,7 @@ def account_create(request, target_role: str):
         if form.is_valid():
             data = form.cleaned_data
             try:
-                user, temp_password, telegram_sent = create_account(
+                user, temp_password, telegram_sent, email_sent = create_account(
                     request.user,
                     username=data["username"],
                     first_name=data["first_name"],
@@ -391,10 +391,12 @@ def account_create(request, target_role: str):
             except Exception as exc:
                 messages.error(request, str(exc))
             else:
-                if not telegram_sent:
+                if not telegram_sent and not email_sent:
                     messages.warning(
-                        request, "Couldn't deliver the temporary password via Telegram — share it from below instead."
+                        request, "Couldn't deliver the temporary password via Telegram or email — share it from below instead."
                     )
+                elif not telegram_sent:
+                    messages.info(request, "Telegram delivery failed, but the temporary password was sent by email.")
                 return render(
                     request,
                     "accounts/account_created.html",
@@ -403,6 +405,7 @@ def account_create(request, target_role: str):
                         "temp_password": temp_password,
                         "role": role_display(user),
                         "telegram_sent": telegram_sent,
+                        "email_sent": email_sent,
                     },
                 )
     else:

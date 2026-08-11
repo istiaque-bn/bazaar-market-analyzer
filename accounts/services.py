@@ -12,6 +12,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.mail import send_mail
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.urls import reverse
@@ -70,6 +71,42 @@ def _deliver_temp_password_telegram(*, request, chat_id: str, username: str, tem
     if not sent:
         logger.warning("Temp password Telegram delivery failed for %s (%s)", username, reason)
     return sent
+
+
+def _deliver_temp_password_email(*, request, email: str, username: str, temp_password: str, reason: str) -> bool:
+    """Best-effort SMTP delivery for a newly-created account's password.
+
+    SMTP is deliberately opt-in: a development installation uses Django's
+    console backend and production only sends when EMAIL_HOST is configured.
+    Do not log the recipient address or the temporary credential.
+    """
+    if not email or not getattr(settings, "EMAIL_HOST", ""):
+        return False
+
+    login_url = request.build_absolute_uri(reverse("login")) if request is not None else "/accounts/login/"
+    verb = "created" if reason == "account_created" else "reset"
+    minutes = int(TEMP_PASSWORD_TTL.total_seconds() // 60)
+    message = (
+        f"Your Bazaar account was just {verb}.\n\n"
+        f"Username: {username}\n"
+        f"Temporary password: {temp_password}\n\n"
+        f"This password is valid for {minutes} minutes. Sign in and change it before it expires:\n{login_url}"
+    )
+    try:
+        sent = send_mail(
+            subject="Your Bazaar temporary password",
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception:
+        logger.warning("Temp password email delivery failed for %s (%s)", username, reason, exc_info=True)
+        return False
+    if sent != 1:
+        logger.warning("Temp password email delivery was not accepted for %s (%s)", username, reason)
+        return False
+    return True
 
 
 def _notify_admin_account_created(*, username: str, role: str) -> bool:
@@ -136,8 +173,15 @@ def create_account(
         temp_password=temp_password,
         reason="account_created",
     )
+    email_sent = _deliver_temp_password_email(
+        request=request,
+        email=user.email,
+        username=username,
+        temp_password=temp_password,
+        reason="account_created",
+    )
     _notify_admin_account_created(username=username, role=role)
-    return user, temp_password, telegram_sent
+    return user, temp_password, telegram_sent, email_sent
 
 
 @transaction.atomic
