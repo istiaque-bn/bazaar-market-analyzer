@@ -72,6 +72,17 @@ def _deliver_temp_password_telegram(*, request, chat_id: str, username: str, tem
     return sent
 
 
+def _notify_admin_account_created(*, username: str, role: str) -> bool:
+    """Best-effort operational notification; never include credentials."""
+    chat_id = getattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "")
+    if not chat_id:
+        return False
+    return send_telegram_message(
+        chat_id,
+        f"👤 Bazaar account created\nUsername: {username}\nRole: {role.title()}\nTemporary password was delivered separately.",
+    )
+
+
 @transaction.atomic
 def create_account(
     actor, *, username, first_name, last_name, email, telegram_chat_id: str, role: str, is_active: bool, request
@@ -125,6 +136,7 @@ def create_account(
         temp_password=temp_password,
         reason="account_created",
     )
+    _notify_admin_account_created(username=username, role=role)
     return user, temp_password, telegram_sent
 
 

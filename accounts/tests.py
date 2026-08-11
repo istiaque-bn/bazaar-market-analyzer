@@ -466,13 +466,13 @@ class TempPasswordTelegramTests(TestCase):
         u = User.objects.get(username="tg_new_user")
         self.assertEqual(u.profile.telegram_chat_id, "555000111")
         self.assertIsNotNone(u.profile.temp_password_expires_at)
-        mock_send.assert_called_once()
-        chat_id, text = mock_send.call_args[0]
+        self.assertEqual(mock_send.call_count, 2)
+        chat_id, text = mock_send.call_args_list[0][0]
         self.assertEqual(chat_id, "555000111")
         self.assertIn("tg_new_user", text)
         self.assertIn("15 minutes", text)
         # Delivered through the dedicated security bot, not the main one.
-        self.assertEqual(mock_send.call_args.kwargs["token"], "security-bot-token")
+        self.assertEqual(mock_send.call_args_list[0].kwargs["token"], "security-bot-token")
 
     @mock.patch("accounts.services.send_telegram_message", return_value=False)
     def test_creation_still_shows_password_on_screen_if_telegram_delivery_fails(self, mock_send):
