@@ -16,12 +16,13 @@ Every market-writing task:
 from __future__ import annotations
 
 import requests
-from celery import shared_task
+from celery import chain, shared_task
 from django.db.utils import OperationalError
 
 from market.services.task_status import record_task_run
 
 _TRANSIENT_ERRORS = (TimeoutError, OperationalError, requests.exceptions.RequestException)
+HISTORY_BATCH_SIZE = 20
 
 
 @shared_task(
@@ -88,9 +89,64 @@ def fetch_all_market_data(include_history: bool = False):
         # STARTED rows when the worker was later killed at its hard limit.
         with distributed_lock("full-market-fetch", timeout=660, blocking_timeout=0):
             with exclusive_db_write(blocking=True, timeout=180):
-                return fetch_all(use_demo_if_empty=False, include_history=include_history)
+                # Live quotes are one bounded bulk operation. Historical data
+                # is per-symbol I/O; doing all ~395 symbols under this task's
+                # 540s soft limit was the direct cause of the production alert.
+                live = fetch_all(use_demo_if_empty=False, include_history=False)
+            if not include_history:
+                return live
+
+            from market.models import Exchange, Stock
+            from market.services.exchange_config import enabled_exchanges
+
+            signatures = []
+            for exchange in enabled_exchanges():
+                codes = list(Stock.objects.filter(exchange=exchange, is_active=True).values_list("trading_code", flat=True))
+                for offset in range(0, len(codes), HISTORY_BATCH_SIZE):
+                    signatures.append(fetch_market_history_batch.si(exchange, codes[offset : offset + HISTORY_BATCH_SIZE]))
+            if signatures:
+                # Serial batches preserve the existing single-writer safety;
+                # the analysis callback is reached only after every batch has
+                # completed successfully or partially (bad symbols isolated).
+                chain(*signatures, run_full_analysis_task.si(train_ml=True)).delay()
+            return live | {"history_batches": len(signatures), "history_batch_size": HISTORY_BATCH_SIZE, "history_queued": True}
     except LockBusy:
         return {"ok": True, "skipped": "already_running"}
+
+
+@shared_task(
+    name="market.tasks.fetch_market_history_batch",
+    autoretry_for=_TRANSIENT_ERRORS,
+    retry_backoff=True,
+    retry_backoff_max=120,
+    retry_jitter=True,
+    max_retries=3,
+    time_limit=300,
+    soft_time_limit=270,
+)
+@record_task_run("market.tasks.fetch_market_history_batch")
+def fetch_market_history_batch(exchange: str, codes: list[str]):
+    """Fetch a bounded symbol batch so one slow/bad symbol cannot exhaust a
+    whole-universe task.  Individual fetchers return failed-symbol samples
+    rather than aborting the remaining codes."""
+    from market.models import Exchange
+    from market.services.autosync import exclusive_db_write
+    from market.services.dse_fetcher import sync_dse_history
+    from market.services.cse_fetcher import sync_cse_history
+
+    with exclusive_db_write(blocking=True, timeout=300):
+        if exchange == Exchange.DSE:
+            result = sync_dse_history(codes=codes, use_synthetic_fallback=False)
+        elif exchange == Exchange.CSE:
+            result = sync_cse_history(codes=codes, use_synthetic_fallback=False)
+        else:
+            raise ValueError(f"Unknown exchange: {exchange}")
+    failed = int(result.get("failed_or_fallback", 0) or 0) + int(result.get("skipped", 0) or 0)
+    return result | {
+        "partial": bool(failed), "exchange": exchange,
+        "symbols_attempted": len(codes), "symbols_successful": int(result.get("ok", 0) or 0),
+        "symbols_failed": failed,
+    }
 
 
 @shared_task(name="market.tasks.reconcile_orphaned_task_runs", time_limit=60, soft_time_limit=45)

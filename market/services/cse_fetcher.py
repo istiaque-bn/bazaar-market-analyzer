@@ -453,16 +453,21 @@ def sync_cse_history(
     try:
         for i, code in enumerate(codes, start=1):
             code = code.upper()
-            stock, _ = Stock.objects.get_or_create(
-                exchange=Exchange.CSE,
-                trading_code=code,
-                defaults={"company_name": symbol_names.get(code, code), "is_active": True},
-            )
-            if not stock.is_active:
-                stock.is_active = True
-                stock.save(update_fields=["is_active", "updated_at"])
-
-            df, row_source = fetch_cse_history(code, start, end, bulk_df=bulk_df)
+            try:
+                stock, _ = Stock.objects.get_or_create(
+                    exchange=Exchange.CSE,
+                    trading_code=code,
+                    defaults={"company_name": symbol_names.get(code, code), "is_active": True},
+                )
+                if not stock.is_active:
+                    stock.is_active = True
+                    stock.save(update_fields=["is_active", "updated_at"])
+                df, row_source = fetch_cse_history(code, start, end, bulk_df=bulk_df)
+            except Exception as exc:
+                logger.exception("CSE history fetch failed for %s: %s", code, exc)
+                skipped += 1
+                errors.append(f"{code}: {type(exc).__name__}: {exc}")
+                continue
             if df is None or df.empty:
                 if use_synthetic_fallback and not stock.prices.exists():
                     if fallback_batch is None:
@@ -475,7 +480,13 @@ def sync_cse_history(
                     skipped += 1
                     errors.append(f"{code}: no history")
                 continue
-            n = save_history(stock, df, source=DataSource.CSE_HISTORY, import_batch=batch)
+            try:
+                n = save_history(stock, df, source=DataSource.CSE_HISTORY, import_batch=batch)
+            except Exception as exc:
+                logger.exception("CSE history save failed for %s: %s", code, exc)
+                skipped += 1
+                errors.append(f"{code}: {type(exc).__name__}: {exc}")
+                continue
             bars_saved += int(n or 0)
             ok += 1
             try:

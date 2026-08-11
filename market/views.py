@@ -659,7 +659,6 @@ def run_pipeline_view(request):
     the ML model, so ordinary users must not be able to trigger them, and
     web requests must not block on this work — it runs on a Celery
     worker, not the request thread."""
-    from celery import chain
     from django.contrib import messages
 
     from market.models import AdminAuditAction
@@ -678,8 +677,11 @@ def run_pipeline_view(request):
             seed_demo_and_analyze.delay()
             messages.success(request, "Demo seed + analysis queued.")
         elif mode == "fetch":
-            chain(fetch_all_market_data.s(include_history=True), run_full_analysis_task.si(train_ml=True)).delay()
-            messages.success(request, "Live + history fetch, then analysis, queued.")
+            # The task queues bounded historical batches and appends analysis
+            # only after they complete; an outer chain would run analysis
+            # immediately after this short dispatcher returns.
+            fetch_all_market_data.delay(include_history=True)
+            messages.success(request, "Live fetch and bounded history batches, then analysis, queued.")
         elif mode == "quote":
             fetch_all_market_data.delay(include_history=False)
             messages.success(request, "Live quote fetch queued.")

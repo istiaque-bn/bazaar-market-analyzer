@@ -783,11 +783,17 @@ def sync_dse_history(
     fallback_batch = None
     try:
         for i, code in enumerate(codes, start=1):
-            stock, _ = Stock.objects.get_or_create(exchange=Exchange.DSE, trading_code=code.upper())
-            if code.upper() in prefetched_map:
-                df, sub_source = prefetched_map[code.upper()]
-            else:
-                df, sub_source = fetch_dse_history(code, start, end)
+            try:
+                stock, _ = Stock.objects.get_or_create(exchange=Exchange.DSE, trading_code=code.upper())
+                if code.upper() in prefetched_map:
+                    df, sub_source = prefetched_map[code.upper()]
+                else:
+                    df, sub_source = fetch_dse_history(code, start, end)
+            except Exception as exc:
+                logger.exception("DSE history fetch failed for %s: %s", code, exc)
+                skipped += 1
+                errors.append(f"{code}: {type(exc).__name__}: {exc}")
+                continue
             if df is None or df.empty:
                 if use_synthetic_fallback and not stock.prices.exists():
                     if fallback_batch is None:
@@ -800,7 +806,13 @@ def sync_dse_history(
                     skipped += 1
                     errors.append(f"{code}: no history")
                 continue
-            n = save_history(stock, df, source=DataSource.DSE_HISTORY, import_batch=batch)
+            try:
+                n = save_history(stock, df, source=DataSource.DSE_HISTORY, import_batch=batch)
+            except Exception as exc:
+                logger.exception("DSE history save failed for %s: %s", code, exc)
+                skipped += 1
+                errors.append(f"{code}: {type(exc).__name__}: {exc}")
+                continue
             bars_saved += int(n or 0)
             ok += 1
             try:

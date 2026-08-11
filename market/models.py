@@ -614,6 +614,39 @@ class TaskRun(models.Model):
         return f"{self.task_name} [{self.status}] {self.started_at:%Y-%m-%d %H:%M}"
 
 
+class TaskHealthStatus(models.TextChoices):
+    HEALTHY = "healthy", "Healthy"
+    UNHEALTHY = "unhealthy", "Unhealthy"
+
+
+class TaskAlertState(models.TextChoices):
+    NONE = "none", "No pending alert"
+    FAILURE_PENDING = "failure_pending", "Failure alert pending"
+    FAILURE_SENT = "failure_sent", "Failure alert sent"
+    RECOVERY_PENDING = "recovery_pending", "Recovery alert pending"
+
+
+class TaskHealth(models.Model):
+    """Current, stateful health of a task; TaskRun remains the immutable audit log."""
+    task_name = models.CharField(max_length=128, unique=True)
+    last_run = models.DateTimeField(null=True, blank=True)
+    last_success = models.DateTimeField(null=True, blank=True)
+    last_failure = models.DateTimeField(null=True, blank=True)
+    consecutive_failures = models.PositiveIntegerField(default=0)
+    current_health_status = models.CharField(max_length=16, choices=TaskHealthStatus.choices, default=TaskHealthStatus.HEALTHY)
+    last_error = models.TextField(blank=True)
+    run_duration_seconds = models.FloatField(null=True, blank=True)
+    symbols_attempted = models.PositiveIntegerField(default=0)
+    symbols_successful = models.PositiveIntegerField(default=0)
+    symbols_failed = models.PositiveIntegerField(default=0)
+    alert_state = models.CharField(max_length=24, choices=TaskAlertState.choices, default=TaskAlertState.NONE)
+    last_alert = models.DateTimeField(null=True, blank=True)
+    last_recovery = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.task_name} [{self.current_health_status}]"
+
+
 class PredictionSnapshot(models.Model):
     """One immutable row per served prediction from either ML model
     family, captured from that day's existing prediction artifact

@@ -6,7 +6,7 @@ from datetime import timedelta
 
 from django.utils import timezone
 
-from market.models import TaskRun, TaskStatus
+from market.models import TaskAlertState, TaskHealth, TaskHealthStatus, TaskRun, TaskStatus
 
 
 # A hard time limit kills the Celery child process immediately.  Code in the
@@ -64,16 +64,56 @@ def record_task_run(task_name: str):
                 run.error = str(exc)[:2000]
                 run.finished_at = timezone.now()
                 run.save(update_fields=["status", "error", "finished_at"])
+                _update_task_health(run)
                 raise
             run.status = _status_for_result(result)
             run.detail = result if isinstance(result, dict) else {"result": result}
             run.finished_at = timezone.now()
             run.save(update_fields=["status", "detail", "finished_at"])
+            _update_task_health(run)
             return result
 
         return wrapper
 
     return decorator
+
+
+def _update_task_health(run: TaskRun) -> None:
+    """Best-effort state transition; monitoring must never hide task outcome."""
+    try:
+        detail = run.detail if isinstance(run.detail, dict) else {}
+        duration = (run.finished_at - run.started_at).total_seconds() if run.finished_at else None
+        health, _ = TaskHealth.objects.get_or_create(task_name=run.task_name)
+        health.last_run = run.started_at
+        health.run_duration_seconds = duration
+        health.symbols_attempted = int(detail.get("symbols_attempted", 0) or 0)
+        health.symbols_successful = int(detail.get("symbols_successful", 0) or 0)
+        health.symbols_failed = int(detail.get("symbols_failed", 0) or 0)
+        # Partial completion is operationally healthy: a bad symbol was isolated.
+        if run.status in (TaskStatus.SUCCESS, TaskStatus.PARTIAL, TaskStatus.SKIPPED):
+            was_unhealthy = health.current_health_status == TaskHealthStatus.UNHEALTHY
+            health.last_success = run.finished_at
+            health.consecutive_failures = 0
+            health.current_health_status = TaskHealthStatus.HEALTHY
+            health.last_error = ""
+            if was_unhealthy:
+                health.alert_state = TaskAlertState.RECOVERY_PENDING
+                health.last_recovery = run.finished_at
+            elif health.alert_state != TaskAlertState.RECOVERY_PENDING:
+                health.alert_state = TaskAlertState.NONE
+        elif run.status == TaskStatus.FAILURE:
+            health.last_failure = run.finished_at
+            health.last_error = run.error[:2000]
+            health.consecutive_failures += 1
+            if health.consecutive_failures >= 3:
+                health.current_health_status = TaskHealthStatus.UNHEALTHY
+                if health.alert_state != TaskAlertState.FAILURE_SENT:
+                    health.alert_state = TaskAlertState.FAILURE_PENDING
+        health.save()
+    except Exception:
+        # This deliberately avoids converting a successful data task into a failure
+        # merely because its monitoring write was unavailable.
+        return
 
 
 def reconcile_orphaned_task_runs(*, now=None) -> dict:

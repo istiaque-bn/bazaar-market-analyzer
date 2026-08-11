@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 
+import requests
+
 from django.utils import timezone
 
 from market.models import AnalysisResult, PatternHit, TechnicalSnapshot
@@ -15,6 +17,10 @@ from market.services.predictor import predict_stock
 from market.models import Stock
 
 logger = logging.getLogger(__name__)
+
+
+class MarketDataProviderOutage(requests.exceptions.RequestException):
+    """Every enabled live provider failed; safe for bounded Celery retry."""
 
 
 def fetch_all(
@@ -44,7 +50,23 @@ def fetch_all(
         demo = seed_demo_universe()
     else:
         demo = None
-    return {"dse_live": dse_live, "cse_live": cse_live, "dse_hist": dse_hist, "cse_hist": cse_hist, "demo": demo}
+    live_results = (dse_live, cse_live)
+    enabled = [r for r in live_results if not r.get("skipped")]
+    succeeded = [r for r in enabled if r.get("ok")]
+    # Returning {ok: False} used to be recorded as a Celery SUCCESS, so a
+    # provider-wide outage never retried and health data was misleading.
+    if enabled and not succeeded:
+        errors = "; ".join(str(r.get("error", "provider returned no data")) for r in enabled)
+        raise MarketDataProviderOutage(errors[:1000])
+    failed = [r for r in enabled if not r.get("ok")]
+    attempted = sum(int(r.get("codes", 0) or r.get("count", 0) or 0) for r in live_results)
+    successful = sum(int(r.get("count", 0) or r.get("ok", 0) or 0) for r in live_results if r.get("ok"))
+    return {
+        "dse_live": dse_live, "cse_live": cse_live, "dse_hist": dse_hist, "cse_hist": cse_hist, "demo": demo,
+        "partial": bool(failed), "symbols_attempted": attempted,
+        "symbols_successful": successful, "symbols_failed": len(failed),
+        "failed_symbols": [{"provider": "DSE" if r is dse_live else "CSE", "error": r.get("error", "unknown")} for r in failed],
+    }
 
 
 def analyze_stock(stock: Stock, use_ml: bool = True, include_demo: bool = False) -> AnalysisResult:

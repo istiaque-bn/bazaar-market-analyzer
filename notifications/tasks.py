@@ -353,10 +353,9 @@ def send_ops_alerts_to_admin(self):
     """Send newly-firing operational alerts to the private admin Telegram
     chat. An alert must remain absent for the cooldown window before it can
     notify again, so a continuing outage is visible without becoming spam."""
-    from datetime import timedelta
-
     from market.services.locking import LockBusy, distributed_lock
     from market.services.ops_alerts import evaluate_alerts
+    from market.models import TaskAlertState, TaskHealth
 
     if not getattr(settings, "TELEGRAM_OPS_ALERTS", True):
         return {"ok": True, "skipped": "disabled"}
@@ -365,9 +364,25 @@ def send_ops_alerts_to_admin(self):
 
     try:
         with distributed_lock("telegram-ops-alerts", timeout=90, blocking_timeout=0):
-            cooldown_start = timezone.now() - timedelta(minutes=settings.TELEGRAM_OPS_ALERT_COOLDOWN_MINUTES)
             fresh = []
+            health_notifications = []
+            # These are durable transitions, not a repeated query over old
+            # TaskRun rows. A scan may run every five minutes without paging
+            # again until recovery (or a future explicit escalation).
+            for health in TaskHealth.objects.filter(alert_state__in=[TaskAlertState.FAILURE_PENDING, TaskAlertState.RECOVERY_PENDING]):
+                if health.alert_state == TaskAlertState.FAILURE_PENDING:
+                    health_notifications.append((health, {
+                        "key": f"task_unhealthy_{health.task_name}", "severity": "critical",
+                        "message": f"{health.task_name}: UNHEALTHY after {health.consecutive_failures} consecutive failures. {health.last_error[:200]}",
+                    }))
+                else:
+                    health_notifications.append((health, {
+                        "key": f"task_recovered_{health.task_name}", "severity": "warning",
+                        "message": f"{health.task_name}: recovered; failure counter reset after a successful run.",
+                    }))
             for alert in evaluate_alerts():
+                if alert["key"].startswith("repeated_failure_"):
+                    continue
                 title = f"Ops alert: {alert['key']}"
                 already_notified = Alert.objects.filter(
                     user__isnull=True,
@@ -377,6 +392,8 @@ def send_ops_alerts_to_admin(self):
                 ).exists()
                 if not already_notified:
                     fresh.append(alert)
+
+            fresh.extend(alert for _, alert in health_notifications)
 
             if not fresh:
                 return {"ok": True, "skipped": "no_new_alerts"}
@@ -403,6 +420,14 @@ def send_ops_alerts_to_admin(self):
                     for alert in fresh
                 ]
             )
+            for health, _ in health_notifications:
+                health.last_alert = now
+                health.alert_state = (
+                    TaskAlertState.FAILURE_SENT
+                    if health.current_health_status == "unhealthy"
+                    else TaskAlertState.NONE
+                )
+                health.save(update_fields=["last_alert", "alert_state"])
             return {"ok": True, "sent": len(fresh)}
     except LockBusy:
         return {"ok": True, "skipped": "already_running"}

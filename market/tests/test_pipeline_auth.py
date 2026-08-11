@@ -55,17 +55,12 @@ class PipelineAuthTests(TestCase):
         self.assertEqual(response.status_code, 302)
         mock_delay.assert_called_once()
 
-    @mock.patch("market.tasks.run_full_analysis_task.si")
-    @mock.patch("market.tasks.fetch_all_market_data.s")
-    def test_admin_fetch_mode_chains_fetch_then_analysis(self, mock_fetch_sig, mock_analysis_sig):
-        with mock.patch("celery.chain") as mock_chain:
-            mock_chain.return_value.delay = mock.Mock()
-            self._login_admin("admin_fetch")
-            response = self.client.post(self.url, {"mode": "fetch"})
+    @mock.patch("market.tasks.fetch_all_market_data.delay")
+    def test_admin_fetch_mode_dispatches_bounded_history_pipeline(self, mock_fetch):
+        self._login_admin("admin_fetch")
+        response = self.client.post(self.url, {"mode": "fetch"})
         self.assertEqual(response.status_code, 302)
-        mock_fetch_sig.assert_called_once_with(include_history=True)
-        mock_analysis_sig.assert_called_once_with(train_ml=True)
-        mock_chain.return_value.delay.assert_called_once()
+        mock_fetch.assert_called_once_with(include_history=True)
 
     @mock.patch("market.tasks.run_full_analysis_task.delay")
     def test_enqueue_failure_shows_error_not_500(self, mock_delay):
