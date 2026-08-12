@@ -319,7 +319,7 @@ python manage.py migrate            # schema only — see the manual data-migrat
 python manage.py collectstatic --noinput
 python manage.py check --deploy     # see below
 
-gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3
+gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 9  # 2×cores+1 for the documented 4-vCPU VPS target — I/O-bound views (DB-query-bound, no in-request CPU work) tolerate more workers than cores; adjust for your own hardware
 celery -A config worker --loglevel=info
 celery -A config beat --loglevel=info
 ```
