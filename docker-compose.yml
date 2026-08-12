@@ -57,6 +57,12 @@ services:
       # concurrency plan). Falls back to "sequential" if unset.
       MARKET_FETCH_MODE: ${MARKET_FETCH_MODE:-threadpool}
       MARKET_FETCH_CONCURRENCY: ${MARKET_FETCH_CONCURRENCY:-5}
+      # ML training thread cap (market/services/ml_model.py, close_learn.py)
+      # — benchmarked on the production VPS's real 4 cores at limit_stocks=110:
+      # n_jobs=4 trains fastest (9.1s) but has the worst concurrent-request
+      # latency impact (p95 25.0ms); n_jobs=2 is nearly as latency-safe as
+      # n_jobs=1 (23.1ms vs 23.0ms) while training 7% faster than n_jobs=1.
+      ML_MAX_WORKERS: ${ML_MAX_WORKERS:-2}
       # Telegram ML daily report — see README.md's "Telegram ML daily
       # report" section. Effectively inert (generates/previews fine,
       # never sends) until both TELEGRAM_BOT_TOKEN and
