@@ -51,6 +51,12 @@ services:
       DJANGO_LOG_LEVEL: INFO
       AUTO_ML_TRAINING: ${AUTO_ML_TRAINING:-True}
       AUTO_ML_TRAINING_TIME: ${AUTO_ML_TRAINING_TIME:-00:30}
+      # DSE per-symbol history fetch concurrency (market/services/concurrent_fetch.py)
+      # — benchmarked ~2x faster than sequential with zero completeness/error
+      # regression at concurrency=5 against real dsebd.org (see the Aug 2026
+      # concurrency plan). Falls back to "sequential" if unset.
+      MARKET_FETCH_MODE: ${MARKET_FETCH_MODE:-threadpool}
+      MARKET_FETCH_CONCURRENCY: ${MARKET_FETCH_CONCURRENCY:-5}
       # Telegram ML daily report — see README.md's "Telegram ML daily
       # report" section. Effectively inert (generates/previews fine,
       # never sends) until both TELEGRAM_BOT_TOKEN and

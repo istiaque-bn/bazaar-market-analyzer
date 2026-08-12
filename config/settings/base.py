@@ -394,6 +394,22 @@ except ValueError:
 
 DSE_SSL_VERIFY = os.getenv("DSE_SSL_VERIFY", "True").lower() not in ("0", "false", "no")
 
+# --- Market-data fetch concurrency (market/services/concurrent_fetch.py) --
+# How the DSE per-symbol history network phase is dispatched. "sequential"
+# is today's existing behavior and the default — flipping this is an
+# explicit, benchmarked opt-in (see
+# market/management/commands/benchmark_market_fetch.py), never a silent
+# default change. CSE is unaffected: it already fetches one bulk export
+# for the whole exchange, not per-symbol.
+MARKET_FETCH_MODE = os.getenv("MARKET_FETCH_MODE", "sequential").strip().lower()
+if MARKET_FETCH_MODE not in ("sequential", "threadpool", "asyncio"):
+    raise ImproperlyConfigured(
+        f"MARKET_FETCH_MODE={MARKET_FETCH_MODE!r} must be one of 'sequential', 'threadpool', 'asyncio'."
+    )
+MARKET_FETCH_CONCURRENCY = _positive_int("MARKET_FETCH_CONCURRENCY", "5")
+MARKET_FETCH_TIMEOUT = _positive_int("MARKET_FETCH_TIMEOUT", "60")  # seconds, per symbol
+MARKET_FETCH_MAX_RETRIES = _positive_int("MARKET_FETCH_MAX_RETRIES", "2")
+
 # --- Exchange feature flags ---------------------------------------------
 # Which exchanges this deployment actively fetches, analyzes, trains
 # models for, and exposes to public discovery. Disabling an exchange is a

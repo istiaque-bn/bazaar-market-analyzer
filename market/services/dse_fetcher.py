@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -274,15 +274,30 @@ def fetch_dse_history_via_bdshare(code: str, start: date, end: date) -> pd.DataF
         return None
 
 
-def fetch_dse_history_via_archive(code: str, start: date, end: date) -> pd.DataFrame | None:
-    """Fallback: scrape DSE day-end archive for one instrument (chunked by caller if needed)."""
+def fetch_dse_history_via_archive(
+    code: str,
+    start: date,
+    end: date,
+    *,
+    timeout: int = 60,
+    status_callback: Callable[[int], None] | None = None,
+) -> pd.DataFrame | None:
+    """Fallback: scrape DSE day-end archive for one instrument (chunked by caller if needed).
+
+    `timeout`/`status_callback` are additive, optional knobs for
+    market.services.concurrent_fetch's bounded concurrent fetcher (rate-limit
+    detection needs the raw HTTP status; existing callers that omit them get
+    byte-identical behavior to before — default timeout unchanged at 60s, no
+    callback invoked)."""
     try:
         url = (
             "https://www.dsebd.org/day_end_archive.php"
             f"?startDate={start.isoformat()}&endDate={end.isoformat()}"
             f"&inst={code}&archive=data"
         )
-        resp = _get(url, timeout=60)
+        resp = _get(url, timeout=timeout)
+        if status_callback is not None:
+            status_callback(resp.status_code)
         if resp.status_code != 200:
             return None
         soup = BeautifulSoup(resp.text, "lxml")
@@ -358,13 +373,26 @@ def fetch_dse_history_via_archive(code: str, start: date, end: date) -> pd.DataF
         return None
 
 
-def fetch_dse_history(code: str, start: date, end: date) -> tuple[pd.DataFrame | None, str]:
+def fetch_dse_history(
+    code: str,
+    start: date,
+    end: date,
+    *,
+    timeout: int = 60,
+    status_callback: Callable[[int], None] | None = None,
+) -> tuple[pd.DataFrame | None, str]:
     """
     Fetch OHLC for [start, end].
 
     Public DSE feeds typically return at most ~2 years even when a longer
     lookback is requested. We ask for the full window once via bdshare, then
     merge a recent archive window to fill gaps.
+
+    `timeout`/`status_callback` are additive, optional passthroughs to the
+    archive leg only (bdshare is a third-party sync library with no
+    per-call timeout/status hook available) — see
+    fetch_dse_history_via_archive's docstring. Existing callers that omit
+    them see no behavior change.
     """
     if end < start:
         return None, "invalid-range"
@@ -379,7 +407,7 @@ def fetch_dse_history(code: str, start: date, end: date) -> tuple[pd.DataFrame |
 
     # Recent archive window (DSE day-end pages are more reliable near-term)
     arch_start = max(start, end - timedelta(days=400))
-    df_a = fetch_dse_history_via_archive(code, arch_start, end)
+    df_a = fetch_dse_history_via_archive(code, arch_start, end, timeout=timeout, status_callback=status_callback)
     if df_a is not None and not df_a.empty:
         chunks.append(df_a)
         source_used = "mixed" if source_used else "archive"
@@ -390,7 +418,7 @@ def fetch_dse_history(code: str, start: date, end: date) -> tuple[pd.DataFrame |
         for a, b in ((max(start, end - timedelta(days=730)), mid), (mid + timedelta(days=1), end)):
             if a > b:
                 continue
-            part = fetch_dse_history_via_archive(code, a, b)
+            part = fetch_dse_history_via_archive(code, a, b, timeout=timeout, status_callback=status_callback)
             if part is not None and not part.empty:
                 chunks.append(part)
                 source_used = "archive"
@@ -748,12 +776,19 @@ def sync_dse_history(
     limit: int | None = None,
     _prefetched: list[tuple[str, pd.DataFrame | None, str]] | None = None,
     force: bool = False,
+    _fetch_stats: dict | None = None,
 ) -> dict:
     """`force=True` is a deliberate, explicit override (see
     management.commands.fetch_history's --force-disabled) for fetching a
     currently-disabled exchange anyway — e.g. pre-warming catch-up history
     ahead of re-enabling it. Every other/automatic caller leaves this
-    False, so the exchange-disabled guard below still applies to them."""
+    False, so the exchange-disabled guard below still applies to them.
+
+    `_fetch_stats` is an optional dict from market.services.concurrent_fetch's
+    network-phase prefetch (timed_out/retried counts, concurrency mode used)
+    — merged into the return value unchanged when given. Callers that don't
+    pass it (the historical default) get 0/"sequential" for these fields,
+    matching actual prior behavior exactly."""
     from market.services.exchange_config import is_exchange_enabled
 
     if not force and not is_exchange_enabled(Exchange.DSE):
@@ -852,4 +887,8 @@ def sync_dse_history(
             "requested lookback may exceed available source data."
         ),
         "errors_sample": errors[:15],
+        "fetch_mode": (_fetch_stats or {}).get("mode", "sequential"),
+        "fetch_concurrency": (_fetch_stats or {}).get("concurrency", 1),
+        "timed_out": (_fetch_stats or {}).get("timed_out", 0),
+        "retried": (_fetch_stats or {}).get("retried", 0),
     }

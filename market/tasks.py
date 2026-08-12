@@ -128,19 +128,36 @@ def fetch_all_market_data(include_history: bool = False):
 def fetch_market_history_batch(exchange: str, codes: list[str]):
     """Fetch a bounded symbol batch so one slow/bad symbol cannot exhaust a
     whole-universe task.  Individual fetchers return failed-symbol samples
-    rather than aborting the remaining codes."""
+    rather than aborting the remaining codes.
+
+    DSE only: the network phase (settings.MARKET_FETCH_MODE-controlled —
+    sequential by default, see market.services.concurrent_fetch) runs
+    outside the DB write lock, exactly like
+    market.management.commands.fetch_history's existing network/persist
+    split; only the persist phase (sync_dse_history's unchanged
+    save_history loop) runs under exclusive_db_write."""
+    from datetime import timedelta
+
+    from django.conf import settings
+    from django.utils import timezone
+
     from market.models import Exchange
     from market.services.autosync import exclusive_db_write
+    from market.services.concurrent_fetch import prefetch_dse_history
     from market.services.dse_fetcher import sync_dse_history
     from market.services.cse_fetcher import sync_cse_history
 
-    with exclusive_db_write(blocking=True, timeout=300):
-        if exchange == Exchange.DSE:
-            result = sync_dse_history(codes=codes, use_synthetic_fallback=False)
-        elif exchange == Exchange.CSE:
+    if exchange == Exchange.DSE:
+        end = timezone.localdate()
+        start = end - timedelta(days=settings.LOOKBACK_DAYS)
+        prefetched, fetch_stats = prefetch_dse_history(codes, start, end)
+        with exclusive_db_write(blocking=True, timeout=300):
+            result = sync_dse_history(codes=codes, use_synthetic_fallback=False, _prefetched=prefetched, _fetch_stats=fetch_stats)
+    elif exchange == Exchange.CSE:
+        with exclusive_db_write(blocking=True, timeout=300):
             result = sync_cse_history(codes=codes, use_synthetic_fallback=False)
-        else:
-            raise ValueError(f"Unknown exchange: {exchange}")
+    else:
+        raise ValueError(f"Unknown exchange: {exchange}")
     failed = int(result.get("failed_or_fallback", 0) or 0) + int(result.get("skipped", 0) or 0)
     return result | {
         "partial": bool(failed), "exchange": exchange,

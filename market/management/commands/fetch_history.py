@@ -6,8 +6,9 @@ from django.utils import timezone
 from market.models import Exchange, Stock
 from market.services.analyzer import run_full_analysis
 from market.services.autosync import configure_sqlite, exclusive_db_write
+from market.services.concurrent_fetch import prefetch_dse_history
 from market.services.cse_fetcher import fetch_cse_history_bulk, sync_cse_history
-from market.services.dse_fetcher import fetch_dse_history, sync_dse_history
+from market.services.dse_fetcher import sync_dse_history
 from market.services.exchange_config import enabled_exchanges, is_exchange_enabled
 
 
@@ -112,6 +113,7 @@ class Command(BaseCommand):
 
         # --- Network phase (no SQLite write lock) ---
         dse_payloads = None
+        dse_fetch_stats = None
         cse_bulk = None
         if do_dse:
             dse_codes = codes
@@ -121,12 +123,13 @@ class Command(BaseCommand):
                     qs = qs[:limit]
                 dse_codes = list(qs)
             self.stdout.write(f"Downloading DSE history for {len(dse_codes)} symbols…")
-            dse_payloads = []
-            for i, code in enumerate(dse_codes, start=1):
-                df, source = fetch_dse_history(code, start, end)
-                dse_payloads.append((code, df, source))
-                if i % 25 == 0 or i == len(dse_codes):
-                    self.stdout.write(f"  DSE download {i}/{len(dse_codes)}")
+            dse_payloads, dse_fetch_stats = prefetch_dse_history(dse_codes, start, end)
+            self.stdout.write(
+                f"  DSE download done: {dse_fetch_stats['successful']}/{dse_fetch_stats['attempted']} ok "
+                f"in {dse_fetch_stats['duration_seconds']}s (mode={dse_fetch_stats['mode']}, "
+                f"concurrency={dse_fetch_stats['concurrency']}, failed={dse_fetch_stats['failed']}, "
+                f"timed_out={dse_fetch_stats['timed_out']})"
+            )
 
         if do_cse:
             self.stdout.write("Downloading CSE bulk history export…")
@@ -148,6 +151,7 @@ class Command(BaseCommand):
                     use_synthetic_fallback=False,
                     limit=limit,
                     _prefetched=dse_payloads,
+                    _fetch_stats=dse_fetch_stats,
                     force=force,
                 )
             if do_cse:
