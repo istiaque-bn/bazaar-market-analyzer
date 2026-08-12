@@ -24,12 +24,15 @@
   </div>
   <section class="auth-card" aria-labelledby="authTitle">
     <div class="auth-brand">
-      <span class="brand-mark" aria-hidden="true">বা</span>
-      <span class="brand-text">Bazaar</span>
+      <div class="auth-logo-mark" aria-hidden="true">
+        <span class="auth-logo-bull">↗</span><span class="auth-logo-bars"><i></i><i></i><i></i></span>
+      </div>
+      <div class="auth-brand-name"><span>Stock</span> <strong>Bazaar</strong></div>
+      <p>AI-powered analysis. Smarter trades.</p>
     </div>
-    <p class="auth-tagline">DSE market research &amp; portfolio tracking for invited members.</p>
 
-    <h1 id="authTitle" class="auth-title">Sign in</h1>
+    <h1 id="authTitle" class="auth-title">Welcome Back</h1>
+    <p class="auth-tagline">Sign in to continue</p>
 
     {% if form.non_field_errors %}
       <div class="auth-error" role="alert">
@@ -40,12 +43,12 @@
     <form method="post" class="auth-form" novalidate>
       {% csrf_token %}
       <label class="auth-field" for="{{ form.username.id_for_label }}">
-        <span>Username</span>
+        <span class="sr-only">Username</span>
         {{ form.username }}
         {% for error in form.username.errors %}<span class="auth-field-error">{{ error }}</span>{% endfor %}
       </label>
-      <label class="auth-field" for="{{ form.password.id_for_label }}">
-        <span>Password</span>
+      <label class="auth-field auth-password-field" for="{{ form.password.id_for_label }}">
+        <span class="sr-only">Password</span>
         <span class="auth-password-wrap">
           {{ form.password }}
           <button type="button" class="auth-password-toggle" id="authPasswordToggle" aria-pressed="false">
@@ -58,7 +61,7 @@
       <input type="hidden" name="next" value="{{ next }}">
 
       <button type="submit" class="btn auth-submit" id="authSubmit">
-        <span id="authSubmitText">Sign in</span>
+        <span id="authSubmitText">Login</span>
       </button>
     </form>
 
@@ -68,11 +71,7 @@
       <p class="auth-secondary muted">Forgot your password? Contact an administrator to reset it.</p>
     {% endif %}
 
-    <div class="auth-notes">
-      <p><strong>Invite-only.</strong> Public sign-up is disabled — accounts are created by an Admin or Staff member.</p>
-      <p>Your credentials are transmitted over an encrypted connection and never shared with third parties.</p>
-      <p class="muted">Bazaar is an educational research tool. Nothing shown after sign-in is financial advice.</p>
-    </div>
+    <p class="auth-note"><strong>Invite-only.</strong> Accounts are created by an Admin or Staff member.</p>
   </section>
 </div>
 {% endblock %}
