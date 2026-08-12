@@ -890,7 +890,11 @@ def _build_next_close_panel(exchange: str, limit_stocks: int = 80) -> pd.DataFra
     history is chronologically validated before feature construction.
     Note: fwd_ret_1 = close.shift(-1)/close - 1 is NaN for the final bar
     of each stock (unknown next close) — the trailing .dropna() already
-    correctly drops those rows rather than mislabeling them."""
+    correctly drops those rows rather than mislabeling them. Bars carrying
+    a data_quality.TRAINING_EXCLUDE_FLAGS flag (impossible OHLC, abnormal
+    single-day jump) are dropped before feature construction."""
+    from market.services.data_quality import TRAINING_EXCLUDE_FLAGS
+
     liquid = liquid_stock_ids(limit=max(limit_stocks, LIQUID_TOP_N))
     stocks = list(Stock.objects.filter(id__in=liquid, is_active=True, exchange=exchange)[:limit_stocks])
     if len(stocks) < 15:
@@ -898,7 +902,7 @@ def _build_next_close_panel(exchange: str, limit_stocks: int = 80) -> pd.DataFra
 
     frames = []
     for stock in stocks:
-        df = prices_to_df(stock.prices.live())
+        df = prices_to_df(stock.prices.live(), exclude_quality_flags=TRAINING_EXCLUDE_FLAGS)
         if len(df) < 80:
             continue
         df = validate_chronological(df, label=f"{stock.exchange}:{stock.trading_code}")

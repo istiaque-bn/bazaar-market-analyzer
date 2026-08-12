@@ -42,6 +42,36 @@ GAP_CALENDAR_DAYS = 10  # beyond a normal Sun-Thu week + one holiday week
 STALE_RUN_MIN_LENGTH = 5
 REVISION_EPSILON = 1e-9
 
+# Flags that almost always indicate a genuine data error rather than real
+# market behavior, so a bar carrying one of these is excluded from ML
+# training panels (see market.services.indicators.prices_to_df's
+# exclude_quality_flags param) rather than teaching a model off a bad
+# tick. Deliberately excludes gap_before (holidays/thin trading are
+# legitimate) and stale_quote_run (can reflect a genuine suspension or
+# thin-liquidity no-trade run, not necessarily wrong data) — flagging
+# those for staff visibility is still useful, but filtering them out of
+# training would just bias the model against real market conditions.
+# Also deliberately excludes open_out_of_range: verified against
+# production data (2026-08-12) that 137,768 of 137,844 occurrences (99.9%)
+# are CSE bars with source="unknown" where high==low==close — a known
+# characteristic of CSE's legacy bulk import (only a single reference
+# price was available, no genuine intraday range), not a data error.
+# Training on it would have silently discarded ~22% of the entire
+# dataset, almost all of CSE's history. close_out_of_range stayed in: its
+# production sample is open=high=low=0 with a real nonzero close, a
+# genuine bulk-import gap, and it's two orders of magnitude rarer (0.7%
+# of rows) — a real anomaly, not a source-wide artifact.
+TRAINING_EXCLUDE_FLAGS = {
+    "non_positive_open",
+    "non_positive_high",
+    "non_positive_low",
+    "non_positive_close",
+    "negative_volume",
+    "high_below_low",
+    "close_out_of_range",
+    "abnormal_jump",
+}
+
 
 def validate_ohlcv(open_, high, low, close, volume) -> list[str]:
     """Pure function: returns violation codes for a single bar. Never

@@ -120,14 +120,18 @@ def _feature_frame(df: pd.DataFrame) -> pd.DataFrame:
 def build_training_panel(exchange: str, limit_stocks: int | None = None) -> pd.DataFrame:
     """One row per (stock, date) with features + label, for a single
     exchange. Each stock's history is chronologically validated (sorted,
-    no null/duplicate dates) before any feature is computed."""
+    no null/duplicate dates) before any feature is computed. Bars carrying
+    a data_quality.TRAINING_EXCLUDE_FLAGS flag (impossible OHLC, abnormal
+    single-day jump) are dropped before feature construction."""
+    from market.services.data_quality import TRAINING_EXCLUDE_FLAGS
+
     qs = Stock.objects.filter(is_active=True, exchange=exchange).order_by("id")
     if limit_stocks:
         qs = qs[:limit_stocks]
 
     frames = []
     for stock in qs:
-        df = prices_to_df(stock.prices.live())
+        df = prices_to_df(stock.prices.live(), exclude_quality_flags=TRAINING_EXCLUDE_FLAGS)
         if len(df) < MIN_STOCK_ROWS:
             continue
         df = validate_chronological(df, label=f"{stock.exchange}:{stock.trading_code}")

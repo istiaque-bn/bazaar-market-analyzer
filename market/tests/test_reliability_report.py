@@ -15,12 +15,14 @@ from market.models import (
     Stock,
 )
 from market.services.ml_model import FEATURE_COLS
+from market.services.reliability_capture import feature_schema_version
 from market.services.reliability_metrics import MIN_SAMPLES_WATCH
 from market.services.reliability_report import run_reliability_assessment
 
 
-def _make_settled_snapshots(*, exchange, model_version_tag, family, n, horizon=10, skill_positive=True, start=date(2026, 1, 1)):
+def _make_settled_snapshots(*, exchange, model_version_tag, family, n, horizon=10, skill_positive=True, start=date(2026, 1, 1), feature_schema=FEATURE_COLS):
     stock = Stock.objects.create(exchange=exchange, trading_code=f"RPT-{model_version_tag}-{exchange}", company_name="Report Co")
+    schema_version = feature_schema_version(feature_schema)
     rows = []
     for i in range(n):
         d = start + timedelta(days=i)
@@ -32,6 +34,7 @@ def _make_settled_snapshots(*, exchange, model_version_tag, family, n, horizon=1
             PredictionSnapshot(
                 model_family=family,
                 model_version_tag=model_version_tag,
+                feature_schema_version=schema_version,
                 stock=stock,
                 stock_trading_code=stock.trading_code,
                 exchange=exchange,
@@ -53,12 +56,22 @@ def _make_settled_snapshots(*, exchange, model_version_tag, family, n, horizon=1
 
 
 class ModelVersionIsolationTests(TestCase):
-    """A new model version must not inherit (or be blamed for) a prior
-    version's settled track record."""
+    """A retrain that keeps the same feature schema is a continuation of
+    the same product, so its settled track record accumulates across
+    versions — a model that retrains daily must not have its reliability
+    window reset to zero every day (this was a real production bug: every
+    window stuck at n=0 despite 1000+ real settled snapshots existing,
+    because assessment used to isolate by exact version tag). A genuine
+    feature-schema change is the one case that must still start a fresh,
+    isolated window, since a differently-shaped model really is a
+    different product whose track record shouldn't be blamed on/credited
+    to a different one."""
 
-    def test_assessment_only_counts_snapshots_from_the_active_version(self):
+    def test_same_schema_retrain_accumulates_across_versions(self):
         exchange = Exchange.DSE
-        # Old version: perfectly WRONG (negative skill) — should NOT count.
+        # Old version, same schema, perfectly WRONG — should still count:
+        # retraining with an unchanged feature set is a continuation, not
+        # a new product.
         _make_settled_snapshots(
             exchange=exchange, model_version_tag="old-v", family=PredictionSnapshot.ModelFamily.FORWARD_RETURN_RF,
             n=MIN_SAMPLES_WATCH, skill_positive=False, start=date(2025, 1, 1),
@@ -67,7 +80,7 @@ class ModelVersionIsolationTests(TestCase):
             model_name="forward_return_rf", version="old-v", exchange_scope="combined", status="inactive",
             is_active=False, data_cutoff=date(2025, 6, 1), train_rows=100, feature_schema=FEATURE_COLS,
         )
-        # New (active) version: perfectly RIGHT (positive skill) — should be what's assessed.
+        # New (active) version, same schema, perfectly RIGHT.
         _make_settled_snapshots(
             exchange=exchange, model_version_tag="new-v", family=PredictionSnapshot.ModelFamily.FORWARD_RETURN_RF,
             n=MIN_SAMPLES_WATCH, skill_positive=True, start=date(2026, 1, 1),
@@ -78,13 +91,48 @@ class ModelVersionIsolationTests(TestCase):
         )
 
         result = run_reliability_assessment(
+            families=[PredictionSnapshot.ModelFamily.FORWARD_RETURN_RF], exchanges=[exchange], windows=[MIN_SAMPLES_WATCH * 2],
+        )
+        assessment = result["assessments"][0]
+        self.assertEqual(assessment["model_version_tag"], "new-v")
+        # Both versions' snapshots pooled — this is the fix: same-schema
+        # history is not thrown away on every retrain.
+        self.assertEqual(assessment["sample_count"], MIN_SAMPLES_WATCH * 2)
+
+    def test_feature_schema_change_starts_a_fresh_isolated_window(self):
+        exchange = Exchange.DSE
+        old_schema = FEATURE_COLS
+        new_schema = FEATURE_COLS + ["extra_feature"]
+        # Old version, OLD schema, perfectly WRONG — must NOT leak into the
+        # new schema's window, since it's a genuinely different feature set.
+        _make_settled_snapshots(
+            exchange=exchange, model_version_tag="old-v", family=PredictionSnapshot.ModelFamily.FORWARD_RETURN_RF,
+            n=MIN_SAMPLES_WATCH, skill_positive=False, start=date(2025, 1, 1), feature_schema=old_schema,
+        )
+        MLModelVersion.objects.create(
+            model_name="forward_return_rf", version="old-v", exchange_scope="combined", status="inactive",
+            is_active=False, data_cutoff=date(2025, 6, 1), train_rows=100, feature_schema=old_schema,
+        )
+        # New (active) version, NEW schema, perfectly RIGHT.
+        _make_settled_snapshots(
+            exchange=exchange, model_version_tag="new-v", family=PredictionSnapshot.ModelFamily.FORWARD_RETURN_RF,
+            n=MIN_SAMPLES_WATCH, skill_positive=True, start=date(2026, 1, 1), feature_schema=new_schema,
+        )
+        MLModelVersion.objects.create(
+            model_name="forward_return_rf", version="new-v", exchange_scope="combined", status="active",
+            is_active=True, data_cutoff=date(2026, 6, 1), train_rows=100, feature_schema=new_schema,
+        )
+
+        result = run_reliability_assessment(
             families=[PredictionSnapshot.ModelFamily.FORWARD_RETURN_RF], exchanges=[exchange], windows=[MIN_SAMPLES_WATCH],
         )
         assessment = result["assessments"][0]
         self.assertEqual(assessment["model_version_tag"], "new-v")
+        # Only the new schema's own snapshots counted — the old schema's
+        # bad record does not leak in (if it had, this would be 2x and
+        # accuracy below would be dragged down to ~0.5).
         self.assertEqual(assessment["sample_count"], MIN_SAMPLES_WATCH)
-        # Perfect classifier accuracy -> definitely healthy, not degraded by the old version's bad record.
-        self.assertEqual(assessment["status"], ReliabilityAssessment.Status.HEALTHY)
+        self.assertEqual(assessment["metrics"]["classification"]["model"]["accuracy"], 1.0)
 
     def test_explicit_version_flag_evaluates_that_specific_version(self):
         exchange = Exchange.DSE

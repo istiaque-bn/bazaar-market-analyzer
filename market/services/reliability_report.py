@@ -21,7 +21,7 @@ from django.utils import timezone
 from market.models import Exchange, PredictionSnapshot, ReliabilityAssessment
 from market.services.ml_model import FORWARD_HORIZON_TRADING_DAYS
 from market.services.ml_training import active_model_version
-from market.services.reliability_capture import capture_predictions
+from market.services.reliability_capture import capture_predictions, feature_schema_version
 from market.services.reliability_drift import PSI_MAJOR, PSI_MODERATE, assess_drift
 from market.services.reliability_metrics import (
     HIGH_CALIBRATION_ERROR,
@@ -94,18 +94,27 @@ def _assess_one(
 ) -> tuple[dict, ReliabilityAssessment | None]:
     window_label = str(window_size)
 
-    # Scoped to exactly this model version's own settled snapshots — a
-    # retrain must not inherit (or be blamed for) a prior version's track
-    # record; each version's reliability window starts fresh from its own
-    # first captured prediction. See test_reliability_report.py's
+    # Scoped to this model's *feature schema*, not its exact version tag.
+    # A retrain that keeps the same feature columns is a continuation of
+    # the same product — its samples must accumulate across versions, or a
+    # model that retrains daily (both forward_return_rf and next_close_rf
+    # do) can never collect enough same-version settled snapshots to clear
+    # MIN_SAMPLES_INSUFFICIENT before the next day's retrain resets the tag
+    # again (verified in production: every window stuck at n=0 despite
+    # 1000+ real settled snapshots existing). A genuine feature-set change
+    # still gets an isolated fresh window, since its hash differs — that's
+    # the one case where inheriting a prior version's track record really
+    # would be wrong. See test_reliability_report.py's
     # ModelVersionIsolationTests.
+    target_schema_version = feature_schema_version(version.feature_schema) if version else None
     qs = PredictionSnapshot.objects.filter(
         model_family=family,
         exchange=exchange,
         horizon_trading_days=horizon,
-        model_version_tag=version.version if version else "__no_active_version__",
         settlement_status=PredictionSnapshot.SettlementStatus.SETTLED,
-    ).order_by("-data_cutoff_date")[:window_size]
+    )
+    qs = qs.filter(feature_schema_version=target_schema_version) if target_schema_version else qs.filter(model_version_tag="__no_active_version__")
+    qs = qs.order_by("-data_cutoff_date")[:window_size]
     rows = [_row_dict(s) for s in qs]
     sample_count = len(rows)
     period_start = min((r["data_cutoff_date"] for r in rows), default=None)

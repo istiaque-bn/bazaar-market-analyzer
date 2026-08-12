@@ -5,11 +5,22 @@ import numpy as np
 import pandas as pd
 
 
-def prices_to_df(price_qs) -> pd.DataFrame:
-    rows = list(price_qs.order_by("date").values("date", "open", "high", "low", "close", "volume", "value"))
+def prices_to_df(price_qs, *, exclude_quality_flags: set[str] | None = None) -> pd.DataFrame:
+    """exclude_quality_flags drops bars carrying any of the given
+    market.services.data_quality flag codes before they reach a caller —
+    used by the ML training panels (see data_quality.TRAINING_EXCLUDE_FLAGS)
+    so a bad tick can't teach a model. Left unset (the default) for display
+    paths, which show all data including flagged rows, just labeled."""
+    cols = ["date", "open", "high", "low", "close", "volume", "value"]
+    if exclude_quality_flags:
+        cols.append("quality_flags")
+    rows = list(price_qs.order_by("date").values(*cols))
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
+    if exclude_quality_flags:
+        bad = df["quality_flags"].apply(lambda flags: bool(set(flags or []) & exclude_quality_flags))
+        df = df[~bad].drop(columns=["quality_flags"])
     df["date"] = pd.to_datetime(df["date"])
     for c in ("open", "high", "low", "close", "volume", "value"):
         df[c] = pd.to_numeric(df[c], errors="coerce")

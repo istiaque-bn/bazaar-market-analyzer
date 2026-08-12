@@ -46,7 +46,7 @@ from market.services.trading_calendar import closure_reason
 logger = logging.getLogger(__name__)
 
 
-def _feature_schema_version(feature_schema: list[str] | None) -> str:
+def feature_schema_version(feature_schema: list[str] | None) -> str:
     cols = sorted(feature_schema or [])
     return hashlib.sha256(",".join(cols).encode()).hexdigest()[:16]
 
@@ -156,7 +156,7 @@ def capture_forward_return_snapshots(as_of: date | None = None) -> dict:
             horizon_trading_days=FORWARD_HORIZON_TRADING_DAYS,
             defaults={
                 "model_version": version,
-                "feature_schema_version": _feature_schema_version(version.feature_schema),
+                "feature_schema_version": feature_schema_version(version.feature_schema),
                 "stock": stock,
                 "target_date": target_date,
                 "reference_close": float(reference_close),
@@ -204,7 +204,7 @@ def capture_next_close_snapshots(as_of: date | None = None) -> dict:
             horizon_trading_days=1,
             defaults={
                 "model_version": version,
-                "feature_schema_version": _feature_schema_version(version.feature_schema if version else NEXT_CLOSE_FEATURE_COLS),
+                "feature_schema_version": feature_schema_version(version.feature_schema if version else NEXT_CLOSE_FEATURE_COLS),
                 "stock": stock,
                 "target_date": fc.target_date,
                 "reference_close": float(fc.last_close),
