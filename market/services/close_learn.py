@@ -29,7 +29,7 @@ from sklearn.metrics import balanced_accuracy_score, f1_score, precision_score
 from xgboost import XGBClassifier
 
 from market.models import CloseLearnState, Exchange, NextDayCloseForecast, PriceHistory, Stock
-from market.services.indicators import compute_indicators, prices_to_df
+from market.services.indicators import compute_indicators, prices_to_df, volatility_regime
 from market.services.market_hours import TRADING_WEEKDAYS
 from market.services.ml_training import (
     active_model_version,
@@ -73,6 +73,12 @@ FEATURE_COLS = [
     "sector_ret_1d",
     "breadth",
     "rel_ret_1d",
+    "rel_ret_5d",
+    "rel_ret_20d",
+    "stock_sector_rel_1d",
+    "sector_index_rel_1d",
+    "vol_regime",
+    "trend_regime",
     "return_1d",
     "return_2d",
     "return_3d",
@@ -170,11 +176,16 @@ def _clear_context_cache():
     _CONTEXT_CACHE.clear()
 
 
+REL_STRENGTH_HORIZONS = (5, 20)  # trading days — matches indicators.py's return_5d/return_20d
+
+
 def build_exchange_context(exchange: str, start: date | None = None, end: date | None = None) -> pd.DataFrame:
     """
     Cross-sectional daily context for an exchange:
-      index_ret_1d  — equal-weight mean stock return
-      breadth       — share of stocks with positive return that day
+      index_ret_1d       — equal-weight mean stock return
+      index_ret_5d/20d   — compounded equal-weight index return over the trailing N sessions,
+                            for multi-horizon stock-vs-market relative strength (rel_ret_5d/20d)
+      breadth             — share of stocks with positive return that day
     """
     exchange = (exchange or "DSE").upper()
     end = end or timezone.localdate()
@@ -183,6 +194,7 @@ def build_exchange_context(exchange: str, start: date | None = None, end: date |
     if cache_key in _CONTEXT_CACHE:
         return _CONTEXT_CACHE[cache_key]
 
+    empty_cols = ["date", "index_ret_1d", "breadth"] + [f"index_ret_{n}d" for n in REL_STRENGTH_HORIZONS]
     rows = list(
         PriceHistory.objects.live()
         .filter(
@@ -195,7 +207,7 @@ def build_exchange_context(exchange: str, start: date | None = None, end: date |
         .values("date", "stock_id", "close", "stock__sector")
     )
     if not rows:
-        empty = pd.DataFrame(columns=["date", "index_ret_1d", "breadth"])
+        empty = pd.DataFrame(columns=empty_cols)
         _CONTEXT_CACHE[cache_key] = empty
         return empty
 
@@ -214,6 +226,13 @@ def build_exchange_context(exchange: str, start: date | None = None, end: date |
     )
     daily["index_ret_1d"] = daily["index_ret_1d"].fillna(0.0)
     daily["breadth"] = daily["breadth"].fillna(0.5)
+    # Compounded N-day index return from the daily equal-weight series —
+    # backward-looking only (rolling window ends at the current row), so
+    # this is exactly as leak-safe as the 1-day version.
+    for n in REL_STRENGTH_HORIZONS:
+        daily[f"index_ret_{n}d"] = (
+            (1 + daily["index_ret_1d"]).rolling(n, min_periods=max(2, n // 2)).apply(np.prod, raw=True) - 1
+        ).fillna(0.0)
     _CONTEXT_CACHE[cache_key] = daily
     return daily
 
@@ -290,6 +309,7 @@ def _tech_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
     signs = np.sign(out["stock_ret_1d"].fillna(0.0))
     groups = signs.ne(signs.shift()).cumsum()
     out["up_down_streak"] = signs * signs.groupby(groups).cumcount().add(1)
+    out["vol_regime"] = volatility_regime(out["volatility_20"])
     return out
 
 
@@ -305,7 +325,8 @@ def _attach_market_features(
     out = tech.copy()
     out["date"] = pd.to_datetime(out["date"]).dt.normalize()
     ex = build_exchange_context(exchange, start=start, end=end)
-    out = out.merge(ex[["date", "index_ret_1d", "breadth"]], on="date", how="left")
+    ex_cols = ["date", "index_ret_1d", "breadth"] + [f"index_ret_{n}d" for n in REL_STRENGTH_HORIZONS]
+    out = out.merge(ex[ex_cols], on="date", how="left")
     # Do not manufacture a sector signal from empty/missing sector labels.
     # It remains a zeroed placeholder for compatibility with older artifacts
     # until trustworthy sector coverage is imported.
@@ -317,9 +338,21 @@ def _attach_market_features(
     else:
         out["sector_ret_1d"] = 0.0
     out["index_ret_1d"] = out["index_ret_1d"].fillna(0.0)
+    for n in REL_STRENGTH_HORIZONS:
+        out[f"index_ret_{n}d"] = out[f"index_ret_{n}d"].fillna(0.0)
     out["sector_ret_1d"] = out["sector_ret_1d"].fillna(0.0)
     out["breadth"] = out["breadth"].fillna(0.5)
     out["rel_ret_1d"] = out["stock_ret_1d"].fillna(0.0) - out["index_ret_1d"]
+    # Multi-horizon stock-vs-market (Check 3's rel_ret_5d/20d)
+    out["rel_ret_5d"] = out["return_5d"].fillna(0.0) - out["index_ret_5d"]
+    out["rel_ret_20d"] = out["return_20d"].fillna(0.0) - out["index_ret_20d"]
+    # Stock-vs-sector and sector-vs-market — the two Check 3 comparisons
+    # that previously didn't exist at all.
+    out["stock_sector_rel_1d"] = out["stock_ret_1d"].fillna(0.0) - out["sector_ret_1d"]
+    out["sector_index_rel_1d"] = out["sector_ret_1d"] - out["index_ret_1d"]
+    # Market-wide trend regime: is the equal-weight index up over the
+    # trailing month? A simple, leak-safe bull/sideways-vs-down flag.
+    out["trend_regime"] = (out["index_ret_20d"] > 0).astype(float)
     return out
 
 
@@ -336,8 +369,15 @@ def _feature_row(
     framed = _attach_market_features(tech, exchange, sector, start=start, end=end)
     row = framed.iloc[-1]
     feats = {c: None if pd.isna(row.get(c)) else float(row[c]) for c in FEATURE_COLS}
-    # Context cols default to 0/0.5 rather than rejecting the row
-    for c, default in (("index_ret_1d", 0.0), ("sector_ret_1d", 0.0), ("breadth", 0.5), ("rel_ret_1d", 0.0)):
+    # Context cols default to 0/0.5 rather than rejecting the row. vol_regime
+    # defaults to 1 (mid) — the neutral bucket — since a missing regime
+    # shouldn't bias toward either the low or high tercile.
+    context_defaults = (
+        ("index_ret_1d", 0.0), ("sector_ret_1d", 0.0), ("breadth", 0.5), ("rel_ret_1d", 0.0),
+        ("rel_ret_5d", 0.0), ("rel_ret_20d", 0.0), ("stock_sector_rel_1d", 0.0), ("sector_index_rel_1d", 0.0),
+        ("trend_regime", 0.0), ("vol_regime", 1.0),
+    )
+    for c, default in context_defaults:
         if feats[c] is None:
             feats[c] = default
     if any(feats[c] is None for c in TECH_COLS):

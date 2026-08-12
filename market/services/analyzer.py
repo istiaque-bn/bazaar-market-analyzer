@@ -122,7 +122,7 @@ def analyze_stock(stock: Stock, use_ml: bool = True, include_demo: bool = False)
     ml_score = None
     score = pred.score
     if use_ml and len(df) >= 80:
-        ml_prob = ml_probability(df, exchange=stock.exchange)
+        ml_prob = ml_probability(df, exchange=stock.exchange, sector=stock.sector or "")
         if ml_prob is not None:
             ml_score = round(ml_prob * 100, 2)
             score = blend_score(pred.score, ml_prob)

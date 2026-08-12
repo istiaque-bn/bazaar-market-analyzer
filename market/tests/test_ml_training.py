@@ -119,9 +119,13 @@ class PreprocessingFitOnTrainOnlyTests(SimpleTestCase):
         self.assertTrue((filled_test["a"] == 1000.0).all())
 
 
-class ForwardReturnLabelLeakageTests(SimpleTestCase):
+class ForwardReturnLabelLeakageTests(TestCase):
     """Direct regression test for the Phase 4 bug: rows whose 10-day
-    forward return is not yet knowable must never be labeled class 0."""
+    forward return is not yet knowable must never be labeled class 0.
+    TestCase (not SimpleTestCase) because _feature_frame now queries
+    exchange/sector context for the relative-strength/regime features —
+    harmless here (no PriceHistory fixtures exist, so context defaults to
+    0/flat), but it's a real DB read either way."""
 
     def test_rows_near_series_end_get_no_label_not_class_zero(self):
         df = _price_df(n=100, seed=3)

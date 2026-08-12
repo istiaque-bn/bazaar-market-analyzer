@@ -108,6 +108,19 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def volatility_regime(vol: pd.Series) -> pd.Series:
+    """Where a stock's own current volatility_20 ranks against its own
+    trailing ~1y distribution: 0=low, 1=mid, 2=high vol regime. Backward-
+    looking rolling quantiles only, so a row never sees its own future
+    volatility. NaN (not enough history yet to rank) is preserved rather
+    than guessed at, for the caller to default or drop as appropriate."""
+    p33 = vol.rolling(252, min_periods=60).quantile(0.33)
+    p67 = vol.rolling(252, min_periods=60).quantile(0.67)
+    regime = pd.Series(np.select([vol <= p33, vol <= p67], [0, 1], default=2), index=vol.index, dtype=float)
+    regime[p33.isna()] = np.nan
+    return regime
+
+
 def latest_indicator_row(df: pd.DataFrame) -> dict:
     if df.empty:
         return {}

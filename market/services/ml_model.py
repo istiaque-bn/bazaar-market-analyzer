@@ -34,7 +34,8 @@ from django.conf import settings
 from xgboost import XGBClassifier
 
 from market.models import Exchange, Stock
-from market.services.indicators import compute_indicators, prices_to_df
+from market.services.close_learn import _attach_market_features
+from market.services.indicators import compute_indicators, prices_to_df, volatility_regime
 from market.services.ml_training import (
     active_model_version,
     apply_imputer,
@@ -82,10 +83,17 @@ FEATURE_COLS = [
     "turnover_ratio",
     "dist_sma20",
     "dist_sma50",
+    "rel_ret_1d",
+    "rel_ret_5d",
+    "rel_ret_20d",
+    "stock_sector_rel_1d",
+    "sector_index_rel_1d",
+    "vol_regime",
+    "trend_regime",
 ]
 
 
-def _feature_frame(df: pd.DataFrame) -> pd.DataFrame:
+def _feature_frame(df: pd.DataFrame, exchange: str = "DSE", sector: str = "") -> pd.DataFrame:
     data = compute_indicators(df)
     if data.empty:
         return pd.DataFrame()
@@ -108,6 +116,15 @@ def _feature_frame(df: pd.DataFrame) -> pd.DataFrame:
         out["turnover_ratio"] = 1.0
     out["dist_sma20"] = out["close"] / out["sma_20"] - 1
     out["dist_sma50"] = out["close"] / out["sma_50"] - 1
+    out["vol_regime"] = volatility_regime(out["volatility_20"])
+    # Reuse close_learn's exchange/sector context machinery for relative-
+    # strength + regime features (rel_ret_*, stock_sector_rel_1d,
+    # sector_index_rel_1d, trend_regime) rather than duplicating it —
+    # same leak-safe, backward-looking construction either model uses.
+    out["stock_ret_1d"] = out["return_1d"]
+    start = pd.Timestamp(out["date"].iloc[0]).date()
+    end = pd.Timestamp(out["date"].iloc[-1]).date()
+    out = _attach_market_features(out, exchange, sector, start=start, end=end)
     out["fwd_ret_10"] = out["close"].shift(-10) / out["close"] - 1
     # Rows near the end of a stock's history have no known 10-day-forward
     # outcome yet. Those must be dropped, not silently scored as "flat/
@@ -135,7 +152,7 @@ def build_training_panel(exchange: str, limit_stocks: int | None = None) -> pd.D
         if len(df) < MIN_STOCK_ROWS:
             continue
         df = validate_chronological(df, label=f"{stock.exchange}:{stock.trading_code}")
-        feats = _feature_frame(df)
+        feats = _feature_frame(df, exchange=stock.exchange, sector=stock.sector or "")
         if feats.empty:
             continue
         cols = feats[["date"] + FEATURE_COLS + ["label"]].dropna()
@@ -453,11 +470,11 @@ def load_model(exchange: str | None = None) -> dict | None:
     return None
 
 
-def ml_probability(df: pd.DataFrame, exchange: str | None = None) -> float | None:
+def ml_probability(df: pd.DataFrame, exchange: str | None = None, sector: str = "") -> float | None:
     bundle = load_model(exchange=exchange)
     if bundle is None:
         return None
-    feats = _feature_frame(df)
+    feats = _feature_frame(df, exchange=exchange or "DSE", sector=sector)
     if feats.empty:
         return None
     # Use the feature list the *deployed bundle* was actually trained
