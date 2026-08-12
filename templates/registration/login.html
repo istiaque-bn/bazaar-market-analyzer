@@ -1,10 +1,11 @@
 {% extends "base_bare.html" %}
+{% load static %}
 {% block title %}Sign in{% endblock %}
 {% block body_class %}auth-page{% endblock %}
 {% block content %}
 <div class="auth-shell">
   <div class="auth-terminal" aria-hidden="true" id="authTerminal">
-    <img class="auth-terminal-base" src="/static/images/stock-bazaar-login-terminal.png" alt="">
+    <img class="auth-terminal-base" src="{% static 'images/stock-bazaar-login-terminal.png' %}" alt="">
     <div class="auth-terminal-shade"></div>
     <div class="auth-grid-flow"></div>
     <div class="auth-globe-overlay"><span class="auth-globe-ring ring-a"></span><span class="auth-globe-ring ring-b"></span><span class="auth-globe-node node-a"></span><span class="auth-globe-node node-b"></span><span class="auth-globe-node node-c"></span></div>
