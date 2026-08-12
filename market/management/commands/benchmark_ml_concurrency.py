@@ -8,12 +8,15 @@ Usage:
   python manage.py benchmark_ml_concurrency --n-jobs -1,4,2,1 \\
       --target train_model --limit-stocks 40
 """
-import statistics
+import tempfile
 import threading
 import time
+from pathlib import Path
+from unittest import mock
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
+from django.db import transaction
 
 from market.models import Stock
 
@@ -50,6 +53,38 @@ class _LatencyProbe:
         return self.latencies
 
 
+class _BenchmarkRollback(Exception):
+    """Sentinel used to force-rollback every DB write a benchmarked
+    training run makes — this command must never deploy a model version
+    or flip which model is 'active' in a real database, only measure
+    wall-clock cost."""
+
+
+def _run_isolated(fn, *args, **kwargs):
+    """Runs fn(*args, **kwargs) (train_model / train_next_close_model)
+    with its MLModelVersion / CloseLearnState writes rolled back and its
+    .pkl artifact writes redirected to a temp directory. Safe to point at
+    a real production database — nothing it does outlives this call."""
+    from market.models import Exchange
+    from market.services import close_learn, ml_model
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp_by_exchange = {Exchange.DSE: Path(td) / "dse.pkl", Exchange.CSE: Path(td) / "cse.pkl"}
+        tmp_nc_by_exchange = {Exchange.DSE: Path(td) / "nc_dse.pkl", Exchange.CSE: Path(td) / "nc_cse.pkl"}
+        with mock.patch.object(ml_model, "MODEL_PATH", Path(td) / "combined.pkl"), \
+                mock.patch.object(ml_model, "MODEL_PATH_BY_EXCHANGE", tmp_by_exchange), \
+                mock.patch.object(close_learn, "MODEL_PATH", Path(td) / "next_close.pkl"), \
+                mock.patch.object(close_learn, "MODEL_PATH_BY_EXCHANGE", tmp_nc_by_exchange):
+            result = None
+            try:
+                with transaction.atomic():
+                    result = fn(*args, **kwargs)
+                    raise _BenchmarkRollback()
+            except _BenchmarkRollback:
+                pass
+    return result
+
+
 def _pctile(values: list[float], p: float) -> float:
     if not values:
         return 0.0
@@ -83,27 +118,19 @@ class Command(BaseCommand):
 
         rows = []
         for target in targets:
+            fn = ml_model.train_model if target == "train_model" else close_learn.train_next_close_model
+            kwargs = {"limit_stocks": limit_stocks, "force": True} if target == "train_model" else {"limit_stocks": limit_stocks}
             for n_jobs in candidates:
-                settings.ML_MAX_WORKERS = n_jobs if n_jobs > 0 else 1  # ML_MAX_WORKERS itself must stay positive; -1 tested via direct override below
-                probe = _LatencyProbe()
-                probe.start()
-                started = time.monotonic()
-                if n_jobs == -1:
-                    # Reproduce the OLD uncapped behavior exactly for a true
-                    # apples-to-apples "before" data point.
-                    import unittest.mock as mock
-
-                    with mock.patch("market.services.ml_model.settings.ML_MAX_WORKERS", -1), \
-                            mock.patch("market.services.close_learn.settings.ML_MAX_WORKERS", -1):
-                        if target == "train_model":
-                            ml_model.train_model(limit_stocks=limit_stocks, force=True)
-                        else:
-                            close_learn.train_next_close_model(limit_stocks=limit_stocks)
-                else:
-                    if target == "train_model":
-                        ml_model.train_model(limit_stocks=limit_stocks, force=True)
-                    else:
-                        close_learn.train_next_close_model(limit_stocks=limit_stocks)
+                # n_jobs=-1 (the OLD, uncapped behavior) is reproduced via a
+                # direct settings override — ML_MAX_WORKERS itself must stay
+                # positive for _positive_int's own validation, but scikit-
+                # learn/xgboost accept -1 as "every core" regardless of
+                # source, so patching the attribute value works either way.
+                with mock.patch.object(settings, "ML_MAX_WORKERS", n_jobs):
+                    probe = _LatencyProbe()
+                    probe.start()
+                    started = time.monotonic()
+                    _run_isolated(fn, **kwargs)
                 duration = time.monotonic() - started
                 during = probe.stop()
                 p50, p95, p_max = _pctile(during, 0.5), _pctile(during, 0.95), max(during) if during else 0.0
