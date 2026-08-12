@@ -37,6 +37,7 @@ from market.services.ml_training import (
     backup_existing_model,
     fit_median_imputer,
     new_version_tag,
+    recency_weights,
     record_model_version,
     regression_metrics,
     regression_skill,
@@ -1169,7 +1170,7 @@ def _evaluate_direction_candidate(panel: pd.DataFrame, *, kind: str, rolling_day
         imputer = fit_median_imputer(X_train)
         X_train_i, X_test_i = apply_imputer(imputer, X_train), apply_imputer(imputer, X_test)
         model = _direction_model(kind)
-        model.fit(X_train_i, y_train)
+        model.fit(X_train_i, y_train, sample_weight=recency_weights(train["date"], reference=f.train_end))
         probs = model.predict_proba(X_test_i)
         pred = np.argmax(probs, axis=1)
         m = _direction_metrics(y_test, pred, probs)
@@ -1216,7 +1217,7 @@ def _final_fit_and_save_next_close(panel: pd.DataFrame, eval_result: dict, *, ex
     fit_mask = (panel["date"] < cal_start).to_numpy()
     cal_mask = ~fit_mask
     model = _direction_model(eval_result.get("model_kind", "xgboost"))
-    model.fit(X_i.loc[fit_mask], y[fit_mask])
+    model.fit(X_i.loc[fit_mask], y[fit_mask], sample_weight=recency_weights(panel.loc[fit_mask, "date"], reference=cutoff))
     calibrator = None
     if cal_mask.sum() >= 100 and len(np.unique(y[cal_mask])) == 3:
         calibrator = LogisticRegression(max_iter=1000, random_state=42)

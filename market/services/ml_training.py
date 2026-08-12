@@ -107,6 +107,23 @@ def apply_imputer(imputer: SimpleImputer, X: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(imputer.transform(X), columns=X.columns, index=X.index)
 
 
+RECENCY_HALF_LIFE_DAYS = 180
+
+
+def recency_weights(dates: pd.Series, half_life_days: int = RECENCY_HALF_LIFE_DAYS, reference: "pd.Timestamp | None" = None) -> np.ndarray:
+    """Exponential recency weighting for sample_weight= on .fit(). A row
+    `half_life_days` older than `reference` (default: the series' own max,
+    i.e. the most recent row in whatever fold/window is being fit) gets
+    half the weight of the most recent row. `reference` must be passed
+    explicitly inside walk-forward folds — using the fold's train_end
+    rather than each call's local max keeps weighting consistent with the
+    point in time being simulated, not silently drifting with fold size."""
+    dates = pd.to_datetime(pd.Series(dates))
+    ref = pd.Timestamp(reference) if reference is not None else dates.max()
+    age_days = (ref - dates).dt.days.clip(lower=0)
+    return np.power(0.5, age_days / float(half_life_days)).to_numpy()
+
+
 # ---------------------------------------------------------------------------
 # Classification baselines + metrics (used by ml_model.py's 10d-forward task)
 # ---------------------------------------------------------------------------

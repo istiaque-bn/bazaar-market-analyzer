@@ -31,11 +31,14 @@ import joblib
 import numpy as np
 import pandas as pd
 from django.conf import settings
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 from xgboost import XGBClassifier
 
 from market.models import Exchange, Stock
 from market.services.close_learn import _attach_market_features
 from market.services.indicators import compute_indicators, prices_to_df, volatility_regime
+from market.services.next_close_research import split_final_holdout
 from market.services.ml_training import (
     active_model_version,
     apply_imputer,
@@ -46,6 +49,7 @@ from market.services.ml_training import (
     new_version_tag,
     persistence_baseline,
     record_model_version,
+    recency_weights,
     simple_market_baseline,
     skill_vs_baseline,
     validate_chronological,
@@ -72,6 +76,9 @@ MIN_PANEL_ROWS = 200
 MIN_FOLD_TRAIN_ROWS = 100
 MIN_FOLD_TEST_ROWS = 20
 MIN_ROWS_PER_EXCHANGE_TO_POOL = 200
+ROLLING_WINDOW_DAYS = (365, 730, 1095)  # same grid close_learn.py's next_close_rf already searches
+CANDIDATE_KINDS = ("logistic", "random_forest", "xgboost")
+GRID_SEARCH_FOLDS = 3  # cheaper than the 5-fold headline eval; matches close_learn.py's candidate search
 
 FEATURE_COLS = [
     "rsi_14",
@@ -177,10 +184,23 @@ def _fold_class_balance(y) -> dict:
     return {str(int(v)): int(c) for v, c in zip(vals, counts)}
 
 
-def walk_forward_evaluate(panel: pd.DataFrame, n_folds: int = 5) -> dict:
+def _binary_model(kind: str):
+    if kind == "logistic":
+        return LogisticRegression(max_iter=1500, class_weight="balanced", random_state=42)
+    if kind == "random_forest":
+        return RandomForestClassifier(
+            n_estimators=120, max_depth=8, min_samples_leaf=12, class_weight="balanced", random_state=42, n_jobs=settings.ML_MAX_WORKERS
+        )
+    return XGBClassifier(n_estimators=120, max_depth=4, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=settings.ML_MAX_WORKERS, eval_metric="logloss")
+
+
+def walk_forward_evaluate(panel: pd.DataFrame, n_folds: int = 5, *, model_kind: str = "xgboost", rolling_days: int | None = None) -> dict:
     """Chronological walk-forward CV with an embargo gap >= the label's
     forward horizon. Reports model + baseline metrics per fold and
-    aggregated; does not persist anything."""
+    aggregated; does not persist anything. `rolling_days`, if given, caps
+    each fold's training window to that many calendar days back from
+    train_end instead of using all history up to that point (mirrors
+    close_learn.py's next_close_rf candidate search)."""
     if panel.empty:
         return {"ok": False, "error": "no data"}
 
@@ -198,7 +218,11 @@ def walk_forward_evaluate(panel: pd.DataFrame, n_folds: int = 5) -> dict:
     }
 
     for f in folds:
-        train = panel.loc[panel["date"] <= f.train_end]
+        if rolling_days:
+            train_start = f.train_end - pd.Timedelta(days=rolling_days)
+            train = panel.loc[(panel["date"] >= train_start) & (panel["date"] <= f.train_end)]
+        else:
+            train = panel.loc[panel["date"] <= f.train_end]
         test = panel.loc[(panel["date"] >= f.test_start) & (panel["date"] <= f.test_end)]
         if len(train) < MIN_FOLD_TRAIN_ROWS or len(test) < MIN_FOLD_TEST_ROWS or train["label"].nunique() < 2:
             continue
@@ -210,8 +234,9 @@ def walk_forward_evaluate(panel: pd.DataFrame, n_folds: int = 5) -> dict:
         X_train_i = apply_imputer(imputer, X_train)
         X_test_i = apply_imputer(imputer, X_test)
 
-        model = XGBClassifier(n_estimators=120, max_depth=4, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=settings.ML_MAX_WORKERS, eval_metric="logloss")
-        model.fit(X_train_i, y_train)
+        w_train = recency_weights(train["date"], reference=f.train_end)
+        model = _binary_model(model_kind)
+        model.fit(X_train_i, y_train, sample_weight=w_train)
         classes = list(model.classes_)
         proba = model.predict_proba(X_test_i)
         prob1 = proba[:, classes.index(1.0)] if 1.0 in classes else np.zeros(len(X_test_i))
@@ -272,7 +297,32 @@ def walk_forward_evaluate(panel: pd.DataFrame, n_folds: int = 5) -> dict:
         # a model that can't beat "always predict the more common class" adds
         # nothing.
         "skill_vs_naive": skill.get("majority_class"),
+        "model_kind": model_kind,
+        "rolling_days": rolling_days,
     }
+
+
+def _grid_search(panel: pd.DataFrame, n_folds: int = GRID_SEARCH_FOLDS) -> dict:
+    """Evaluate every (algorithm, training-window) combination via
+    walk-forward CV and return the best candidate, with the full
+    comparison attached for audit. Mirrors close_learn.py's next_close_rf
+    candidate search (Job 7 of the ML audit roadmap) — forward_return_rf
+    previously always used a single fixed XGBoost config with an
+    unbounded training window."""
+    candidates = []
+    for window in ROLLING_WINDOW_DAYS:
+        for kind in CANDIDATE_KINDS:
+            candidates.append(walk_forward_evaluate(panel, n_folds=n_folds, model_kind=kind, rolling_days=window))
+    # Full-history (unbounded window) baseline, same n_folds as the grid so
+    # it's judged on equal footing — this was the only config evaluated
+    # before Job 7, kept in the running rather than discarded outright.
+    candidates.append(walk_forward_evaluate(panel, n_folds=n_folds, model_kind="xgboost", rolling_days=None))
+    usable = [c for c in candidates if c.get("ok")]
+    if not usable:
+        return {"ok": False, "error": "no candidate config could be evaluated", "candidates": candidates}
+    best = dict(max(usable, key=lambda c: c.get("skill_vs_naive") if c.get("skill_vs_naive") is not None else -999))
+    best["candidate_comparison"] = candidates
+    return best
 
 
 def _justify_combining(dse_eval: dict, cse_eval: dict) -> tuple[bool, str]:
@@ -289,12 +339,59 @@ def _justify_combining(dse_eval: dict, cse_eval: dict) -> tuple[bool, str]:
     return True, f"DSE/CSE walk-forward skill are consistent (DSE={dse_skill}, CSE={cse_skill}); pooling adds sample size without hiding a weak exchange"
 
 
+def _final_holdout_check(panel: pd.DataFrame, eval_result: dict) -> dict:
+    """Diagnostic only (Job 9 of the ML audit roadmap): fit the grid-search
+    -selected config on everything except the last FINAL_HOLDOUT_CALENDAR_DAYS
+    (next_close_research.split_final_holdout), then score it on that
+    untouched slice. Never influences which candidate is chosen or the
+    deployment gate — next_close_research.py's own docstring is explicit
+    this split is "not wired into model promotion"; it exists so a real,
+    never-selected-on sample is visible in the training report."""
+    if not eval_result.get("ok"):
+        return {"ok": False, "error": "no eval result to check"}
+    research, holdout = split_final_holdout(panel)
+    rolling_days = eval_result.get("rolling_days")
+    if rolling_days:
+        cutoff = research["date"].max() if not research.empty else None
+        if cutoff is not None:
+            research = research[research["date"] >= cutoff - pd.Timedelta(days=rolling_days)]
+    if len(research) < MIN_FOLD_TRAIN_ROWS or len(holdout) < MIN_FOLD_TEST_ROWS or research["label"].nunique() < 2:
+        return {"ok": False, "error": "not enough rows on either side of the final holdout split to check"}
+    X_train, y_train = research[FEATURE_COLS], research["label"].to_numpy()
+    X_test, y_test = holdout[FEATURE_COLS], holdout["label"].to_numpy()
+    imputer = fit_median_imputer(X_train)
+    X_train_i, X_test_i = apply_imputer(imputer, X_train), apply_imputer(imputer, X_test)
+    model = _binary_model(eval_result.get("model_kind", "xgboost"))
+    model.fit(X_train_i, y_train, sample_weight=recency_weights(research["date"]))
+    classes = list(model.classes_)
+    proba = model.predict_proba(X_test_i)
+    prob1 = proba[:, classes.index(1.0)] if 1.0 in classes else np.zeros(len(X_test_i))
+    y_pred = (prob1 >= 0.5).astype(int)
+    m = classification_metrics(y_test, y_pred, prob1)
+    maj_pred, maj_prob = majority_class_baseline(y_train, len(y_test))
+    b = classification_metrics(y_test, maj_pred, maj_prob)
+    return {
+        "ok": True,
+        "n": m["n"],
+        "metrics": m,
+        "baseline_metrics": b,
+        "skill_vs_naive": skill_vs_baseline(m, b),
+        "holdout_start": holdout["date"].min().date().isoformat(),
+        "holdout_end": holdout["date"].max().date().isoformat(),
+    }
+
+
 def _final_fit_and_save(panel: pd.DataFrame, eval_result: dict, *, exchange_scope: str, model_path: Path) -> dict:
+    final_holdout = _final_holdout_check(panel, eval_result)
+    rolling_days = eval_result.get("rolling_days")
+    if rolling_days:
+        cutoff = panel["date"].max()
+        panel = panel[panel["date"] >= cutoff - pd.Timedelta(days=rolling_days)].copy()
     X, y = panel[FEATURE_COLS], panel["label"].to_numpy()
     imputer = fit_median_imputer(X)
     X_i = apply_imputer(imputer, X)
-    model = XGBClassifier(n_estimators=120, max_depth=4, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=settings.ML_MAX_WORKERS, eval_metric="logloss")
-    model.fit(X_i, y)
+    model = _binary_model(eval_result.get("model_kind", "xgboost"))
+    model.fit(X_i, y, sample_weight=recency_weights(panel["date"]))
 
     skill = eval_result.get("skill_vs_naive")
     is_active = skill is not None and skill > 0
@@ -315,6 +412,9 @@ def _final_fit_and_save(panel: pd.DataFrame, eval_result: dict, *, exchange_scop
             "walk_forward": eval_result,
             "data_cutoff": data_cutoff.isoformat(),
             "trained_rows": int(len(panel)),
+            "model_kind": eval_result.get("model_kind"),
+            "rolling_days": rolling_days,
+            "final_holdout": final_holdout,
         },
         model_path,
     )
@@ -333,6 +433,7 @@ def _final_fit_and_save(panel: pd.DataFrame, eval_result: dict, *, exchange_scop
             "model": eval_result.get("model_metrics"),
             "baselines": eval_result.get("baseline_metrics"),
             "skill_vs_baseline": eval_result.get("skill_vs_baseline"),
+            "final_holdout": final_holdout,
         },
         file_path=str(model_path),
         backup_path=backup_path,
@@ -344,6 +445,7 @@ def _final_fit_and_save(panel: pd.DataFrame, eval_result: dict, *, exchange_scop
         "status": status,
         "is_active": is_active,
         "skill_vs_naive": skill,
+        "final_holdout_skill": final_holdout.get("skill_vs_naive"),
         "version": version,
         "train_rows": int(len(panel)),
         "path": str(model_path),
@@ -393,12 +495,12 @@ def train_model(limit_stocks: int = 120, force: bool = False) -> dict:
         if already_current:
             return {"ok": True, "skipped": "no new label-resolvable data since last train", "data_cutoff": candidate_cutoff.isoformat()}
 
-    dse_eval = walk_forward_evaluate(dse_panel) if len(dse_panel) >= MIN_PANEL_ROWS else {"ok": False, "error": f"insufficient DSE rows ({len(dse_panel)})"}
-    cse_eval = walk_forward_evaluate(cse_panel) if len(cse_panel) >= MIN_PANEL_ROWS else {"ok": False, "error": f"insufficient CSE rows ({len(cse_panel)})"}
+    dse_eval = _grid_search(dse_panel) if len(dse_panel) >= MIN_PANEL_ROWS else {"ok": False, "error": f"insufficient DSE rows ({len(dse_panel)})"}
+    cse_eval = _grid_search(cse_panel) if len(cse_panel) >= MIN_PANEL_ROWS else {"ok": False, "error": f"insufficient CSE rows ({len(cse_panel)})"}
 
     panel_all = pd.concat([dse_panel, cse_panel], ignore_index=True) if not (dse_panel.empty or cse_panel.empty) else (dse_panel if not dse_panel.empty else cse_panel)
     panel_all = panel_all.sort_values("date", kind="mergesort").reset_index(drop=True)
-    combined_eval = walk_forward_evaluate(panel_all) if len(panel_all) >= MIN_PANEL_ROWS else {"ok": False, "error": f"insufficient combined rows ({len(panel_all)})"}
+    combined_eval = _grid_search(panel_all) if len(panel_all) >= MIN_PANEL_ROWS else {"ok": False, "error": f"insufficient combined rows ({len(panel_all)})"}
 
     justified, reason = _justify_combining(dse_eval, cse_eval)
     evaluation = {"dse": dse_eval, "cse": cse_eval, "combined": combined_eval, "combine_justified": justified, "combine_reason": reason}
