@@ -945,12 +945,12 @@ def _fit_zero_inflated_next_close(X_train_i: pd.DataFrame, y_train: np.ndarray):
     this flipped DSE's out-of-sample skill_vs_naive from -0.007 to +0.004."""
     move_train = (np.abs(y_train) > ZERO_RETURN_EPS).astype(int)
     classifier = RandomForestClassifier(
-        n_estimators=140, max_depth=7, min_samples_leaf=10, random_state=42, n_jobs=-1, class_weight="balanced"
+        n_estimators=140, max_depth=7, min_samples_leaf=10, random_state=42, n_jobs=settings.ML_MAX_WORKERS, class_weight="balanced"
     )
     classifier.fit(X_train_i, move_train)
 
     mover_mask = move_train == 1
-    regressor = RandomForestRegressor(n_estimators=140, max_depth=7, min_samples_leaf=10, random_state=42, n_jobs=-1)
+    regressor = RandomForestRegressor(n_estimators=140, max_depth=7, min_samples_leaf=10, random_state=42, n_jobs=settings.ML_MAX_WORKERS)
     regressor.fit(X_train_i[mover_mask], y_train[mover_mask])
     return classifier, regressor
 
@@ -1063,12 +1063,12 @@ def _direction_model(kind: str):
         return LogisticRegression(max_iter=1500, class_weight="balanced", random_state=42)
     if kind == "random_forest":
         return RandomForestClassifier(
-            n_estimators=120, max_depth=8, min_samples_leaf=12, class_weight="balanced", random_state=42, n_jobs=-1
+            n_estimators=120, max_depth=8, min_samples_leaf=12, class_weight="balanced", random_state=42, n_jobs=settings.ML_MAX_WORKERS
         )
     return XGBClassifier(
         n_estimators=160, max_depth=4, learning_rate=0.04, subsample=0.8, colsample_bytree=0.8,
         reg_alpha=0.2, reg_lambda=2.0, objective="multi:softprob", num_class=3,
-        eval_metric="mlogloss", random_state=42, n_jobs=-1,
+        eval_metric="mlogloss", random_state=42, n_jobs=settings.ML_MAX_WORKERS,
     )
 
 

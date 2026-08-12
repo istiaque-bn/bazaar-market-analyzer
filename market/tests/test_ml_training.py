@@ -17,7 +17,7 @@ from unittest import mock
 
 import numpy as np
 import pandas as pd
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from market.models import Exchange, MLModelVersion, PriceHistory, Stock
 from market.services import close_learn, ml_model
@@ -398,3 +398,44 @@ class LiveSkillDowngradeTests(TestCase):
         close_learn._maybe_downgrade_on_live_skill({"n": 200, "skill_vs_naive": 0.1})
         version.refresh_from_db()
         self.assertTrue(version.is_active)
+
+
+class ModelTrainingConcurrencyCapTests(TestCase):
+    """XGBoost/RandomForest fits used to hard-code n_jobs=-1 (every core) —
+    now read settings.ML_MAX_WORKERS so one training task can't saturate a
+    small VPS against Gunicorn/DB/Redis on the same box. Only the thread
+    count changes; asserting the constructor kwarg is enough to prove the
+    plumbing without needing to compare model output."""
+
+    @override_settings(ML_MAX_WORKERS=3)
+    def test_ml_model_walk_forward_fit_respects_ml_max_workers(self):
+        _bulk_create_stocks(Exchange.DSE, 20, prefix="NJ")
+        panel = ml_model.build_training_panel(Exchange.DSE)
+        real_xgb = ml_model.XGBClassifier
+        with mock.patch("market.services.ml_model.XGBClassifier", side_effect=lambda **kw: real_xgb(**kw)) as mock_xgb:
+            result = ml_model.walk_forward_evaluate(panel)
+        self.assertTrue(result["ok"])
+        self.assertTrue(mock_xgb.called)
+        for call in mock_xgb.call_args_list:
+            self.assertEqual(call.kwargs["n_jobs"], 3)
+
+    @override_settings(ML_MAX_WORKERS=3)
+    def test_next_close_direction_models_respect_ml_max_workers(self):
+        with mock.patch("market.services.close_learn.RandomForestClassifier") as mock_rf, \
+                mock.patch("market.services.close_learn.XGBClassifier") as mock_xgb:
+            close_learn._direction_model("random_forest")
+            close_learn._direction_model("xgboost")
+        self.assertEqual(mock_rf.call_args.kwargs["n_jobs"], 3)
+        self.assertEqual(mock_xgb.call_args.kwargs["n_jobs"], 3)
+
+    @override_settings(ML_MAX_WORKERS=3)
+    def test_zero_inflated_next_close_models_respect_ml_max_workers(self):
+        with mock.patch("market.services.close_learn.RandomForestClassifier") as mock_rf_cls, \
+                mock.patch("market.services.close_learn.RandomForestRegressor") as mock_rf_reg:
+            mock_rf_cls.return_value.fit.return_value = None
+            mock_rf_reg.return_value.fit.return_value = None
+            X = pd.DataFrame({"f1": [0.1, 0.2, 0.3, 0.4]})
+            y = np.array([0.0, 0.01, -0.02, 0.0])
+            close_learn._fit_zero_inflated_next_close(X, y)
+        self.assertEqual(mock_rf_cls.call_args.kwargs["n_jobs"], 3)
+        self.assertEqual(mock_rf_reg.call_args.kwargs["n_jobs"], 3)

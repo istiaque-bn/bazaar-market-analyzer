@@ -410,6 +410,15 @@ MARKET_FETCH_CONCURRENCY = _positive_int("MARKET_FETCH_CONCURRENCY", "5")
 MARKET_FETCH_TIMEOUT = _positive_int("MARKET_FETCH_TIMEOUT", "60")  # seconds, per symbol
 MARKET_FETCH_MAX_RETRIES = _positive_int("MARKET_FETCH_MAX_RETRIES", "2")
 
+# XGBoost/RandomForest's own n_jobs threading for model training
+# (market/services/ml_model.py, market/services/close_learn.py) — was
+# hard-coded n_jobs=-1 (every available core). Capped here so one training
+# task can't saturate every core on a small VPS against Gunicorn/DB/Redis
+# running the same box (see the Aug 2026 concurrency plan's nested-
+# parallelism concern). Does not change model math/output, only how many
+# threads a fit uses.
+ML_MAX_WORKERS = _positive_int("ML_MAX_WORKERS", "2")
+
 # --- Exchange feature flags ---------------------------------------------
 # Which exchanges this deployment actively fetches, analyzes, trains
 # models for, and exposes to public discovery. Disabling an exchange is a

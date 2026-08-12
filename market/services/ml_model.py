@@ -189,7 +189,7 @@ def walk_forward_evaluate(panel: pd.DataFrame, n_folds: int = 5) -> dict:
         X_train_i = apply_imputer(imputer, X_train)
         X_test_i = apply_imputer(imputer, X_test)
 
-        model = XGBClassifier(n_estimators=120, max_depth=4, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=-1, eval_metric="logloss")
+        model = XGBClassifier(n_estimators=120, max_depth=4, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=settings.ML_MAX_WORKERS, eval_metric="logloss")
         model.fit(X_train_i, y_train)
         classes = list(model.classes_)
         proba = model.predict_proba(X_test_i)
@@ -272,7 +272,7 @@ def _final_fit_and_save(panel: pd.DataFrame, eval_result: dict, *, exchange_scop
     X, y = panel[FEATURE_COLS], panel["label"].to_numpy()
     imputer = fit_median_imputer(X)
     X_i = apply_imputer(imputer, X)
-    model = XGBClassifier(n_estimators=120, max_depth=4, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=-1, eval_metric="logloss")
+    model = XGBClassifier(n_estimators=120, max_depth=4, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=settings.ML_MAX_WORKERS, eval_metric="logloss")
     model.fit(X_i, y)
 
     skill = eval_result.get("skill_vs_naive")
