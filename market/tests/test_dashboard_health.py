@@ -6,7 +6,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from market.models import TaskRun, TaskStatus
+from market.models import Exchange, MarketSnapshot, TaskRun, TaskStatus
 from market.services.ops_alerts import STALE_DATA_DAYS
 from market.views import _dashboard_health_issue
 
@@ -84,3 +84,43 @@ class DashboardHealthBannerRenderingTests(TestCase):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
         self.assertNotIn(b"health-warning", response.content)
+
+
+class DashboardSentimentGaugeTests(TestCase):
+    def setUp(self):
+        self.url = reverse("dashboard")
+        self.user = User.objects.create_user(username="gaugeviewer", password="Correct-Horse-Battery-Staple-42")
+        self.client.login(username="gaugeviewer", password="Correct-Horse-Battery-Staple-42")
+
+    def test_gauge_renders_for_the_latest_snapshot_of_each_enabled_exchange(self):
+        MarketSnapshot.objects.create(exchange=Exchange.DSE, as_of=timezone.localdate(), advancers=150, decliners=50, unchanged=20)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"sentiment-gauge-card", response.content)
+        self.assertIn(b"Bullish", response.content)
+
+    def test_no_gauge_when_no_snapshot_exists_yet(self):
+        MarketSnapshot.objects.all().delete()
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b"sentiment-gauge-card", response.content)
+
+    def test_gauge_uses_each_exchanges_own_latest_snapshot_not_a_shared_top_four(self):
+        """Regression guard for the bug the naive `snapshots[:4]` query would
+        have: if one exchange posts several snapshots in a row, its own
+        older rows must not crowd out another enabled exchange's latest one."""
+        old = timezone.localdate() - timedelta(days=5)
+        for days_ago in range(5):
+            MarketSnapshot.objects.create(
+                exchange=Exchange.DSE,
+                as_of=old + timedelta(days=days_ago),
+                advancers=10,
+                decliners=10,
+                unchanged=0,
+            )
+        latest = MarketSnapshot.objects.create(
+            exchange=Exchange.DSE, as_of=timezone.localdate(), advancers=0, decliners=100, unchanged=0
+        )
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Extremely Bearish", response.content)

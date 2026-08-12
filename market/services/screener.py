@@ -64,6 +64,43 @@ def screen_summary() -> dict:
     }
 
 
+SENTIMENT_BUCKETS = (
+    (-60, "Extremely Bearish"),
+    (-30, "Bearish"),
+    (-10, "Slightly Bearish"),
+    (10, "Neutral"),
+    (30, "Slightly Bullish"),
+    (60, "Bullish"),
+    (101, "Extremely Bullish"),
+)
+
+
+def sentiment_label(advancers: int, decliners: int, unchanged: int = 0) -> dict:
+    """Advance/decline breadth -> a -100..100 score and a 7-bucket label
+    (extremely bearish .. extremely bullish), the same framing a market
+    breadth gauge conventionally uses. total=0 (no snapshot captured yet)
+    reports a distinct "No data" state rather than a misleading 0/neutral."""
+    total = advancers + decliners + unchanged
+    if total <= 0:
+        return {"score": 0.0, "label": "No data", "needle_deg": 0.0, "advancers": 0, "decliners": 0, "unchanged": 0, "total": 0}
+    score = round((advancers - decliners) / total * 100, 1)
+    label = next(name for ceiling, name in SENTIMENT_BUCKETS if score < ceiling)
+    return {
+        "score": score,
+        "label": label,
+        # Gauge needle rotation in degrees: 0deg = straight up (neutral),
+        # -90deg = full left (score -100), +90deg = full right (score
+        # +100). Precomputed server-side (not just in the dashboard's JS)
+        # so a no-JS/slow-JS pageview still shows the correct needle
+        # position instead of the CSS default's "fully bearish" pin.
+        "needle_deg": round(score * 0.9, 2),
+        "advancers": advancers,
+        "decliners": decliners,
+        "unchanged": unchanged,
+        "total": total,
+    }
+
+
 def top_by_sector(limit_per_sector: int = 3) -> dict[str, list]:
     as_of = _latest_as_of()
     results = (

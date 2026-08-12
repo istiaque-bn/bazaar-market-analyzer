@@ -203,6 +203,7 @@ class TechnicalSnapshot(models.Model):
     volume_sma_20 = models.FloatField(null=True, blank=True)
     support = models.FloatField(null=True, blank=True)
     resistance = models.FloatField(null=True, blank=True)
+    beta_90d = models.FloatField(null=True, blank=True, help_text="cov(stock, exchange index) / var(index) over the trailing 90 calendar days")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

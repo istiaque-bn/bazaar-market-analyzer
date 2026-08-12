@@ -1,7 +1,26 @@
 {% extends "base_bare.html" %}
 {% block title %}Sign in{% endblock %}
+{% block body_class %}auth-page{% endblock %}
 {% block content %}
 <div class="auth-shell">
+  <div class="auth-terminal" aria-hidden="true" id="authTerminal">
+    <img class="auth-terminal-base" src="/static/images/stock-bazaar-login-terminal.png" alt="">
+    <div class="auth-terminal-shade"></div>
+    <div class="auth-grid-flow"></div>
+    <div class="auth-globe-overlay"><span class="auth-globe-ring ring-a"></span><span class="auth-globe-ring ring-b"></span><span class="auth-globe-node node-a"></span><span class="auth-globe-node node-b"></span><span class="auth-globe-node node-c"></span></div>
+    <svg class="auth-chart-overlay" viewBox="0 0 360 130" preserveAspectRatio="none" focusable="false">
+      <path class="auth-chart-shadow" d="M4 101 L39 92 L75 97 L107 76 L144 84 L178 55 L213 66 L247 35 L285 48 L322 22 L356 29"/>
+      <path class="auth-chart-line" pathLength="1" d="M4 101 L39 92 L75 97 L107 76 L144 84 L178 55 L213 66 L247 35 L285 48 L322 22 L356 29"/>
+      <circle class="auth-chart-point" cx="247" cy="35" r="3"/><circle class="auth-chart-point point-delay" cx="322" cy="22" r="3"/>
+    </svg>
+    <div class="auth-market-hud">
+      <span class="auth-hud-title">Market display · illustrative</span>
+      <span><b>DSEX</b> <em data-ticker="112">5,624.18</em> <i class="up">+0.21%</i></span>
+      <span><b>DS30</b> <em data-ticker="41">2,061.40</em> <i class="up">+0.16%</i></span>
+      <span><b>DSES</b> <em data-ticker="8">1,246.77</em> <i class="down">−0.04%</i></span>
+    </div>
+    <div class="auth-particles" id="authParticles"></div>
+  </div>
   <section class="auth-card" aria-labelledby="authTitle">
     <div class="auth-brand">
       <span class="brand-mark" aria-hidden="true">বা</span>
@@ -80,6 +99,42 @@
       submit.classList.add("is-loading");
       if (submitText) submitText.textContent = "Signing in…";
     });
+  }
+
+  var terminal = document.getElementById("authTerminal");
+  var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var desktopPointer = window.matchMedia && window.matchMedia("(min-width: 900px) and (pointer: fine)").matches;
+  if (terminal && !reduceMotion) {
+    var particles = document.getElementById("authParticles");
+    if (particles) {
+      var total = desktopPointer ? 28 : 12;
+      for (var p = 0; p < total; p += 1) {
+        var particle = document.createElement("span");
+        particle.style.left = (Math.random() * 100).toFixed(2) + "%";
+        particle.style.top = (8 + Math.random() * 82).toFixed(2) + "%";
+        particle.style.animationDelay = (-Math.random() * 16).toFixed(2) + "s";
+        particle.style.animationDuration = (12 + Math.random() * 12).toFixed(2) + "s";
+        particles.appendChild(particle);
+      }
+    }
+    if (desktopPointer) {
+      document.addEventListener("pointermove", function (e) {
+        terminal.style.setProperty("--parallax-x", ((e.clientX / window.innerWidth - .5) * 8).toFixed(1) + "px");
+        terminal.style.setProperty("--parallax-y", ((e.clientY / window.innerHeight - .5) * 6).toFixed(1) + "px");
+      }, { passive: true });
+    }
+    var tickers = document.querySelectorAll("[data-ticker]");
+    window.setInterval(function () {
+      if (document.hidden) return;
+      tickers.forEach(function (ticker) {
+        var base = Number(ticker.getAttribute("data-ticker"));
+        var current = Number(ticker.textContent.replace(/,/g, ""));
+        var next = current + ((Math.random() - .48) * base / 100);
+        ticker.textContent = next.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        ticker.classList.add("is-updating");
+        window.setTimeout(function () { ticker.classList.remove("is-updating"); }, 700);
+      });
+    }, 14000);
   }
 })();
 </script>

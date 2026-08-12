@@ -311,6 +311,52 @@ def _lookup_context(ctx: pd.DataFrame, on_date, col: str, default: float = 0.0) 
     return float(val)
 
 
+MIN_BETA_SAMPLE = 20
+
+
+def compute_beta(df: pd.DataFrame, exchange: str, window: int = 90) -> tuple[float | None, list[dict]]:
+    """Beta of this stock vs. its exchange's equal-weight daily index
+    return (build_exchange_context's index_ret_1d — the same series the ML
+    features already use), over the trailing `window` calendar days:
+    cov(stock_ret, index_ret) / var(index_ret). Backward-looking only, so
+    it's safe to compute at analysis time without leaking future data.
+
+    Returns (beta, pairs) — `pairs` is the aligned (date, stock_ret,
+    index_ret) series actually used, for a scatter-plot display alongside
+    the number. (None, []) if there isn't enough overlapping history or
+    the index barely moved (variance ~0, beta undefined)."""
+    if df.empty or "date" not in df or "close" not in df:
+        return None, []
+    data = df[["date", "close"]].copy()
+    data["date"] = pd.to_datetime(data["date"]).dt.normalize()
+    data = data.sort_values("date")
+    data["stock_ret"] = data["close"].pct_change()
+    end = data["date"].max().date()
+    start = end - timedelta(days=window)
+
+    ctx = build_exchange_context(exchange, start=start, end=end)
+    if ctx.empty:
+        return None, []
+    merged = data.merge(ctx[["date", "index_ret_1d"]], on="date", how="inner")
+    merged = merged[merged["date"] >= pd.Timestamp(start)]
+    merged = merged.dropna(subset=["stock_ret", "index_ret_1d"])
+    if len(merged) < MIN_BETA_SAMPLE:
+        return None, []
+
+    stock_ret = merged["stock_ret"].to_numpy()
+    index_ret = merged["index_ret_1d"].to_numpy()
+    var_index = float(np.var(index_ret, ddof=1))
+    if var_index <= 1e-12:
+        return None, []
+    cov = float(np.cov(stock_ret, index_ret, ddof=1)[0, 1])
+    beta = round(cov / var_index, 3)
+    pairs = [
+        {"date": d.date().isoformat(), "stock_ret": round(float(sr), 5), "index_ret": round(float(ir), 5)}
+        for d, sr, ir in zip(merged["date"], stock_ret, index_ret)
+    ]
+    return beta, pairs
+
+
 def _tech_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
     data = compute_indicators(df)
     if data.empty:

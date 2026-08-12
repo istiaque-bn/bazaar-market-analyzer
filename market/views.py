@@ -29,7 +29,7 @@ from market.services.autosync import get_last_success_at
 from market.services.ops_alerts import STALE_DATA_DAYS, recent_silent_sync_error
 from market.services.indicators import prices_to_df
 from market.services.predictor import CONFIDENCE_SCALE, RESEARCH_DISCLAIMER, predict_price_at_date
-from market.services.screener import potential_shares, safe_buys, screen_summary, sell_candidates, top_by_sector
+from market.services.screener import potential_shares, safe_buys, screen_summary, sell_candidates, sentiment_label, top_by_sector
 from market.services.signal_status import market_edge_status, signal_status
 from notifications.models import Alert
 
@@ -54,6 +54,17 @@ def dashboard(request):
     safes = list(safe_buys(6))
     sells = list(sell_candidates(6))
     snapshots = MarketSnapshot.objects.filter(exchange__in=enabled).order_by("-as_of")[:4]
+    # One gauge per enabled exchange, from each exchange's own latest
+    # snapshot (not just the newest 4 rows overall, which could all be one
+    # exchange and silently drop the other's gauge on a mixed-cadence day).
+    sentiment = []
+    for ex in enabled:
+        snap = MarketSnapshot.objects.filter(exchange=ex).order_by("-as_of").first()
+        if snap:
+            s = sentiment_label(snap.advancers, snap.decliners, snap.unchanged)
+            s["exchange"] = ex
+            s["as_of"] = snap.as_of
+            sentiment.append(s)
     backtests = BacktestRun.objects.filter(Q(exchange__in=enabled) | Q(exchange="") | Q(exchange__isnull=True)).order_by("-created_at")[:4]
     sectors = top_by_sector(2)
     alerts = []
@@ -80,6 +91,7 @@ def dashboard(request):
             "safes": safes,
             "sells": sells,
             "snapshots": snapshots,
+            "sentiment": sentiment,
             "backtests": backtests,
             "sectors": sectors,
             "alerts": alerts,
@@ -380,8 +392,14 @@ def stock_detail(request, exchange: str, code: str):
         in_watchlist = bool(wl and wl.stocks.filter(id=stock.id).exists())
 
     from market.models import NextDayCloseForecast
-    from market.services.close_learn import learn_status
+    from market.services.close_learn import compute_beta, learn_status
     from market.services.price_format import round_to_tick
+
+    # Computed fresh from the same df as the price chart (not read from
+    # TechnicalSnapshot.beta_90d) so the displayed number and its scatter
+    # points are always mutually consistent, even if it's been a while
+    # since the last analysis run touched this stock.
+    beta_90d, beta_pairs = compute_beta(df, exchange=stock.exchange) if not df.empty else (None, [])
 
     # Split into two distinct rows rather than one "latest of either kind"
     # row: an unsettled forecast (target_date in the future, no actual yet)
@@ -433,6 +451,8 @@ def stock_detail(request, exchange: str, code: str):
             "next_close_settled_price": next_close_settled_price,
             "close_learn": learn_status(),
             "status": status,
+            "beta_90d": beta_90d,
+            "beta_pairs": beta_pairs,
         },
     )
 

@@ -37,6 +37,46 @@
   <div class="stat"><div class="label">Watch</div><div class="value">{{ summary.watch }}</div></div>
 </div>
 
+{% if sentiment %}
+<div class="sentiment-row" style="margin-top:1.2rem;">
+  {% for s in sentiment %}
+  <section class="panel sentiment-gauge-card" tabindex="0">
+    <h3>{{ s.exchange }} market sentiment <span class="muted" style="font-weight:normal; font-size:0.78rem;">{{ s.as_of }}</span></h3>
+    <div class="gauge-wrap">
+      <svg viewBox="0 0 240 150" class="gauge-svg" data-score="{{ s.score }}" role="img" aria-label="{{ s.exchange }} sentiment: {{ s.label }}, score {{ s.score }}">
+        <defs>
+          <linearGradient id="gaugeGrad-{{ s.exchange }}" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" style="stop-color:var(--fall)"/>
+            <stop offset="50%" style="stop-color:var(--gold-soft)"/>
+            <stop offset="100%" style="stop-color:var(--rise)"/>
+          </linearGradient>
+          <filter id="gaugeGlow-{{ s.exchange }}" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="3" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <path d="M 25 125 A 95 95 0 0 1 215 125" fill="none" stroke="var(--line)" stroke-width="16" stroke-linecap="round"/>
+        <path d="M 25 125 A 95 95 0 0 1 215 125" fill="none" stroke="url(#gaugeGrad-{{ s.exchange }})" stroke-width="16" stroke-linecap="round" opacity="0.88"/>
+        <g class="gauge-needle" data-final-deg="{{ s.needle_deg }}" style="transform:rotate({{ s.needle_deg }}deg);">
+          <line x1="120" y1="125" x2="120" y2="42" stroke="var(--ink)" stroke-width="3" stroke-linecap="round" filter="url(#gaugeGlow-{{ s.exchange }})"/>
+          <circle cx="120" cy="42" r="4.5" fill="var(--gold)"/>
+        </g>
+        <circle cx="120" cy="125" r="7" fill="var(--ink)"/>
+      </svg>
+      <div class="gauge-readout">
+        <div class="gauge-score" data-target="{{ s.score }}">{{ s.score|floatformat:1 }}</div>
+        <div class="gauge-label">{{ s.label }}</div>
+      </div>
+      <div class="gauge-tooltip">
+        <strong>{{ s.advancers }}</strong> up · <strong>{{ s.decliners }}</strong> down · <strong>{{ s.unchanged }}</strong> flat
+        <span style="opacity:0.75;">({{ s.total }} total)</span>
+      </div>
+    </div>
+  </section>
+  {% endfor %}
+</div>
+{% endif %}
+
 <div class="disclaimer">
   <strong>Experimental research tool, not investment advice.</strong> Every score, forecast, and
   "research candidate" flag below is a probabilistic estimate from historical analogues — not a
@@ -180,4 +220,40 @@
 <div class="disclaimer">
   Maturity / peak day estimates come from historical analogues in the last ~1 year. Markets change — treat every signal as a probability, not a promise.
 </div>
+
+{% if sentiment %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.gauge-svg').forEach(svg => {
+    const needle = svg.querySelector('.gauge-needle');
+    const card = svg.closest('.sentiment-gauge-card');
+    const readout = card.querySelector('.gauge-score');
+    const target = parseFloat(readout.dataset.target || '0');
+    const finalDeg = parseFloat(needle.dataset.finalDeg || '0');
+    // The needle already sits at its correct final position server-side
+    // (so a no-JS pageview is still right). For the animated sweep-in,
+    // jump it to -90deg with no transition, force a reflow, then turn the
+    // transition on and set it back to the real value.
+    needle.style.transition = 'none';
+    needle.style.transform = 'rotate(-90deg)';
+    // eslint-disable-next-line no-unused-expressions
+    needle.getBoundingClientRect(); // force reflow so the jump isn't animated
+    needle.classList.add('gauge-needle-animating');
+    needle.style.transition = '';
+    needle.style.transform = `rotate(${finalDeg}deg)`;
+    readout.textContent = '0.0';
+    const start = performance.now();
+    const duration = 900;
+    function tick(now) {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      readout.textContent = (target * eased).toFixed(1);
+      if (t < 1) requestAnimationFrame(tick);
+      else readout.textContent = target.toFixed(1);
+    }
+    requestAnimationFrame(tick);
+  });
+});
+</script>
+{% endif %}
 {% endblock %}

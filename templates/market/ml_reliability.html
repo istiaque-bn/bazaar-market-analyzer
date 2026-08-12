@@ -123,26 +123,77 @@
   {% endwith %}
 
   {% if g.chart.points|length > 1 %}
-  <div style="margin-top:1rem;">
+  <div style="margin-top:1rem;" class="ml-chart-wrap">
     <h4>{{ g.chart.label }} trend</h4>
     <p class="muted">Each point is a completed reliability assessment. 0.50 is roughly chance-level for a balanced two-way direction test.</p>
-    <svg id="mlChart{{ forloop.counter }}" viewBox="0 0 760 240" role="img" aria-label="{{ g.chart.label }} trend" style="width:100%;height:auto;min-height:190px"></svg>
+    <div style="position:relative;">
+      <svg id="mlChart{{ forloop.counter }}" viewBox="0 0 760 240" role="img" aria-label="{{ g.chart.label }} trend" style="width:100%;height:auto;min-height:190px"></svg>
+      <div class="chart-tooltip" id="mlChartTooltip{{ forloop.counter }}" hidden></div>
+    </div>
     {{ g.chart.points|json_script:g.chart.id }}
     <script>
     (() => {
       const data = JSON.parse(document.getElementById("{{ g.chart.id }}").textContent);
       const svg = document.getElementById("mlChart{{ forloop.counter }}");
+      const tooltip = document.getElementById("mlChartTooltip{{ forloop.counter }}");
       if (!svg || data.length < 2) return;
+      const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       const ns = "http://www.w3.org/2000/svg", w=760, h=240, p={l:52,r:18,t:18,b:38};
       const vals=data.map(d=>d.value), low=Math.max(0,Math.min(.5,...vals)-.04), high=Math.min(1,Math.max(.5,...vals)+.04);
       const x=i=>p.l+i*(w-p.l-p.r)/(data.length-1), y=v=>p.t+(high-v)*(h-p.t-p.b)/(high-low || .1);
-      const add=(tag,a,t)=>{const e=document.createElementNS(ns,tag);Object.entries(a).forEach(([k,v])=>e.setAttribute(k,v));if(t)e.textContent=t;svg.appendChild(e)};
+      const add=(tag,a,t,parent)=>{const e=document.createElementNS(ns,tag);Object.entries(a).forEach(([k,v])=>e.setAttribute(k,v));if(t)e.textContent=t;(parent||svg).appendChild(e);return e};
+
+      const defs = add("defs", {});
+      const gradId = "mlChartGrad{{ forloop.counter }}", glowId = "mlChartGlow{{ forloop.counter }}";
+      const grad = add("linearGradient", {id: gradId, x1:"0", y1:"0", x2:"0", y2:"1"}, null, defs);
+      add("stop", {offset:"0%", "stop-color":"#1f5b45", "stop-opacity":"0.32"}, null, grad);
+      add("stop", {offset:"100%", "stop-color":"#1f5b45", "stop-opacity":"0.02"}, null, grad);
+      const filter = add("filter", {id: glowId, x:"-40%", y:"-40%", width:"180%", height:"180%"}, null, defs);
+      add("feGaussianBlur", {stdDeviation:"2.6", result:"blur"}, null, filter);
+      const merge = add("feMerge", {}, null, filter);
+      add("feMergeNode", {in:"blur"}, null, merge);
+      add("feMergeNode", {in:"SourceGraphic"}, null, merge);
+
       add("line",{x1:p.l,y1:y(.5),x2:w-p.r,y2:y(.5),stroke:"currentColor","stroke-opacity":".3","stroke-dasharray":"4 4"});
-      add("path",{d:data.map((d,i)=>`${i?"L":"M"}${x(i)},${y(d.value)}`).join(" "),fill:"none",stroke:"#16834c","stroke-width":"3"});
-      data.forEach((d,i)=>add("circle",{cx:x(i),cy:y(d.value),r:4,fill:"#16834c"}));
+      const linePath = data.map((d,i)=>`${i?"L":"M"}${x(i)},${y(d.value)}`).join(" ");
+      const areaPath = `${linePath} L${x(data.length-1)},${y(low)} L${x(0)},${y(low)} Z`;
+      add("path", {d: areaPath, fill: `url(#${gradId})`, stroke: "none"});
+      const line = add("path",{d:linePath,fill:"none",stroke:"#16834c","stroke-width":"3","stroke-linecap":"round","stroke-linejoin":"round",filter:`url(#${glowId})`});
+      const dots = data.map((d,i)=>add("circle",{cx:x(i),cy:y(d.value),r:4,fill:"#16834c",style:"cursor:pointer;"}));
       add("text",{x:p.l,y:h-10,fill:"currentColor","font-size":"12"},data[0].date);
       add("text",{x:w-p.r,y:h-10,fill:"currentColor","font-size":"12","text-anchor":"end"},data[data.length-1].date);
       add("text",{x:p.l-7,y:y(.5)+4,fill:"currentColor","font-size":"12","text-anchor":"end"},"0.50");
+
+      if (!reduceMotion) {
+        const len = line.getTotalLength();
+        line.style.strokeDasharray = `${len} ${len}`;
+        line.style.strokeDashoffset = `${len}`;
+        line.style.transition = "stroke-dashoffset 1s cubic-bezier(.2,.9,.25,1)";
+        dots.forEach((dot, i) => {
+          dot.style.opacity = "0";
+          dot.style.transition = `opacity 0.3s ease ${0.15 + i * (0.8 / dots.length)}s`;
+        });
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          line.style.strokeDashoffset = "0";
+          dots.forEach(dot => { dot.style.opacity = "1"; });
+        }));
+      }
+
+      if (tooltip) {
+        dots.forEach((dot, i) => {
+          const show = () => {
+            tooltip.hidden = false;
+            const cx = parseFloat(dot.getAttribute("cx"));
+            tooltip.style.left = `${(cx / w) * 100}%`;
+            tooltip.style.top = "0.3rem";
+            tooltip.innerHTML = `<strong>${data[i].value}</strong><br>${data[i].date}`;
+            dot.setAttribute("r", "6");
+          };
+          const hide = () => { tooltip.hidden = true; dot.setAttribute("r", "4"); };
+          dot.addEventListener("mouseenter", show);
+          dot.addEventListener("mouseleave", hide);
+        });
+      }
     })();
     </script>
   </div>

@@ -23,6 +23,7 @@
 </div>
 
 <div class="grid-2" style="margin-top:1.2rem;">
+  <section class="stack stock-detail-left-stack">
   <section class="panel">
     <h3 id="overviewTitle">Price overview <span class="muted" id="overviewRangeLabel">({{ overview_range_label }})</span></h3>
     <div class="range-pills overview-range-pills" role="tablist" aria-label="Price overview range" id="overviewRangePills">
@@ -34,7 +35,7 @@
                 data-label="{{ meta.label }}">{{ meta.label }}</button>
       {% endfor %}
     </div>
-    <div class="chart-box"><canvas id="priceChart"></canvas></div>
+    <div class="chart-box"><canvas id="priceChart"></canvas><div class="chart-tooltip" id="priceChartTooltip" hidden></div></div>
 
     <div class="date-predict" id="datePredict"
          data-url="{% url 'predict_price' stock.exchange stock.trading_code %}">
@@ -86,6 +87,41 @@
         </ul>
       </div>
     </div>
+  </section>
+  <section class="panel technicals-panel">
+    <h3>Technicals</h3>
+    {% if tech %}
+      <p>RSI14: {{ tech.rsi_14|floatformat:1 }} · MACD hist: {{ tech.macd_hist|floatformat:3 }}</p>
+      <p>SMA20: {{ tech.sma_20|floatformat:2 }} · SMA50: {{ tech.sma_50|floatformat:2 }}</p>
+      <p>Support: {{ tech.support|floatformat:2 }} · Resistance: {{ tech.resistance|floatformat:2 }}</p>
+    {% else %}
+      <p class="muted">Empty — no technical snapshot on record.</p>
+    {% endif %}
+    {% if beta_90d != None %}
+    <div class="beta-block">
+      <h4>Beta vs. {{ stock.exchange }} index <span class="muted" style="font-weight:normal;">(90d)</span></h4>
+      <div class="beta-meter" data-beta="{{ beta_90d }}">
+        <div class="beta-meter-track"></div>
+        <div class="beta-meter-marker" id="betaMarker"></div>
+      </div>
+      <div class="beta-meter-scale">
+        <span>Defensive</span><span>Market (1.0)</span><span>Aggressive</span>
+      </div>
+      <p class="beta-value"><strong>{{ beta_90d|floatformat:2 }}</strong>
+        {% if beta_90d < 0.8 %}<span class="muted">moves less than the market</span>
+        {% elif beta_90d > 1.2 %}<span class="muted">moves more than the market</span>
+        {% else %}<span class="muted">tracks the market closely</span>{% endif %}
+      </p>
+      {% if beta_pairs %}
+      <div class="beta-scatter-wrap">
+        <svg id="betaScatter" viewBox="0 0 280 112" role="img" aria-label="Daily return scatter vs. index, with fitted beta line"></svg>
+        <div class="chart-tooltip" id="betaScatterTooltip" hidden></div>
+      </div>
+      {{ beta_pairs|json_script:"beta-pairs-data" }}
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
   </section>
   <section class="stack">
     <div class="panel">
@@ -169,16 +205,6 @@
           settled {{ status.next_close_model.n }}
           {% if close_learn %} · stock biases {{ close_learn.stock_bias_active }}{% endif %}
         </p>
-      {% endif %}
-    </div>
-    <div class="panel">
-      <h3>Technicals</h3>
-      {% if tech %}
-        <p>RSI14: {{ tech.rsi_14|floatformat:1 }} · MACD hist: {{ tech.macd_hist|floatformat:3 }}</p>
-        <p>SMA20: {{ tech.sma_20|floatformat:2 }} · SMA50: {{ tech.sma_50|floatformat:2 }}</p>
-        <p>Support: {{ tech.support|floatformat:2 }} · Resistance: {{ tech.resistance|floatformat:2 }}</p>
-      {% else %}
-        <p class="muted">Empty — no technical snapshot on record.</p>
       {% endif %}
     </div>
     <div class="panel">
@@ -334,6 +360,63 @@ function sliceOverviewData(days) {
   return sliced.length ? sliced : chartData.slice(-Math.max(1, days));
 }
 
+let overviewLayout = null;
+const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function renderOverviewFrame(ctx, layout, progress) {
+  const { closes, x, y, w, h, pad } = layout;
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = 'rgba(20,35,28,0.08)';
+  ctx.beginPath(); ctx.moveTo(pad, pad); ctx.lineTo(pad, h-pad); ctx.lineTo(w-pad, h-pad); ctx.stroke();
+  const visible = Math.max(1, Math.round(closes.length * progress));
+  const grad = ctx.createLinearGradient(0, pad, 0, h-pad);
+  grad.addColorStop(0, 'rgba(31,91,69,0.35)');
+  grad.addColorStop(1, 'rgba(31,91,69,0.02)');
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(31,91,69,0.5)';
+  ctx.shadowBlur = 7;
+  ctx.beginPath();
+  for (let i = 0; i < visible; i++) { const px = x(i), py = y(closes[i]); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
+  ctx.strokeStyle = '#1f5b45';
+  ctx.lineWidth = 2.2;
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.beginPath();
+  for (let i = 0; i < visible; i++) { const px = x(i), py = y(closes[i]); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
+  ctx.lineTo(x(visible - 1), h - pad);
+  ctx.lineTo(x(0), h - pad);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  const lastI = visible - 1;
+  ctx.save();
+  ctx.fillStyle = '#c48a2a';
+  ctx.shadowColor = 'rgba(196,138,42,0.75)';
+  ctx.shadowBlur = 9;
+  ctx.beginPath(); ctx.arc(x(lastI), y(closes[lastI]), 4, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function drawCrosshair(ctx, layout, i) {
+  const { closes, data, x, y, h, pad, w } = layout;
+  const px = x(i), py = y(closes[i]);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(20,35,28,0.25)';
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(px, pad); ctx.lineTo(px, h - pad); ctx.stroke();
+  ctx.restore();
+  ctx.save();
+  ctx.fillStyle = '#1f5b45';
+  ctx.shadowColor = 'rgba(31,91,69,0.6)';
+  ctx.shadowBlur = 6;
+  ctx.beginPath(); ctx.arc(px, py, 4.5, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  return { px, py, point: data[i] };
+}
+
 function drawOverviewChart(data) {
   const canvas = document.getElementById('priceChart');
   if (!canvas) return;
@@ -344,34 +427,115 @@ function drawOverviewChart(data) {
   canvas.width = rect.width * dpr;
   canvas.height = rect.height * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, rect.width, rect.height);
   if (!data.length) {
+    ctx.clearRect(0, 0, rect.width, rect.height);
     ctx.fillStyle = '#4d6358';
     ctx.font = '14px Outfit, sans-serif';
     ctx.fillText('No price data for this range.', 24, rect.height / 2);
+    overviewLayout = null;
     return;
   }
   const w = rect.width, h = rect.height, pad = 24;
   const closes = data.map(d => d.close);
   const min = Math.min(...closes), max = Math.max(...closes);
-  const x = i => pad + (i / (closes.length - 1 || 1)) * (w - pad * 2);
-  const y = v => h - pad - ((v - min) / ((max - min) || 1)) * (h - pad * 2);
-  ctx.strokeStyle = 'rgba(20,35,28,0.08)';
-  ctx.beginPath(); ctx.moveTo(pad, pad); ctx.lineTo(pad, h-pad); ctx.lineTo(w-pad, h-pad); ctx.stroke();
-  const grad = ctx.createLinearGradient(0, pad, 0, h-pad);
-  grad.addColorStop(0, 'rgba(31,91,69,0.35)');
-  grad.addColorStop(1, 'rgba(31,91,69,0.02)');
-  ctx.beginPath();
-  closes.forEach((v,i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
-  ctx.strokeStyle = '#1f5b45';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.lineTo(x(closes.length-1), h-pad);
-  ctx.lineTo(x(0), h-pad);
-  ctx.closePath();
-  ctx.fillStyle = grad;
-  ctx.fill();
+  overviewLayout = {
+    data, closes, w, h, pad, min, max,
+    x: i => pad + (i / (closes.length - 1 || 1)) * (w - pad * 2),
+    y: v => h - pad - ((v - min) / ((max - min) || 1)) * (h - pad * 2),
+  };
+  if (prefersReducedMotion) { renderOverviewFrame(ctx, overviewLayout, 1); return; }
+  const start = performance.now();
+  const duration = 650;
+  (function tick(now) {
+    const t = Math.min(1, (now - start) / duration);
+    renderOverviewFrame(ctx, overviewLayout, 1 - Math.pow(1 - t, 3));
+    if (t < 1) requestAnimationFrame(tick);
+  })(start);
 }
+
+(function overviewChartHover() {
+  const canvas = document.getElementById('priceChart');
+  const tooltip = document.getElementById('priceChartTooltip');
+  if (!canvas || !tooltip) return;
+  const ctx = canvas.getContext('2d');
+
+  function hide() {
+    tooltip.hidden = true;
+    if (overviewLayout) renderOverviewFrame(ctx, overviewLayout, 1);
+  }
+
+  canvas.addEventListener('mousemove', (e) => {
+    if (!overviewLayout) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const { data, x, pad, w } = overviewLayout;
+    const frac = Math.min(1, Math.max(0, (mx - pad) / (w - pad * 2)));
+    const i = Math.round(frac * (data.length - 1));
+    renderOverviewFrame(ctx, overviewLayout, 1);
+    const { px, point } = drawCrosshair(ctx, overviewLayout, i);
+    tooltip.hidden = false;
+    tooltip.style.left = `${Math.min(Math.max(px, 48), rect.width - 48)}px`;
+    tooltip.innerHTML = `<strong>${point.close.toFixed(2)}</strong><br>${point.date}`;
+  });
+  canvas.addEventListener('mouseleave', hide);
+})();
+
+(function betaVisualization() {
+  const meter = document.querySelector('.beta-meter');
+  const marker = document.getElementById('betaMarker');
+  const beta = meter ? parseFloat(meter.dataset.beta || '1') : null;
+  if (meter && marker && beta !== null && !Number.isNaN(beta)) {
+    const pct = Math.min(100, Math.max(0, (beta / 2) * 100));
+    requestAnimationFrame(() => { marker.style.left = `${pct}%`; });
+  }
+
+  const svg = document.getElementById('betaScatter');
+  const tooltip = document.getElementById('betaScatterTooltip');
+  const dataEl = document.getElementById('beta-pairs-data');
+  if (!svg || !dataEl || beta === null) return;
+  const pairs = JSON.parse(dataEl.textContent);
+  if (!pairs.length) return;
+
+  const ns = 'http://www.w3.org/2000/svg', w = 280, h = 112, p = { l: 34, r: 14, t: 10, b: 22 };
+  const xs = pairs.map(d => d.index_ret), ys = pairs.map(d => d.stock_ret);
+  const maxAbsX = Math.max(0.001, ...xs.map(Math.abs));
+  const maxAbsY = Math.max(0.001, ...ys.map(Math.abs));
+  const scaleX = v => p.l + ((v + maxAbsX) / (2 * maxAbsX)) * (w - p.l - p.r);
+  const scaleY = v => h - p.b - ((Math.max(-maxAbsY, Math.min(maxAbsY, v)) + maxAbsY) / (2 * maxAbsY)) * (h - p.t - p.b);
+  const add = (tag, attrs, parent) => {
+    const e = document.createElementNS(ns, tag);
+    Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
+    (parent || svg).appendChild(e);
+    return e;
+  };
+
+  add('line', { x1: scaleX(0), y1: p.t, x2: scaleX(0), y2: h - p.b, stroke: 'currentColor', 'stroke-opacity': 0.15 });
+  add('line', { x1: p.l, y1: scaleY(0), x2: w - p.r, y2: scaleY(0), stroke: 'currentColor', 'stroke-opacity': 0.15 });
+
+  const meanX = xs.reduce((a, b) => a + b, 0) / xs.length;
+  const meanY = ys.reduce((a, b) => a + b, 0) / ys.length;
+  const lineX1 = -maxAbsX, lineX2 = maxAbsX;
+  add('line', {
+    x1: scaleX(lineX1), y1: scaleY(meanY + beta * (lineX1 - meanX)),
+    x2: scaleX(lineX2), y2: scaleY(meanY + beta * (lineX2 - meanX)),
+    stroke: '#c48a2a', 'stroke-width': 2, 'stroke-linecap': 'round', opacity: 0.85,
+  });
+
+  pairs.forEach(d => {
+    const dot = add('circle', {
+      cx: scaleX(d.index_ret), cy: scaleY(d.stock_ret), r: 3.2,
+      fill: d.stock_ret >= 0 ? '#1f5b45' : '#a33b2d', 'fill-opacity': 0.65, style: 'cursor:pointer;',
+    });
+    dot.addEventListener('mouseenter', () => {
+      if (!tooltip) return;
+      tooltip.hidden = false;
+      tooltip.style.left = `${(parseFloat(dot.getAttribute('cx')) / w) * 100}%`;
+      tooltip.style.top = '0.2rem';
+      tooltip.innerHTML = `<strong>${d.date}</strong><br>stock ${(d.stock_ret * 100).toFixed(2)}% · index ${(d.index_ret * 100).toFixed(2)}%`;
+    });
+    dot.addEventListener('mouseleave', () => { if (tooltip) tooltip.hidden = true; });
+  });
+})();
 
 (function overviewRangeControls(){
   const pills = document.getElementById('overviewRangePills');

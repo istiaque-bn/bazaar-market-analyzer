@@ -158,6 +158,62 @@ class ChartJsonSafetyTests(_LoggedInTestCase):
         self.assertIn("JSON.parse(document.getElementById('chart-data')", content)
 
 
+class BetaBlockTests(_LoggedInTestCase):
+    def setUp(self):
+        super().setUp()
+        from market.services.close_learn import _clear_context_cache
+
+        _clear_context_cache()
+
+    def test_beta_block_hidden_when_too_little_history(self):
+        stock = _mk_stock("BETASHORT")
+        base = timezone.localdate() - timedelta(days=5)
+        PriceHistory.objects.bulk_create(
+            [
+                PriceHistory(stock=stock, date=base + timedelta(days=i), open=10, high=11, low=9, close=10 + i * 0.1, volume=100)
+                for i in range(5)
+            ]
+        )
+        url = reverse("stock_detail", args=[stock.exchange, stock.trading_code])
+        resp = self.client.get(url)
+        # Not a bare "beta-meter" substring check: the page's JS always
+        # references .beta-meter via querySelector (a no-op when absent),
+        # so that substring is present even when the div itself isn't.
+        self.assertNotContains(resp, 'class="beta-meter"')
+
+    def test_beta_block_shown_with_enough_overlapping_history(self):
+        import numpy as np
+        import pandas as pd
+
+        dates = pd.bdate_range(end=timezone.localdate(), periods=70, freq="C", weekmask="Sun Mon Tue Wed Thu")
+        rng = np.random.default_rng(7)
+        index_returns = rng.normal(0, 0.01, len(dates))
+
+        # Two peers define the exchange index the target stock is measured
+        # against — same construction as market.tests.test_beta.
+        for i in range(2):
+            peer = _mk_stock(f"BETAPEER{i}")
+            closes = 100 * np.cumprod(1 + index_returns)
+            PriceHistory.objects.bulk_create(
+                PriceHistory(stock=peer, date=d.date(), open=c, high=c * 1.01, low=c * 0.99, close=c, volume=1000, value=c * 1000)
+                for d, c in zip(dates, closes)
+            )
+
+        target = _mk_stock("BETATARGET")
+        target_closes = 100 * np.cumprod(1 + 1.5 * index_returns)
+        PriceHistory.objects.bulk_create(
+            PriceHistory(stock=target, date=d.date(), open=c, high=c * 1.01, low=c * 0.99, close=c, volume=1000, value=c * 1000)
+            for d, c in zip(dates, target_closes)
+        )
+
+        url = reverse("stock_detail", args=[target.exchange, target.trading_code])
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "beta-meter")
+        self.assertContains(resp, "betaScatter")
+        self.assertContains(resp, "beta-pairs-data")
+
+
 class DashboardEdgeBannerTests(_LoggedInTestCase):
     def test_dashboard_shows_no_edge_when_nothing_deployed(self):
         resp = self.client.get(reverse("dashboard"))

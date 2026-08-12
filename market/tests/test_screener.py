@@ -1,10 +1,10 @@
 from datetime import timedelta
 
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
 from market.models import AnalysisResult, Exchange, SignalAction, Stock
-from market.services.screener import potential_shares, safe_buys, screen_summary
+from market.services.screener import potential_shares, safe_buys, screen_summary, sentiment_label
 
 
 class LatestAsOfFallbackTests(TestCase):
@@ -42,3 +42,49 @@ class LatestAsOfFallbackTests(TestCase):
     def test_empty_when_no_analysis_exists(self):
         AnalysisResult.objects.all().delete()
         self.assertEqual(list(potential_shares()), [])
+
+
+class SentimentLabelTests(SimpleTestCase):
+    def test_no_snapshot_yet_reports_no_data_not_neutral(self):
+        result = sentiment_label(0, 0, 0)
+        self.assertEqual(result["label"], "No data")
+        self.assertEqual(result["score"], 0.0)
+        self.assertEqual(result["total"], 0)
+
+    def test_all_advancing_is_extremely_bullish(self):
+        result = sentiment_label(advancers=200, decliners=0, unchanged=0)
+        self.assertEqual(result["score"], 100.0)
+        self.assertEqual(result["label"], "Extremely Bullish")
+
+    def test_all_declining_is_extremely_bearish(self):
+        result = sentiment_label(advancers=0, decliners=200, unchanged=0)
+        self.assertEqual(result["score"], -100.0)
+        self.assertEqual(result["label"], "Extremely Bearish")
+
+    def test_even_split_is_neutral(self):
+        result = sentiment_label(advancers=100, decliners=100, unchanged=50)
+        self.assertEqual(result["score"], 0.0)
+        self.assertEqual(result["label"], "Neutral")
+
+    def test_bucket_boundaries_are_inclusive_on_the_lower_edge(self):
+        # score = -60 exactly must land in "Bearish" (its bucket's lower
+        # edge), not "Extremely Bearish" (which needs strictly < -60).
+        result = sentiment_label(advancers=20, decliners=80, unchanged=0)
+        self.assertEqual(result["score"], -60.0)
+        self.assertEqual(result["label"], "Bearish")
+
+    def test_totals_and_counts_are_echoed_back(self):
+        result = sentiment_label(advancers=12, decliners=5, unchanged=3)
+        self.assertEqual(result["advancers"], 12)
+        self.assertEqual(result["decliners"], 5)
+        self.assertEqual(result["unchanged"], 3)
+        self.assertEqual(result["total"], 20)
+
+    def test_needle_degrees_span_plus_minus_90_and_track_score_linearly(self):
+        # The dashboard gauge renders this rotation server-side (not just
+        # in JS) so a no-JS pageview still shows the correct needle
+        # position instead of the CSS default's "fully bearish" pin.
+        self.assertEqual(sentiment_label(100, 0, 0)["needle_deg"], 90.0)
+        self.assertEqual(sentiment_label(0, 100, 0)["needle_deg"], -90.0)
+        self.assertEqual(sentiment_label(50, 50, 0)["needle_deg"], 0.0)
+        self.assertEqual(sentiment_label(0, 0, 0)["needle_deg"], 0.0)

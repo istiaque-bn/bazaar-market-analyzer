@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from market.models import AnalysisResult, PatternHit, TechnicalSnapshot
 from market.services.backtest import run_backtest
+from market.services.close_learn import compute_beta
 from market.services.cse_fetcher import sync_cse_history, sync_cse_live
 from market.services.dse_fetcher import seed_demo_universe, sync_dse_history, sync_dse_live
 from market.services.indicators import latest_indicator_row, prices_to_df
@@ -82,6 +83,7 @@ def analyze_stock(stock: Stock, use_ml: bool = True, include_demo: bool = False)
     # Technical snapshot
     ind = latest_indicator_row(df)
     if ind:
+        beta_90d, _ = compute_beta(df, exchange=stock.exchange)
         TechnicalSnapshot.objects.update_or_create(
             stock=stock,
             as_of=as_of,
@@ -102,6 +104,7 @@ def analyze_stock(stock: Stock, use_ml: bool = True, include_demo: bool = False)
                 "volume_sma_20": ind.get("volume_sma_20"),
                 "support": ind.get("support"),
                 "resistance": ind.get("resistance"),
+                "beta_90d": beta_90d,
             },
         )
 

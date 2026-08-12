@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/static/css/bazaar.css">
   {% block extra_head %}{% endblock %}
 </head>
-<body class="bare-body">
+<body class="bare-body {% block body_class %}{% endblock %}">
   <div class="bg-atmosphere" aria-hidden="true"></div>
   {% if messages %}
   <div class="flash-wrap">
