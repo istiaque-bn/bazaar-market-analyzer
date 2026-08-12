@@ -188,6 +188,8 @@ def build_exchange_context(exchange: str, start: date | None = None, end: date |
                             for multi-horizon stock-vs-market relative strength (rel_ret_5d/20d)
       breadth             — share of stocks with positive return that day
     """
+    from market.services.data_quality import TRAINING_EXCLUDE_FLAGS
+
     exchange = (exchange or "DSE").upper()
     end = end or timezone.localdate()
     start = start or (end - timedelta(days=400))
@@ -205,7 +207,7 @@ def build_exchange_context(exchange: str, start: date | None = None, end: date |
             date__lte=end,
         )
         .order_by("date")
-        .values("date", "stock_id", "close", "stock__sector")
+        .values("date", "stock_id", "close", "stock__sector", "quality_flags")
     )
     if not rows:
         empty = pd.DataFrame(columns=empty_cols)
@@ -213,9 +215,22 @@ def build_exchange_context(exchange: str, start: date | None = None, end: date |
         return empty
 
     df = pd.DataFrame(rows)
+    # A single bad tick (e.g. a legacy-import row with close=0) makes
+    # pct_change() divide by zero -> literal inf, which then poisons the
+    # whole exchange-wide daily mean and every rolling window it touches.
+    # Drop flagged bars before computing returns, same gate the training
+    # panels themselves use (data_quality.TRAINING_EXCLUDE_FLAGS) — this
+    # context is shared market-wide, not per-stock, so it must be clean
+    # even for stocks/rows that never enter a training panel directly.
+    bad = df["quality_flags"].apply(lambda flags: bool(set(flags or []) & TRAINING_EXCLUDE_FLAGS))
+    df = df[~bad].drop(columns=["quality_flags"])
+    if df.empty:
+        empty = pd.DataFrame(columns=empty_cols)
+        _CONTEXT_CACHE[cache_key] = empty
+        return empty
     df["date"] = pd.to_datetime(df["date"]).dt.normalize()
     df = df.sort_values(["stock_id", "date"])
-    df["ret"] = df.groupby("stock_id")["close"].pct_change()
+    df["ret"] = df.groupby("stock_id")["close"].pct_change().replace([np.inf, -np.inf], np.nan)
 
     daily = (
         df.groupby("date")
@@ -240,6 +255,8 @@ def build_exchange_context(exchange: str, start: date | None = None, end: date |
 
 def build_sector_context(exchange: str, sector: str, start: date | None = None, end: date | None = None) -> pd.DataFrame:
     """Equal-weight mean return of peers in the same sector."""
+    from market.services.data_quality import TRAINING_EXCLUDE_FLAGS
+
     exchange = (exchange or "DSE").upper()
     sector = (sector or "").strip() or "Other"
     end = end or timezone.localdate()
@@ -258,7 +275,7 @@ def build_sector_context(exchange: str, sector: str, start: date | None = None, 
             date__lte=end,
         )
         .order_by("date")
-        .values("date", "stock_id", "close")
+        .values("date", "stock_id", "close", "quality_flags")
     )
     if not rows:
         empty = pd.DataFrame(columns=["date", "sector_ret_1d"])
@@ -266,9 +283,15 @@ def build_sector_context(exchange: str, sector: str, start: date | None = None, 
         return empty
 
     df = pd.DataFrame(rows)
+    bad = df["quality_flags"].apply(lambda flags: bool(set(flags or []) & TRAINING_EXCLUDE_FLAGS))
+    df = df[~bad].drop(columns=["quality_flags"])
+    if df.empty:
+        empty = pd.DataFrame(columns=["date", "sector_ret_1d"])
+        _CONTEXT_CACHE[cache_key] = empty
+        return empty
     df["date"] = pd.to_datetime(df["date"]).dt.normalize()
     df = df.sort_values(["stock_id", "date"])
-    df["ret"] = df.groupby("stock_id")["close"].pct_change()
+    df["ret"] = df.groupby("stock_id")["close"].pct_change().replace([np.inf, -np.inf], np.nan)
     daily = df.groupby("date")["ret"].mean().rename("sector_ret_1d").reset_index()
     daily["sector_ret_1d"] = daily["sector_ret_1d"].fillna(0.0)
     _CONTEXT_CACHE[cache_key] = daily

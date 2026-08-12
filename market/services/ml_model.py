@@ -227,8 +227,8 @@ def walk_forward_evaluate(panel: pd.DataFrame, n_folds: int = 5, *, model_kind: 
         if len(train) < MIN_FOLD_TRAIN_ROWS or len(test) < MIN_FOLD_TEST_ROWS or train["label"].nunique() < 2:
             continue
 
-        X_train, y_train = train[FEATURE_COLS], train["label"].to_numpy()
-        X_test, y_test = test[FEATURE_COLS], test["label"].to_numpy()
+        X_train, y_train = train[FEATURE_COLS].clip(-50, 50), train["label"].to_numpy()
+        X_test, y_test = test[FEATURE_COLS].clip(-50, 50), test["label"].to_numpy()
 
         imputer = fit_median_imputer(X_train)  # preprocessing fit on the train fold only
         X_train_i = apply_imputer(imputer, X_train)
@@ -357,8 +357,8 @@ def _final_holdout_check(panel: pd.DataFrame, eval_result: dict) -> dict:
             research = research[research["date"] >= cutoff - pd.Timedelta(days=rolling_days)]
     if len(research) < MIN_FOLD_TRAIN_ROWS or len(holdout) < MIN_FOLD_TEST_ROWS or research["label"].nunique() < 2:
         return {"ok": False, "error": "not enough rows on either side of the final holdout split to check"}
-    X_train, y_train = research[FEATURE_COLS], research["label"].to_numpy()
-    X_test, y_test = holdout[FEATURE_COLS], holdout["label"].to_numpy()
+    X_train, y_train = research[FEATURE_COLS].clip(-50, 50), research["label"].to_numpy()
+    X_test, y_test = holdout[FEATURE_COLS].clip(-50, 50), holdout["label"].to_numpy()
     imputer = fit_median_imputer(X_train)
     X_train_i, X_test_i = apply_imputer(imputer, X_train), apply_imputer(imputer, X_test)
     model = _binary_model(eval_result.get("model_kind", "xgboost"))
@@ -387,7 +387,7 @@ def _final_fit_and_save(panel: pd.DataFrame, eval_result: dict, *, exchange_scop
     if rolling_days:
         cutoff = panel["date"].max()
         panel = panel[panel["date"] >= cutoff - pd.Timedelta(days=rolling_days)].copy()
-    X, y = panel[FEATURE_COLS], panel["label"].to_numpy()
+    X, y = panel[FEATURE_COLS].clip(-50, 50), panel["label"].to_numpy()
     imputer = fit_median_imputer(X)
     X_i = apply_imputer(imputer, X)
     model = _binary_model(eval_result.get("model_kind", "xgboost"))
