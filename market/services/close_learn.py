@@ -451,16 +451,25 @@ def load_next_close_model(exchange: str | None = None) -> dict | None:
     return None
 
 
-def _ml_one_day_return(feats: dict, exchange: str | None = None) -> float | None:
-    """Zero-inflated two-stage prediction: P(next-day return != 0) times a
-    magnitude regressed only on historical mover days. A plain continuous
-    regressor loses to the "predict no change" baseline on thin names that
-    often go a whole session with an unchanged close — see
-    _walk_forward_evaluate_next_close's docstring. Older single-model
-    bundles (key "model") are still honored for backward compatibility."""
+def _ml_one_day_return(feats: dict, exchange: str | None = None) -> tuple[float | None, float]:
+    """Returns (predicted_return, move_confidence).
+
+    move_confidence in [0, 1] is how much of that return forecast_next_close
+    should actually trust as a real move, vs. dampen toward zero — derived
+    from the three-class model's own P(not-flat). A plain probability-
+    weighted blend across all three classes' representative returns rarely
+    lands on exactly 0 even when "flat" is the likely outcome, which is
+    what caused the deployed model to lose to the naive zero-return
+    baseline on live data (skill_vs_naive -25% across 4,986 settled
+    forecasts, 2026-08-12 investigation) despite a 60%+ live direction hit
+    rate — it was confidently right about direction while overstating
+    magnitude on the many near-flat DSE/CSE sessions. Defaults to 1.0 (no
+    dampening) for bundle formats that don't expose a flat-class
+    probability. Older single-model bundles (key "model") are still
+    honored for backward compatibility."""
     bundle = load_next_close_model(exchange=exchange)
     if bundle is None:
-        return None
+        return None, 1.0
     try:
         cols = bundle.get("features", FEATURE_COLS)
         payload = {c: (0.0 if feats.get(c) is None else feats.get(c)) for c in cols}
@@ -475,17 +484,21 @@ def _ml_one_day_return(feats: dict, exchange: str | None = None) -> float | None
                 probs = calibrator.predict_proba(np.asarray(probs).reshape(1, -1))[0]
             confidence = float(np.max(probs))
             if confidence < float(bundle.get("abstain_threshold", MIN_DIRECTION_CONFIDENCE)):
-                return 0.0
+                return 0.0, 1.0
             representatives = np.asarray(bundle.get("class_returns", [-0.01, 0.0, 0.01]), dtype=float)
-            return float(np.dot(probs, representatives))
+            ml_ret = float(np.dot(probs, representatives))
+            # class index 1 = flat, by direction_label's own construction
+            # (np.select([... < -threshold, ... > threshold], [0, 2], default=1)).
+            move_confidence = float(1.0 - probs[1])
+            return ml_ret, move_confidence
         if "classifier" in bundle and "regressor" in bundle:
             p_move = float(bundle["classifier"].predict_proba(row)[0, 1])
             magnitude = float(bundle["regressor"].predict(row)[0])
-            return p_move * magnitude
-        return float(bundle["model"].predict(row)[0])
+            return p_move * magnitude, 1.0
+        return float(bundle["model"].predict(row)[0]), 1.0
     except Exception as exc:
         logger.warning("next-close ML predict failed: %s", exc)
-        return None
+        return None, 1.0
 
 
 def forecast_next_close(
@@ -511,7 +524,7 @@ def forecast_next_close(
     feats = _feature_row(data, exchange=exchange, sector=sector)
     # Historical simulations must opt out: loading today's fitted artifact
     # while replaying an old date would leak future training outcomes.
-    ml_ret = _ml_one_day_return(feats, exchange=exchange) if (allow_ml and feats) else None
+    ml_ret, move_confidence = _ml_one_day_return(feats, exchange=exchange) if (allow_ml and feats) else (None, 1.0)
 
     if ml_ret is not None:
         raw_ret = 0.50 * analogue_ret + 0.50 * ml_ret
@@ -519,6 +532,15 @@ def forecast_next_close(
     else:
         raw_ret = analogue_ret
         method = "analogue+ctx+bias"
+
+    # Dampen the *combined* prediction toward zero when the classifier
+    # itself believes "flat" is the likely outcome (move_confidence
+    # defaults to 1.0 — no-op — whenever there's no classifier signal to
+    # dampen with, e.g. ml_ret is None). See _ml_one_day_return's
+    # docstring for why this targets the whole blended raw_ret rather
+    # than just the ML component: the analogue signal alone is also
+    # rarely exactly 0.
+    raw_ret *= move_confidence
 
     corrected = float(np.clip(raw_ret - return_bias, -0.12, 0.12))
     predicted_close = last_close * (1 + corrected)
