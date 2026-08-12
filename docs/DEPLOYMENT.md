@@ -209,30 +209,35 @@ Worker/timeout settings (overridable via env, see
 `CELERY_TASK_SOFT_TIME_LIMIT` (raises inside the task first),
 `CELERY_WORKER_MAX_TASKS_PER_CHILD` (recycle worker processes to bound
 memory growth), `CELERY_WORKER_CONCURRENCY`/`CELERY_WORKER_PREFETCH_MULTIPLIER`
-(default `1`/`1` — conservative for the documented VPS target, see below),
+(conservative defaults for the documented VPS target, see below),
 `CELERY_BROKER_CONNECTION_TIMEOUT`, and a `visibility_timeout` transport
 option so a crashed worker's in-flight task is eventually retried by
 another worker rather than lost forever.
 
 Run the worker and beat scheduler as separate processes/services (see
 README "Hybrid automation"), each with
-`DJANGO_SETTINGS_MODULE=config.settings.production` exported. **The worker
-must be started with `-Q market-fast,market-analysis,market-heavy,notifications,celery`**
-(already set in `docker-compose.yml`'s `celery-worker` command) — Celery
-only consumes the queue(s) it's told to, and skipping this means everything
-except live quote sync (daily append, full analysis, ML training, digests,
-feedback notifications) silently never runs.
+`DJANGO_SETTINGS_MODULE=config.settings.production` exported. **Between
+however many worker processes you run, every one of the four queues
+(`market-fast,market-analysis,market-heavy,notifications`, plus Celery's
+own `celery` queue) must be covered by at least one worker's `-Q` flag** —
+Celery only consumes the queue(s) it's told to, and skipping one means
+whatever routes there (live quote sync, daily append, full analysis, ML
+training, digests, feedback notifications) silently never runs.
+`docker-compose.yml` covers all four across two worker processes — see
+"Self-hosted on a laptop via Docker" below.
 
 ### VPS sizing
 
 Documented target: **Oracle Cloud "Always Free" A1 Flex — 2 OCPUs, ~12GB
-RAM, ~20 concurrent users.** At that size, run exactly one worker process
-(`CELERY_WORKER_CONCURRENCY=1`) — the heavy, slow tasks (full analysis, ML
-training) are scheduled for daily off-hours windows specifically so they
-don't need to run concurrently with quote-fetch traffic. Scale
-`CELERY_WORKER_CONCURRENCY` up, or split `market-heavy` onto its own worker
-container/queue, only if profiling shows the single worker genuinely can't
-keep up.
+RAM, ~20 concurrent users.** `docker-compose.yml` splits the worker into
+two processes for real resource isolation — `celery-worker-light`
+(`market-fast,market-analysis,notifications,celery`, concurrency 2) and
+`celery-worker-heavy` (`market-heavy` only, concurrency 1) — so a
+live-quote sync or digest never queues behind a full-analysis/ML-training
+run, even though both are already scheduled for daily off-hours windows.
+Tune `CELERY_WORKER_CONCURRENCY_LIGHT`/`_HEAVY` (see README's "Worker
+recommendations") if profiling shows either process genuinely can't keep
+up.
 
 ### Inspecting task status / recovering a stuck task
 
@@ -246,9 +251,11 @@ keep up.
   (`market.services.locking.distributed_lock`) auto-expires on its own
   `timeout`, so a new run isn't permanently blocked; use **Retry** on the
   Admin Panel once you've confirmed the old worker really is gone (check
-  `docker compose ps celery-worker` / `docker compose logs celery-worker`).
-- `docker compose restart celery-worker` recovers a wedged worker without
-  touching `celery-beat` or losing the schedule.
+  `docker compose ps celery-worker-light celery-worker-heavy` /
+  `docker compose logs celery-worker-light` or `celery-worker-heavy`).
+- `docker compose restart celery-worker-light` (or `celery-worker-heavy`)
+  recovers a wedged worker without touching the other worker, `celery-beat`,
+  or losing the schedule.
 
 ### Telegram ML daily report — setup & troubleshooting
 
@@ -416,14 +423,15 @@ Cloudflare's edge). Set up 2026-08-01 for domain `sma.is`.
 |---|---|
 | `Dockerfile` | One image shared by web/worker/beat — `SERVICE_ROLE` env var picks the role. |
 | `docker-entrypoint.sh` | Waits for Postgres, then (web only) runs `migrate` + `collectstatic` before exec'ing the real command — worker/beat skip this to avoid three containers racing to migrate at once. |
-| `docker-compose.yml` | `db` (Postgres 16), `redis` (7), `web`, `celery-worker`, `celery-beat`, `cloudflared`. |
+| `docker-compose.yml` | `db` (Postgres 16), `redis` (7), `web`, `celery-worker-light`, `celery-worker-heavy`, `celery-beat`, `cloudflared`. |
 | `.env.docker.example` | Template — copy to `.env.docker` (gitignored) and fill in. **Not** the same file as the repo's plain `.env`, which is for native (non-Docker) local dev and must not be touched by this setup. |
 | `scripts/update.sh` | `git pull` + rebuild + redeploy — the manual update path. |
 | `scripts/docker-autostart.sh` + `scripts/com.bazaar.docker-autostart.plist` | macOS `launchd` LaunchAgent — starts Docker Desktop and the compose stack automatically at login. |
 
-**Data persistence:** `./data` is bind-mounted into `web`/`celery-worker`
-at `/app/data`, so ML model artifacts (`data/cache/*.pkl`, only ever
-read/written by the worker — web only reads precomputed DB rows) and
+**Data persistence:** `./data` is bind-mounted into
+`web`/`celery-worker-light`/`celery-worker-heavy` at `/app/data`, so ML
+model artifacts (`data/cache/*.pkl`, only ever read/written by a worker —
+web only reads precomputed DB rows) and
 `data/backups/` survive container rebuilds. `backup_bazaar` defaults to
 that persistent path (`/app/data/backups`) and the image includes matching
 PostgreSQL 16 `pg_dump`/`pg_restore` tools. Postgres data lives in the named volume

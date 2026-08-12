@@ -227,7 +227,7 @@ CELERY_TASK_ACKS_LATE = os.getenv("CELERY_TASK_ACKS_LATE", "True").lower() in ("
 # Named so a heavy job (ML training, full analysis) can be isolated to
 # its own worker later without touching task code — a worker not yet
 # split off just listens to all of them (see config/celery.py's
-# task_routes and docker-compose.yml's celery-worker `-Q` flag).
+# task_routes and docker-compose.yml's celery-worker-light/-heavy `-Q` flags).
 CELERY_TASK_DEFAULT_QUEUE = "market-fast"
 QUEUE_MARKET_FAST = "market-fast"  # quote sync, freshness checks — must never queue behind heavy work
 QUEUE_MARKET_ANALYSIS = "market-analysis"  # intraday lightweight analysis, daily append

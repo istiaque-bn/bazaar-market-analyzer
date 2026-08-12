@@ -402,21 +402,25 @@ Conservative defaults for a small VM (documented target: **Oracle Cloud A1,
 2 OCPUs, ~20 users**) — override any of these via env if you scale up:
 
 ```dotenv
-CELERY_WORKER_CONCURRENCY=1
+CELERY_WORKER_CONCURRENCY_LIGHT=2
+CELERY_WORKER_CONCURRENCY_HEAVY=1
 CELERY_WORKER_PREFETCH_MULTIPLIER=1
 CELERY_WORKER_MAX_TASKS_PER_CHILD=200
 CELERY_TASK_TIME_LIMIT=600
 CELERY_TASK_SOFT_TIME_LIMIT=540
+ML_MAX_WORKERS=2
 ```
 
-With a single worker process, true cross-queue priority isn't achievable
-over Redis (no priority-queue support at that layer) — in practice this
-doesn't matter here because the heavy, slow work (full analysis, ML
-training) is scheduled for once-daily/once-weekly off-hours windows by
-design, not interleaved with the 60s quote-fetch cadence. Split
-`market-heavy` onto its own worker process (a second `celery-worker`-shaped
-container listening only to `-Q market-heavy`) if that stops being true at a
-larger scale.
+Production (`docker-compose.yml`) runs **two** worker processes for real
+resource isolation, not one: `celery-worker-light` (`-Q
+market-fast,market-analysis,notifications,celery`, concurrency 2) and
+`celery-worker-heavy` (`-Q market-heavy` only, concurrency 1) — a live-quote
+sync or digest on the light worker never queues behind a full-analysis/ML
+training run on the heavy one, and the heavy worker's concurrency stays at 1
+so it never runs two CPU-heavy jobs at once (`ML_MAX_WORKERS` bounds each
+individual job's own thread count separately — see `config/settings/base.py`).
+The local dev quickstart above still uses one worker listening to every
+queue for simplicity; only production needs the split.
 
 ### Task status
 
