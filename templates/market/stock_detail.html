@@ -122,6 +122,13 @@
     </div>
     {% endif %}
   </section>
+  <section class="panel">
+    <h3>Why this estimate?</h3>
+    <p class="muted">These are the latest inputs behind the displayed research signal, not a guarantee or a new prediction.</p>
+    <div class="driver-grid">
+      {% for driver in prediction_drivers %}<div class="driver-item"><span>{{ driver.label }}</span><strong class="{{ driver.tone }}">{{ driver.value }}</strong></div>{% empty %}<p class="muted">No saved analysis inputs yet.</p>{% endfor %}
+    </div>
+  </section>
   </section>
   <section class="stack">
     <div class="panel">
@@ -238,6 +245,17 @@
         </p>
         <p class="muted">{{ status.signal_composition.note }}</p>
       {% endif %}
+    </div>
+    <div class="panel">
+      <h3>My research notes</h3>
+      <p class="muted">Private to your account. Use notes to keep a thesis, risks, and a personal target together.</p>
+      <form class="form" method="post" action="{% url 'research_note_create' stock.exchange stock.trading_code %}">{% csrf_token %}
+        <label>Title {{ research_note_form.title }}</label>
+        <label>Note {{ research_note_form.body }}</label>
+        <label>Personal target price {{ research_note_form.target_price }}</label>
+        <button class="btn btn-small" type="submit">Save note</button>
+      </form>
+      {% for note in research_notes %}<article class="note-item"><strong>{{ note.title }}</strong>{% if note.target_price %}<span class="muted"> · target {{ note.target_price|floatformat:2 }}</span>{% endif %}<p>{{ note.body|linebreaksbr }}</p><form method="post" action="{% url 'research_note_delete' note.id %}">{% csrf_token %}<button class="linkish" type="submit">Delete</button></form></article>{% endfor %}
     </div>
   </section>
 </div>

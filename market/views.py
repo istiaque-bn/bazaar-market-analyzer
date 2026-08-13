@@ -3,7 +3,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Q
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
@@ -11,7 +11,7 @@ from datetime import datetime
 
 from accounts.decorators import admin_required, staff_or_admin_required
 from accounts.roles import role_home_url
-from market.forms import PortfolioForm, TransactionForm
+from market.forms import PortfolioForm, PortfolioGoalForm, ResearchNoteForm, TransactionForm
 from market.forms import AdminReminderForm
 from market.models import (
     AnalysisResult,
@@ -19,7 +19,9 @@ from market.models import (
     MarketSnapshot,
     PatternHit,
     Portfolio,
+    PortfolioGoal,
     PortfolioTransaction,
+    ResearchNote,
     Stock,
     TechnicalSnapshot,
     TransactionType,
@@ -31,7 +33,8 @@ from market.services.indicators import prices_to_df
 from market.services.predictor import CONFIDENCE_SCALE, RESEARCH_DISCLAIMER, predict_price_at_date
 from market.services.screener import potential_shares, safe_buys, screen_summary, sell_candidates, sentiment_label, top_by_sector
 from market.services.signal_status import market_edge_status, signal_status
-from notifications.models import Alert
+from notifications.forms import AlertRuleForm
+from notifications.models import Alert, AlertRule
 
 
 def home(request):
@@ -421,6 +424,18 @@ def stock_detail(request, exchange: str, code: str):
         status = signal_status(stock, analysis, tech)
     except Exception:
         status = None
+    drivers = []
+    if analysis:
+        drivers.extend([
+            {"label": "Model score", "value": f"{analysis.score:.0f}/100", "tone": "up" if analysis.score >= 60 else "down" if analysis.score <= 40 else ""},
+            {"label": "Expected return", "value": f"{analysis.expected_return_pct:+.2f}%" if analysis.expected_return_pct is not None else "Not available", "tone": "up" if (analysis.expected_return_pct or 0) > 0 else "down" if (analysis.expected_return_pct or 0) < 0 else ""},
+            {"label": "Prediction confidence", "value": f"{analysis.confidence * 100:.0f}%" if analysis.confidence is not None else "Not available", "tone": ""},
+        ])
+    if tech:
+        drivers.extend([
+            {"label": "RSI (14)", "value": f"{tech.rsi_14:.1f}" if tech.rsi_14 is not None else "Not available", "tone": ""},
+            {"label": "MACD histogram", "value": f"{tech.macd_hist:.3f}" if tech.macd_hist is not None else "Not available", "tone": "up" if (tech.macd_hist or 0) > 0 else "down" if (tech.macd_hist or 0) < 0 else ""},
+        ])
     return render(
         request,
         "market/stock_detail.html",
@@ -453,6 +468,9 @@ def stock_detail(request, exchange: str, code: str):
             "status": status,
             "beta_90d": beta_90d,
             "beta_pairs": beta_pairs,
+            "prediction_drivers": drivers,
+            "research_notes": ResearchNote.objects.filter(user=request.user, stock=stock) if request.user.is_authenticated else [],
+            "research_note_form": ResearchNoteForm(),
         },
     )
 
@@ -520,6 +538,46 @@ def watchlist_view(request):
 
 
 @login_required
+def compare_stocks(request):
+    """Compare up to four saved listings without mixing in fresh/live data."""
+    raw_ids = [item for item in request.GET.getlist("stocks") if item.isdigit()][:4]
+    available = Stock.objects.filter(is_active=True).order_by("trading_code")
+    selected = list(available.filter(id__in=raw_ids))
+    analyses, techs = {}, {}
+    for analysis in AnalysisResult.objects.filter(stock__in=selected).order_by("stock_id", "-as_of"):
+        analyses.setdefault(analysis.stock_id, analysis)
+    for tech in TechnicalSnapshot.objects.filter(stock__in=selected).order_by("stock_id", "-as_of"):
+        techs.setdefault(tech.stock_id, tech)
+    rows = [{"stock": stock, "analysis": analyses.get(stock.id), "tech": techs.get(stock.id)} for stock in selected]
+    return render(request, "market/compare_stocks.html", {"available_stocks": available, "rows": rows, "selected_ids": [stock.id for stock in selected]})
+
+
+@login_required
+def sector_heatmap(request):
+    latest = {}
+    for analysis in AnalysisResult.objects.select_related("stock").filter(stock__is_active=True).order_by("stock_id", "-as_of"):
+        latest.setdefault(analysis.stock_id, analysis)
+    buckets = {}
+    for analysis in latest.values():
+        sector = analysis.stock.sector or "Unclassified"
+        row = buckets.setdefault(sector, {"sector": sector, "stocks": 0, "buy": 0, "sell": 0, "score_total": 0.0, "change_total": 0.0, "change_count": 0})
+        row["stocks"] += 1
+        row["buy"] += analysis.action == "BUY"
+        row["sell"] += analysis.action == "SELL"
+        row["score_total"] += analysis.score or 0
+        if analysis.stock.last_change_pct is not None:
+            row["change_total"] += analysis.stock.last_change_pct
+            row["change_count"] += 1
+    sectors = []
+    for row in buckets.values():
+        row["avg_score"] = round(row.pop("score_total") / row["stocks"], 1)
+        row["avg_change"] = round(row.pop("change_total") / row.pop("change_count"), 2) if row["change_count"] else None
+        row["heat"] = max(0, min(100, round((row["avg_score"] + 100) / 2)))
+        sectors.append(row)
+    return render(request, "market/sector_heatmap.html", {"sectors": sorted(sectors, key=lambda item: item["avg_score"], reverse=True)})
+
+
+@login_required
 def backtests_view(request):
     from market.services.exchange_config import enabled_exchanges
 
@@ -547,7 +605,66 @@ def backtests_view(request):
 @login_required
 def alerts_view(request):
     alerts = Alert.objects.filter(Q(user=request.user) | Q(user__isnull=True))[:50]
-    return render(request, "market/alerts.html", {"alerts": alerts})
+    return render(request, "market/alerts.html", {"alerts": alerts, "rules": AlertRule.objects.filter(user=request.user), "rule_form": AlertRuleForm()})
+
+
+@login_required
+@require_POST
+def alert_rule_create(request):
+    form = AlertRuleForm(request.POST)
+    if form.is_valid():
+        rule = form.save(commit=False)
+        rule.user = request.user
+        rule.save()
+        messages.success(request, "Alert rule saved. Telegram delivery also requires Telegram alerts enabled in your profile.")
+    else:
+        messages.error(request, "Please correct the alert rule fields.")
+    return redirect("alerts")
+
+
+@login_required
+@require_POST
+def alert_rule_toggle(request, rule_id):
+    rule = get_object_or_404(AlertRule, id=rule_id, user=request.user)
+    rule.is_active = not rule.is_active
+    rule.save(update_fields=["is_active", "updated_at"])
+    messages.success(request, f"Alert rule {'enabled' if rule.is_active else 'paused'}.")
+    return redirect("alerts")
+
+
+@login_required
+@require_POST
+def alert_rule_delete(request, rule_id):
+    rule = get_object_or_404(AlertRule, id=rule_id, user=request.user)
+    rule.delete()
+    messages.success(request, "Alert rule deleted.")
+    return redirect("alerts")
+
+
+@login_required
+@require_POST
+def research_note_create(request, exchange, code):
+    stock = _get_stock_for_public_route(exchange, code)
+    form = ResearchNoteForm(request.POST)
+    if form.is_valid():
+        note = form.save(commit=False)
+        note.user = request.user
+        note.stock = stock
+        note.save()
+        messages.success(request, "Private research note saved.")
+    else:
+        messages.error(request, "Please add a title and note body.")
+    return redirect("stock_detail", exchange=stock.exchange, code=stock.trading_code)
+
+
+@login_required
+@require_POST
+def research_note_delete(request, note_id):
+    note = get_object_or_404(ResearchNote, id=note_id, user=request.user)
+    stock = note.stock
+    note.delete()
+    messages.success(request, "Research note deleted.")
+    return redirect("stock_detail", exchange=stock.exchange, code=stock.trading_code)
 
 
 @staff_or_admin_required
@@ -1005,6 +1122,16 @@ def portfolio_detail(request, portfolio_id):
     portfolio = _owned_portfolio(request, portfolio_id)
     all_portfolios = list(Portfolio.objects.filter(user=request.user).order_by("-is_default", "name"))
     summary = portfolio_summary(portfolio)
+    goal, _ = PortfolioGoal.objects.get_or_create(portfolio=portfolio)
+    allocations = [r["allocation_pct"] for r in summary["holdings"] if r["allocation_pct"] is not None]
+    largest_position = max(allocations) if allocations else 0
+    risk = {
+        "largest_position": largest_position,
+        "limit": goal.max_single_position_pct,
+        "is_concentrated": largest_position > goal.max_single_position_pct,
+        "goal_progress": round(float(summary.total_market_value / goal.target_value * 100), 1)
+        if goal.target_value and goal.target_value > 0 and summary["total_market_value"] is not None else None,
+    }
     recent_transactions = list(
         portfolio.transactions.select_related("stock").order_by("-transaction_date", "-created_at")[:10]
     )
@@ -1018,11 +1145,44 @@ def portfolio_detail(request, portfolio_id):
             "recent_transactions": recent_transactions,
             "rename_form": PortfolioForm(instance=portfolio, user=request.user),
             "create_form": PortfolioForm(user=request.user),
+            "goal": goal,
+            "goal_form": PortfolioGoalForm(instance=goal),
+            "risk": risk,
             "market_hours": both_exchanges_status(),
             "disclaimer": PORTFOLIO_DISCLAIMER,
             "today": timezone.localdate(),
         },
     )
+
+
+@login_required
+@require_POST
+def portfolio_goal_save(request, portfolio_id):
+    portfolio = _owned_portfolio(request, portfolio_id)
+    goal, _ = PortfolioGoal.objects.get_or_create(portfolio=portfolio)
+    form = PortfolioGoalForm(request.POST, instance=goal)
+    if form.is_valid():
+        form.save()
+        messages.success(request, "Portfolio goal and concentration limit saved.")
+    else:
+        messages.error(request, "Please correct the portfolio goal fields.")
+    return redirect("portfolio_detail", portfolio_id=portfolio.id)
+
+
+@login_required
+def portfolio_export_csv(request, portfolio_id):
+    import csv
+
+    from market.services.portfolio import portfolio_summary
+
+    portfolio = _owned_portfolio(request, portfolio_id)
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = f'attachment; filename="{portfolio.name.lower().replace(" ", "-")}-holdings.csv"'
+    writer = csv.writer(response)
+    writer.writerow(["Code", "Exchange", "Quantity", "Average buy", "Current price", "Market value", "Gain/loss", "Allocation %"])
+    for row in portfolio_summary(portfolio)["holdings"]:
+        writer.writerow([row["trading_code"], row["exchange"], row["quantity"], row["average_price"], row["latest_price"], row["market_value"], row["unrealized_pl"], row["allocation_pct"]])
+    return response
 
 
 @login_required

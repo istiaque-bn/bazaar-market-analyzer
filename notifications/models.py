@@ -21,6 +21,43 @@ class AlertChannel(models.TextChoices):
     IN_APP = "in_app", "In-app"
 
 
+class AlertRuleType(models.TextChoices):
+    TARGET_PRICE = "target_price", "Target price reached"
+    PERCENT_MOVE = "percent_move", "Percentage move"
+    SIGNAL_CHANGE = "signal_change", "BUY/SELL signal change"
+    CONFIDENCE_CHANGE = "confidence_change", "Prediction confidence reached"
+
+
+class AlertRule(models.Model):
+    """A user-owned, opt-in rule evaluated from the latest saved market data.
+
+    Rules deliberately do not run a prediction on demand: alerts only ever
+    use the same persisted quote/analysis visible in the product.
+    """
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="alert_rules")
+    stock = models.ForeignKey(Stock, on_delete=models.CASCADE, related_name="alert_rules")
+    rule_type = models.CharField(max_length=24, choices=AlertRuleType.choices)
+    target_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    threshold_pct = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True)
+    min_confidence = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    telegram_enabled = models.BooleanField(default=True)
+    in_app_enabled = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    last_signal = models.CharField(max_length=16, blank=True)
+    last_confidence = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    last_triggered_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["is_active", "rule_type"]), models.Index(fields=["user", "stock"])]
+
+    def __str__(self):
+        return f"{self.user.username}: {self.stock.trading_code} {self.get_rule_type_display()}"
+
+
 class Alert(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -33,6 +70,7 @@ class Alert(models.Model):
     analysis = models.ForeignKey(
         AnalysisResult, on_delete=models.SET_NULL, null=True, blank=True, related_name="alerts"
     )
+    rule = models.ForeignKey(AlertRule, on_delete=models.SET_NULL, null=True, blank=True, related_name="deliveries")
     channel = models.CharField(max_length=16, choices=AlertChannel.choices, default=AlertChannel.IN_APP)
     title = models.CharField(max_length=200)
     message = models.TextField()

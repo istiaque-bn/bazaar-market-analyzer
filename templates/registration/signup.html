@@ -1,0 +1,49 @@
+{% extends "base_bare.html" %}
+{% load static %}
+{% block title %}Create account{% endblock %}
+{% block body_class %}auth-page{% endblock %}
+{% block content %}
+<div class="auth-shell">
+  <div class="auth-terminal" aria-hidden="true">
+    <img class="auth-terminal-base" src="{% static 'images/stock-bazaar-login-terminal.png' %}" alt="">
+    <div class="auth-terminal-shade"></div><div class="auth-grid-flow"></div>
+  </div>
+  <section class="auth-card auth-signup-card" aria-labelledby="signupTitle">
+    <div class="auth-brand">
+      <img class="auth-logo-mark" src="{% static 'images/stock-bazaar-bull-mark.png' %}" alt="">
+      <div class="auth-brand-name"><span>Stock</span> <strong>Bazaar</strong></div>
+      <p>AI-powered analysis. Smarter trades.</p>
+    </div>
+    <h1 id="signupTitle" class="auth-title">Create your account</h1>
+    <p class="auth-tagline">Submit your details, then wait for staff or admin approval.</p>
+    {% if form.non_field_errors %}<div class="auth-error" role="alert">{% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}</div>{% endif %}
+    <form method="post" class="auth-form" novalidate>{% csrf_token %}
+      <label class="auth-field"><span>Username</span>{{ form.username }}{% for error in form.username.errors %}<span class="auth-field-error">{{ error }}</span>{% endfor %}</label>
+      <div class="auth-two-col">
+        <label class="auth-field"><span>First name</span>{{ form.first_name }}{% for error in form.first_name.errors %}<span class="auth-field-error">{{ error }}</span>{% endfor %}</label>
+        <label class="auth-field"><span>Last name <i>(optional)</i></span>{{ form.last_name }}</label>
+      </div>
+      <label class="auth-field"><span>Email</span>{{ form.email }}{% for error in form.email.errors %}<span class="auth-field-error">{{ error }}</span>{% endfor %}</label>
+      <label class="auth-check">{{ form.telegram_opt_in }} <span>Get alerts through Telegram</span></label>
+      <div id="telegramSetup" class="telegram-setup" hidden>
+        <p><strong>1.</strong> Search <b>@userinfobot</b> in Telegram and tap <b>Start</b> to see your numeric chat ID.</p>
+        <p><strong>2.</strong> Search <b>stock_bazar_bot</b>, type <b>/start</b>, and send it.</p>
+        <label class="auth-field"><span>Telegram chat ID</span>{{ form.telegram_chat_id }}{% for error in form.telegram_chat_id.errors %}<span class="auth-field-error">{{ error }}</span>{% endfor %}</label>
+      </div>
+      <button type="submit" class="btn auth-submit">Create account</button>
+    </form>
+    <p class="auth-secondary">Already have an account? <a href="{% url 'login' %}">Sign in</a></p>
+  </section>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+(() => {
+  const choice = document.getElementById('{{ form.telegram_opt_in.id_for_label }}');
+  const setup = document.getElementById('telegramSetup');
+  const chatId = document.getElementById('{{ form.telegram_chat_id.id_for_label }}');
+  function sync() { const selected = !!choice.checked; setup.hidden = !selected; chatId.required = selected; }
+  choice.addEventListener('change', sync); sync();
+})();
+</script>
+{% endblock %}

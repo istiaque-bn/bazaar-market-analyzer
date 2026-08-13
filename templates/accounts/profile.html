@@ -18,9 +18,9 @@
       <input type="text" name="preferred_exchanges" value="{{ profile.preferred_exchanges }}">
     </label>
     <label><input type="checkbox" name="email_alerts" {% if profile.email_alerts %}checked{% endif %}> Email alerts</label>
-    <label><input type="checkbox" name="telegram_alerts" {% if profile.telegram_alerts %}checked{% endif %}> Telegram alerts</label>
+    <label><input type="checkbox" name="telegram_alerts" {% if profile.telegram_alerts %}checked{% endif %}> Telegram alerts and personal price/signal notifications</label>
     <button class="btn" type="submit">Save</button>
   </form>
-  <p class="muted">Also set <code>TELEGRAM_BOT_TOKEN</code> and <code>TELEGRAM_CHAT_ID</code> in <code>.env</code> for global digests.</p>
+  <p class="muted">Telegram is opt-in. Your personal chat ID is used only for the alerts you enable; global digests require the server Telegram configuration.</p>
 </section>
 {% endblock %}

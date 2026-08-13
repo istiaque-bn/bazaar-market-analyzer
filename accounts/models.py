@@ -35,6 +35,11 @@ class UserProfile(models.Model):
     # successful login; only the temp password's usability as a
     # credential expires, not the follow-up password-change step.
     temp_password_expires_at = models.DateTimeField(null=True, blank=True)
+    # True only between public registration and an explicit Staff/Admin
+    # approval. Keeps ordinary manually-deactivated accounts distinct from
+    # approval requests.
+    is_pending_approval = models.BooleanField(default=False)
+    email_verified_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"Profile({self.user.username})"

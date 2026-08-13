@@ -1,0 +1,7 @@
+{% extends "base_bare.html" %}
+{% load static %}
+{% block title %}Email verification{% endblock %}
+{% block body_class %}auth-page{% endblock %}
+{% block content %}
+<div class="auth-shell"><div class="auth-terminal" aria-hidden="true"><img class="auth-terminal-base" src="{% static 'images/stock-bazaar-login-terminal.png' %}" alt=""><div class="auth-terminal-shade"></div></div><section class="auth-card auth-message-card">{% if valid %}<h1 class="auth-title">Email verified</h1><p>Thanks, {{ username }}. Your email is confirmed and your registration can now be approved by Staff or Admin.</p>{% else %}<h1 class="auth-title">Verification link invalid</h1><p>This email verification link is invalid or has expired. Please register again or contact Staff/Admin.</p>{% endif %}<a class="btn auth-submit" href="{% url 'login' %}">Back to sign in</a></section></div>
+{% endblock %}

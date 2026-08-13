@@ -6,8 +6,11 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
 from django.core.paginator import Paginator
 from django.db.models import Q
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils.encoding import force_str
+from django.utils.http import urlsafe_base64_decode
+from django.contrib.auth.tokens import default_token_generator
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods, require_POST
 
@@ -17,6 +20,7 @@ from accounts.forms import (
     BazaarAuthenticationForm,
     ForcedPasswordChangeForm,
     ProfileForm,
+    SelfRegistrationForm,
     StaffCreateAccountForm,
 )
 from accounts.models import UserProfile
@@ -85,12 +89,58 @@ class BazaarLoginView(LoginView):
         return super().form_valid(form)
 
 
-def signup_disabled(request):
-    """Tombstone for the old public-registration URL. GET and POST both
-    refuse and nothing is ever created — kept resolvable (rather than
-    deleted from urls.py) so an old bookmark/link gets a clear
-    explanation instead of a bare, unexplained 404."""
-    return render(request, "registration/signup_disabled.html", status=403)
+@require_http_methods(["GET", "POST"])
+def signup(request):
+    """Create a regular account pending staff/admin approval.
+
+    Pending users are inactive, have no usable password setup link, and
+    cannot sign in. Approval is the explicit moment a fresh temporary
+    password is generated and delivered.
+    """
+    if request.user.is_authenticated:
+        return redirect(role_home_url(request.user))
+    if request.method == "POST":
+        form = SelfRegistrationForm(request.POST)
+        if form.is_valid():
+            data = form.cleaned_data
+            try:
+                with transaction.atomic():
+                    user = User.objects.create_user(
+                        username=data["username"], email=data["email"], password=None, is_active=False,
+                        first_name=data["first_name"].strip(), last_name=data["last_name"].strip(),
+                    )
+                    profile = user.profile
+                    profile.telegram_chat_id = data["telegram_chat_id"]
+                    profile.telegram_alerts = bool(data["telegram_opt_in"])
+                    profile.is_pending_approval = True
+                    profile.save(update_fields=["telegram_chat_id", "telegram_alerts", "is_pending_approval"])
+                    record_admin_action(request, AdminAuditAction.ACCOUNT_CREATED, {"role": "user", "is_active": False, "source": "self_registration"}, target_user=user)
+            except IntegrityError:
+                form.add_error("email", "An account with that email already exists.")
+                return render(request, "registration/signup.html", {"form": form})
+            from accounts.services import _notify_admin_account_created
+            from accounts.services import send_email_verification
+            email_sent = send_email_verification(request=request, user=user)
+            _notify_admin_account_created(username=user.username, role="pending user")
+            return render(request, "registration/signup_pending.html", {"username": user.username, "email_sent": email_sent})
+    else:
+        form = SelfRegistrationForm()
+    return render(request, "registration/signup.html", {"form": form})
+
+
+@require_http_methods(["GET"])
+def verify_email(request, uidb64, token):
+    try:
+        user = User.objects.get(pk=force_str(urlsafe_base64_decode(uidb64)))
+    except (User.DoesNotExist, ValueError, TypeError, OverflowError):
+        user = None
+    if user is None or not default_token_generator.check_token(user, token):
+        return render(request, "registration/email_verification_result.html", {"valid": False}, status=400)
+    profile, _ = UserProfile.objects.get_or_create(user=user)
+    if profile.email_verified_at is None:
+        profile.email_verified_at = timezone.now()
+        profile.save(update_fields=["email_verified_at"])
+    return render(request, "registration/email_verification_result.html", {"valid": True, "username": user.username})
 
 
 @login_required
@@ -449,7 +499,19 @@ def account_detail(request, user_id):
 def account_activate(request, user_id):
     target = _get_manageable_or_404(request, user_id)
     try:
+        was_pending = not target.is_active and target.profile.is_pending_approval
+        if was_pending and target.profile.email_verified_at is None:
+            messages.error(request, "This registration cannot be approved until the user verifies their email address.")
+            return redirect("account_detail", user_id=target.id)
         set_active(request.user, target, True, request)
+        if was_pending:
+            temp_password, telegram_sent, email_sent = reset_password(request.user, target, request)
+            target.profile.is_pending_approval = False
+            target.profile.save(update_fields=["is_pending_approval"])
+            messages.success(request, f"{target.username}'s account was approved and is now active.")
+            if not telegram_sent and not email_sent:
+                messages.warning(request, "Telegram and email delivery failed. Share the temporary password from the next screen.")
+            return render(request, "accounts/account_password_reset.html", {"target": target, "temp_password": temp_password, "telegram_sent": telegram_sent, "email_sent": email_sent, "approved": True})
         messages.success(request, f"{target.username}'s account is now active.")
     except Exception as exc:
         messages.error(request, str(exc))
@@ -527,16 +589,16 @@ def account_demote(request, user_id):
 def account_reset_password(request, user_id):
     target = _get_manageable_or_404(request, user_id)
     try:
-        temp_password, telegram_sent = reset_password(request.user, target, request)
+        temp_password, telegram_sent, email_sent = reset_password(request.user, target, request)
     except Exception as exc:
         messages.error(request, str(exc))
         return redirect("account_detail", user_id=target.id)
-    if not telegram_sent:
+    if not telegram_sent and not email_sent:
         messages.warning(
             request, "Couldn't deliver the temporary password via Telegram — share it from below instead."
         )
     return render(
         request,
         "accounts/account_password_reset.html",
-        {"target": target, "temp_password": temp_password, "telegram_sent": telegram_sent},
+        {"target": target, "temp_password": temp_password, "telegram_sent": telegram_sent, "email_sent": email_sent},
     )

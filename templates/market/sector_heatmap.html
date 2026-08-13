@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Sector heatmap{% endblock %}
+{% block content %}
+<div class="section-title"><div><h2>Sector heatmap</h2><p class="muted">A compact view of the latest model score and market movement by sector.</p></div></div>
+<div class="heatmap-grid">{% for sector in sectors %}<article class="panel heatmap-card" style="--heat: {{ sector.heat }}"><h3>{{ sector.sector }}</h3><strong>{{ sector.avg_score|floatformat:0 }}</strong><span>average score</span><div class="heatmap-meta"><span>{{ sector.stocks }} stocks</span><span class="up">{{ sector.buy }} buy</span><span class="down">{{ sector.sell }} sell</span></div><p class="{% if sector.avg_change >= 0 %}up{% else %}down{% endif %}">{% if sector.avg_change != None %}{{ sector.avg_change|floatformat:2 }}% average move{% else %}No quote movement{% endif %}</p></article>{% empty %}<div class="panel">No sector analyses are available yet.</div>{% endfor %}</div>
+{% endblock %}

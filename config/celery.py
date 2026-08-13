@@ -40,6 +40,10 @@ app.conf.beat_schedule = {
         "task": "notifications.tasks.deliver_admin_reminders",
         "schedule": 60.0,
     },
+    "evaluate-personal-alert-rules": {
+        "task": "notifications.tasks.evaluate_personal_alert_rules",
+        "schedule": 300.0,
+    },
     # Live DSE/CSE quote sync. Ticks every 60s every day; the task itself
     # (market.services.autosync.maybe_sync) no-ops unless
     # AUTO_SYNC_INTERVAL_MARKET/_OFF has actually elapsed, so this one

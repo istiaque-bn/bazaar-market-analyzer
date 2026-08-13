@@ -4,7 +4,8 @@ from django.urls import path
 from accounts import views
 
 urlpatterns = [
-    path("signup/", views.signup_disabled, name="signup"),
+    path("signup/", views.signup, name="signup"),
+    path("verify-email/<uidb64>/<token>/", views.verify_email, name="verify_email"),
     path("login/", views.BazaarLoginView.as_view(), name="login"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("password-change/", views.force_password_change, name="force_password_change"),

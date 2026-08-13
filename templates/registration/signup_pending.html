@@ -1,0 +1,11 @@
+{% extends "base_bare.html" %}
+{% load static %}
+{% block title %}Awaiting approval{% endblock %}
+{% block body_class %}auth-page{% endblock %}
+{% block content %}
+<div class="auth-shell"><div class="auth-terminal" aria-hidden="true"><img class="auth-terminal-base" src="{% static 'images/stock-bazaar-login-terminal.png' %}" alt=""><div class="auth-terminal-shade"></div></div>
+  <section class="auth-card auth-message-card"><div class="auth-brand"><img class="auth-logo-mark" src="{% static 'images/stock-bazaar-bull-mark.png' %}" alt=""><div class="auth-brand-name"><span>Stock</span> <strong>Bazaar</strong></div></div>
+    <h1 class="auth-title">Registration received</h1><p class="auth-tagline">Thank you, {{ username }}.</p>{% if email_sent %}<p>We sent a verification link to your email. Open it first; then a Staff member or Admin can approve your account.</p>{% else %}<p>We could not send the verification email right now. Please contact Staff or Admin for help.</p>{% endif %}<p class="muted">After approval, we will send your temporary sign-in details to Telegram if you opted in. You can then choose a permanent password.</p><a class="btn auth-submit" href="{% url 'login' %}">Back to sign in</a>
+  </section>
+</div>
+{% endblock %}

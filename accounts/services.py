@@ -16,6 +16,9 @@ from django.core.mail import send_mail
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.urls import reverse
+from django.utils.http import urlsafe_base64_encode
+from django.utils.encoding import force_bytes
+from django.contrib.auth.tokens import default_token_generator
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 
@@ -107,6 +110,35 @@ def _deliver_temp_password_email(*, request, email: str, username: str, temp_pas
         logger.warning("Temp password email delivery was not accepted for %s (%s)", username, reason)
         return False
     return True
+
+
+def send_email_verification(*, request, user: User) -> bool:
+    """Send a time-limited, single-use proof-of-email link.
+
+    Django's built-in token generator binds the token to the account's
+    password hash and timestamp, so it cannot be guessed and becomes
+    invalid once the account state changes.
+    """
+    if not user.email or not getattr(settings, "EMAIL_HOST", ""):
+        return False
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = default_token_generator.make_token(user)
+    verify_url = request.build_absolute_uri(reverse("verify_email", args=[uid, token]))
+    try:
+        sent = send_mail(
+            subject="Verify your Bazaar email",
+            message=(
+                f"Hello {user.first_name},\n\nVerify your email address to complete your Bazaar registration:\n"
+                f"{verify_url}\n\nAfter verification, a Staff member or Admin must still approve your account."
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+        return sent == 1
+    except Exception:
+        logger.warning("Email verification delivery failed for %s", user.username, exc_info=True)
+        return False
 
 
 def _notify_admin_account_created(*, username: str, role: str) -> bool:
@@ -237,12 +269,11 @@ def demote_to_user(actor, target: User, request):
 
 
 @transaction.atomic
-def reset_password(actor, target: User, request) -> tuple[str, bool]:
+def reset_password(actor, target: User, request) -> tuple[str, bool, bool]:
     """Admin can reset a Staff or User's password; Staff can only reset a
     regular User's password (mirrors set_active's role guard). Returns
-    (temp_password, telegram_sent) — telegram_sent is False (not an
-    error) when the account has no telegram_chat_id on file yet, e.g.
-    one created before this feature existed."""
+    (temp_password, telegram_sent, email_sent). The approved/reset user
+    receives the credential through every configured delivery channel."""
     if not (is_admin(actor) or is_staff_member(actor)):
         raise PermissionDenied("Only Admin and Staff accounts can reset another account's password.")
     if is_admin(target) and not is_admin(actor):
@@ -270,4 +301,11 @@ def reset_password(actor, target: User, request) -> tuple[str, bool]:
         )
     else:
         logger.warning("No telegram_chat_id on file for %s; temp password shown on screen only", target.username)
-    return temp_password, telegram_sent
+    email_sent = _deliver_temp_password_email(
+        request=request,
+        email=target.email,
+        username=target.username,
+        temp_password=temp_password,
+        reason="password_reset",
+    )
+    return temp_password, telegram_sent, email_sent

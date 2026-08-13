@@ -1,5 +1,5 @@
 import hashlib
-from datetime import date
+from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -15,7 +15,7 @@ from market.services.predictor import RESEARCH_DISCLAIMER
 from market.services.screener import potential_shares, safe_buys, screen_summary, sell_candidates
 from market.services.signal_status import market_edge_status
 from market.services.task_status import record_task_run
-from notifications.models import Alert, AlertChannel, AdminReminder, MlDailyReportDelivery, MlDailyReportStatus, mask_recipient
+from notifications.models import Alert, AlertChannel, AlertRule, AlertRuleType, AdminReminder, MlDailyReportDelivery, MlDailyReportStatus, mask_recipient
 from notifications.services import TelegramPermanentError, TelegramTransientError, send_telegram_message, send_telegram_message_tracked
 
 
@@ -48,6 +48,73 @@ def deliver_admin_reminders():
         AdminReminder.objects.filter(pk=reminder.pk, delivered_at__isnull=True).update(delivered_at=now)
         delivered += 1
     return {"ok": True, "delivered": delivered}
+
+
+PERSONAL_ALERT_COOLDOWN = timedelta(hours=4)
+
+
+def _rule_trigger(rule, analysis):
+    """Return a safe, human-readable trigger message, or None.
+
+    Signal rules establish a baseline before alerting; this prevents a
+    newly-created rule from sending an old signal as if it just changed.
+    """
+    stock = rule.stock
+    if rule.rule_type == AlertRuleType.TARGET_PRICE and rule.target_price is not None and stock.last_price is not None:
+        if float(stock.last_price) >= float(rule.target_price):
+            return f"{stock.trading_code} reached BDT {stock.last_price:.2f} (your target: {rule.target_price})."
+    elif rule.rule_type == AlertRuleType.PERCENT_MOVE and rule.threshold_pct is not None and stock.last_change_pct is not None:
+        if abs(float(stock.last_change_pct)) >= float(rule.threshold_pct):
+            return f"{stock.trading_code} moved {stock.last_change_pct:+.2f}% today (your threshold: {rule.threshold_pct}%)."
+    elif rule.rule_type == AlertRuleType.SIGNAL_CHANGE and analysis:
+        current = analysis.action
+        if not rule.last_signal:
+            rule.last_signal = current
+            rule.save(update_fields=["last_signal", "updated_at"])
+        elif current != rule.last_signal:
+            old = rule.last_signal
+            rule.last_signal = current
+            rule.save(update_fields=["last_signal", "updated_at"])
+            return f"{stock.trading_code} signal changed from {old} to {current} (score {analysis.score:.0f})."
+    elif rule.rule_type == AlertRuleType.CONFIDENCE_CHANGE and analysis and rule.min_confidence is not None:
+        confidence = float(analysis.confidence or 0) * 100
+        if confidence >= float(rule.min_confidence):
+            rule.last_confidence = confidence
+            rule.save(update_fields=["last_confidence", "updated_at"])
+            return f"{stock.trading_code} prediction confidence is {confidence:.0f}% (your threshold: {rule.min_confidence}%)."
+    return None
+
+
+@shared_task(name="notifications.tasks.evaluate_personal_alert_rules")
+@record_task_run("notifications.tasks.evaluate_personal_alert_rules")
+def evaluate_personal_alert_rules():
+    """Evaluate user rules from persisted data, then deliver in-app and/or Telegram.
+
+    A four-hour cooldown applies per rule. Telegram is sent only where the
+    user enabled both the profile-wide consent and the individual rule.
+    """
+    now = timezone.now()
+    delivered = 0
+    rules = AlertRule.objects.filter(is_active=True).select_related("stock", "user", "user__profile")
+    for rule in rules:
+        if rule.last_triggered_at and now - rule.last_triggered_at < PERSONAL_ALERT_COOLDOWN:
+            continue
+        analysis = rule.stock.analyses.order_by("-as_of").first()
+        message = _rule_trigger(rule, analysis)
+        if not message:
+            continue
+        title = f"Alert: {rule.stock.trading_code}"
+        if rule.in_app_enabled:
+            Alert.objects.create(user=rule.user, stock=rule.stock, analysis=analysis, rule=rule, channel=AlertChannel.IN_APP, title=title, message=message, is_sent=True, sent_at=now)
+        profile = getattr(rule.user, "profile", None)
+        if rule.telegram_enabled and profile and profile.telegram_alerts and profile.telegram_chat_id:
+            sent = send_telegram_message(profile.telegram_chat_id, f"{title}\n{message}\n\n{RESEARCH_DISCLAIMER}")
+            if sent:
+                Alert.objects.create(user=rule.user, stock=rule.stock, analysis=analysis, rule=rule, channel=AlertChannel.TELEGRAM, title=title, message=message, is_sent=True, sent_at=now)
+        rule.last_triggered_at = now
+        rule.save(update_fields=["last_triggered_at", "updated_at"])
+        delivered += 1
+    return {"ok": True, "triggered_rules": delivered}
 
 
 def _digest_text() -> str:

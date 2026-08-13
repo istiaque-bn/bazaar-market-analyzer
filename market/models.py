@@ -872,6 +872,38 @@ class Portfolio(models.Model):
         return f"{self.user.username}: {self.name}"
 
 
+class PortfolioGoal(models.Model):
+    """A lightweight personal target; portfolio values remain derived from the ledger."""
+
+    portfolio = models.OneToOneField(Portfolio, on_delete=models.CASCADE, related_name="goal")
+    target_value = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    target_date = models.DateField(null=True, blank=True)
+    max_single_position_pct = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("35.00"))
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Goal: {self.portfolio}"
+
+
+class ResearchNote(models.Model):
+    """Private thesis notes: personal research, never an investment recommendation."""
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="research_notes")
+    stock = models.ForeignKey(Stock, on_delete=models.CASCADE, related_name="research_notes")
+    title = models.CharField(max_length=140)
+    body = models.TextField(max_length=4000)
+    target_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        indexes = [models.Index(fields=["user", "stock", "-updated_at"])]
+
+    def __str__(self):
+        return f"{self.user.username}: {self.stock.trading_code} — {self.title}"
+
+
 class TransactionType(models.TextChoices):
     BUY = "BUY", "Buy"
     SELL = "SELL", "Sell"

@@ -26,7 +26,7 @@
   <select name="status">
     <option value="">Active &amp; inactive</option>
     <option value="active" {% if status == 'active' %}selected{% endif %}>Active only</option>
-    <option value="inactive" {% if status == 'inactive' %}selected{% endif %}>Inactive only</option>
+    <option value="inactive" {% if status == 'inactive' %}selected{% endif %}>Pending / inactive</option>
   </select>
   <button class="btn btn-small" type="submit">Filter</button>
 </form>
@@ -35,7 +35,7 @@
 <div class="table-wrap">
   <table>
     <thead>
-      <tr><th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Joined</th></tr>
+      <tr><th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Email</th><th>Joined</th></tr>
     </thead>
     <tbody>
       {% for u, r in rows %}
@@ -44,7 +44,8 @@
           <td>{{ u.get_full_name|default:"—" }}</td>
           <td>{{ u.email|default:"—" }}</td>
           <td><span class="badge badge-role-{{ r|lower }}">{{ r }}</span></td>
-          <td><span class="badge {% if u.is_active %}badge-active{% else %}badge-inactive{% endif %}">{% if u.is_active %}Active{% else %}Inactive{% endif %}</span></td>
+          <td><span class="badge {% if u.is_active %}badge-active{% else %}badge-inactive{% endif %}">{% if u.is_active %}Active{% elif u.profile.is_pending_approval %}Pending approval{% else %}Inactive{% endif %}</span></td>
+          <td>{% if u.profile.email_verified_at %}<span class="up">Verified</span>{% elif u.profile.is_pending_approval %}<span class="down">Pending</span>{% else %}<span class="muted">—</span>{% endif %}</td>
           <td>{{ u.date_joined|date:"d M Y" }}</td>
         </tr>
       {% endfor %}

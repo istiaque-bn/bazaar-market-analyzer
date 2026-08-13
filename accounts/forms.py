@@ -57,6 +57,40 @@ class BazaarAuthenticationForm(AuthenticationForm):
     )
 
 
+class SelfRegistrationForm(forms.Form):
+    """Public registration deliberately exposes no role or privilege fields."""
+
+    username = forms.CharField(max_length=150, min_length=3, widget=forms.TextInput(attrs={"autocomplete": "username"}))
+    first_name = forms.CharField(max_length=150, widget=forms.TextInput(attrs={"autocomplete": "given-name"}))
+    last_name = forms.CharField(max_length=150, required=False, widget=forms.TextInput(attrs={"autocomplete": "family-name"}))
+    email = forms.EmailField(widget=forms.EmailInput(attrs={"autocomplete": "email"}))
+    telegram_opt_in = forms.BooleanField(required=False, label="Receive alerts through Telegram")
+    telegram_chat_id = forms.CharField(required=False, max_length=64, label="Telegram chat ID")
+
+    def clean_username(self):
+        username = self.cleaned_data["username"].strip()
+        if User.objects.filter(username__iexact=username).exists():
+            raise forms.ValidationError("That username is already taken.")
+        return username
+
+    def clean_email(self):
+        email = (self.cleaned_data.get("email") or "").strip()
+        if User.objects.filter(email__iexact=email).exists():
+            raise forms.ValidationError("An account with that email already exists.")
+        return email
+
+    def clean(self):
+        cleaned = super().clean()
+        chat_id = (cleaned.get("telegram_chat_id") or "").strip()
+        if cleaned.get("telegram_opt_in"):
+            if not _TELEGRAM_CHAT_ID_RE.match(chat_id):
+                self.add_error("telegram_chat_id", "Enter your numeric Telegram chat ID.")
+            cleaned["telegram_chat_id"] = chat_id
+        else:
+            cleaned["telegram_chat_id"] = ""
+        return cleaned
+
+
 class _BaseAccountCreateForm(forms.Form):
     """Shared identity fields for account creation. Deliberately a plain
     Form (not a ModelForm bound to User) — the view never round-trips

@@ -164,6 +164,8 @@
                 <a href="{% url 'dashboard' %}">Market screener</a>
                 <a href="{% url 'backtests' %}">Backtests</a>
                 <a href="{% url 'alerts' %}">Alerts</a>
+                <a href="{% url 'compare_stocks' %}">Compare stocks</a>
+                <a href="{% url 'sector_heatmap' %}">Sector heatmap</a>
                 {% if is_admin_role %}<a href="{% url 'feedback_admin_dashboard' %}">Feedback</a>{% endif %}
                 {% if is_admin_role %}<a href="{% url 'admin_reminders' %}">Reminders</a>{% endif %}
               </div>

@@ -4,7 +4,7 @@
 <div class="section-title">
   <div>
     <h2>{{ target.username }} <span class="badge badge-role-{{ target_role|lower }}">{{ target_role }}</span>
-      <span class="badge {% if target.is_active %}badge-active{% else %}badge-inactive{% endif %}">{% if target.is_active %}Active{% else %}Inactive{% endif %}</span>
+      <span class="badge {% if target.is_active %}badge-active{% else %}badge-inactive{% endif %}">{% if target.is_active %}Active{% elif target.profile.is_pending_approval %}Pending approval{% else %}Inactive{% endif %}</span>
     </h2>
     <p class="muted">{{ target.get_full_name|default:"No name on file" }} · {{ target.email|default:"No email on file" }}</p>
   </div>
@@ -16,6 +16,7 @@
     <p><strong>Joined:</strong> {{ target.date_joined|date:"d M Y, H:i" }}</p>
     <p><strong>Last login:</strong> {{ target.last_login|date:"d M Y, H:i"|default:"Never" }}</p>
     <p><strong>Created by:</strong> {{ target.profile.created_by.username|default:"—" }}</p>
+    <p><strong>Email verification:</strong> {% if target.profile.email_verified_at %}<span class="up">Verified {{ target.profile.email_verified_at|date:"d M Y, H:i" }}</span>{% elif target.profile.is_pending_approval %}<span class="down">Awaiting verification</span>{% else %}<span class="muted">Not verified</span>{% endif %}</p>
 
     <h3 style="margin-top:1.2rem;">Actions</h3>
     {% if is_last_active_admin %}
@@ -33,7 +34,7 @@
       {% else %}
         <form method="post" action="{% url 'account_activate' target.id %}">
           {% csrf_token %}
-          <button class="btn btn-small" type="submit">Activate</button>
+          <button class="btn btn-small" type="submit">{% if target.profile.is_pending_approval %}Approve &amp; activate{% else %}Activate{% endif %}</button>
         </form>
       {% endif %}
 

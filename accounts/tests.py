@@ -5,6 +5,9 @@ from django.contrib.auth.models import User
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 
 from accounts.models import UserProfile
 from accounts.roles import is_admin, is_regular_user, is_staff_member, role_name
@@ -149,18 +152,45 @@ class AnonymousAccessTests(TestCase):
         response = self.client.get("/api/stocks/")
         self.assertEqual(response.status_code, 401)
 
-    def test_old_signup_route_never_creates_an_account(self):
-        before = User.objects.count()
-        response = self.client.post(
-            reverse("signup"), {"username": "sneak_signup", "password1": PASSWORD, "password2": PASSWORD}
-        )
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(User.objects.count(), before)
-        self.assertFalse(User.objects.filter(username="sneak_signup").exists())
-
-    def test_signup_get_also_refused(self):
+    def test_signup_get_renders_registration_form(self):
         response = self.client.get(reverse("signup"))
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Create your account")
+
+    def test_signup_creates_regular_user_pending_approval(self):
+        response = self.client.post(
+            reverse("signup"), {"username": "new_signup", "first_name": "New", "email": "new@example.com"}
+        )
+        self.assertEqual(response.status_code, 200)
+        user = User.objects.get(username="new_signup")
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.is_superuser)
+        self.assertFalse(user.is_active)
+        self.assertTrue(user.profile.is_pending_approval)
+        self.assertFalse(user.profile.must_change_password)
+
+    def test_signup_telegram_opt_in_requires_a_numeric_chat_id(self):
+        response = self.client.post(reverse("signup"), {"username": "needs_chat", "telegram_opt_in": "on", "telegram_chat_id": "not-an-id"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "numeric Telegram chat ID")
+        self.assertFalse(User.objects.filter(username="needs_chat").exists())
+
+    @override_settings(EMAIL_HOST="smtp.example.test", DEFAULT_FROM_EMAIL="noreply@example.test")
+    @mock.patch("accounts.services.send_mail", return_value=1)
+    def test_signup_requires_email_verification_before_approval(self, _mail):
+        self.client.post(reverse("signup"), {"username": "verify_me", "first_name": "Verify", "email": "verify@example.com"})
+        user = User.objects.get(username="verify_me")
+        staff = make_staff("approval_staff")
+        self.client.force_login(staff)
+        response = self.client.post(reverse("account_activate", args=[user.id]))
+        self.assertRedirects(response, reverse("account_detail", args=[user.id]))
+        user.refresh_from_db()
+        self.assertFalse(user.is_active)
+        token = default_token_generator.make_token(user)
+        response = self.client.get(reverse("verify_email", args=[urlsafe_base64_encode(force_bytes(user.pk)), token]))
+        self.assertEqual(response.status_code, 200)
+        user.profile.refresh_from_db()
+        self.assertIsNotNone(user.profile.email_verified_at)
 
 
 class LoginRedirectTests(TestCase):

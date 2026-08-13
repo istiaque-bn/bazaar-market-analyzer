@@ -7,7 +7,7 @@ from django import forms
 from django.db.models import Q
 from django.utils import timezone
 
-from market.models import Portfolio, Stock, TransactionType
+from market.models import Portfolio, PortfolioGoal, ResearchNote, Stock, TransactionType
 from market.services.exchange_config import enabled_exchanges
 
 
@@ -31,6 +31,34 @@ class PortfolioForm(forms.ModelForm):
         if self._user is not None and qs.exists():
             raise forms.ValidationError("You already have a portfolio with this name.")
         return name
+
+
+class PortfolioGoalForm(forms.ModelForm):
+    class Meta:
+        model = PortfolioGoal
+        fields = ["target_value", "target_date", "max_single_position_pct"]
+        widgets = {
+            "target_value": forms.NumberInput(attrs={"min": "0", "step": "0.01", "placeholder": "e.g. 250000"}),
+            "target_date": forms.DateInput(attrs={"type": "date"}),
+            "max_single_position_pct": forms.NumberInput(attrs={"min": "1", "max": "100", "step": "1"}),
+        }
+
+    def clean_max_single_position_pct(self):
+        value = self.cleaned_data["max_single_position_pct"]
+        if not 1 <= value <= 100:
+            raise forms.ValidationError("Set a concentration limit between 1% and 100%.")
+        return value
+
+
+class ResearchNoteForm(forms.ModelForm):
+    class Meta:
+        model = ResearchNote
+        fields = ["title", "body", "target_price"]
+        widgets = {
+            "title": forms.TextInput(attrs={"placeholder": "Your investment thesis", "maxlength": 140}),
+            "body": forms.Textarea(attrs={"rows": 5, "placeholder": "What supports or challenges this idea?"}),
+            "target_price": forms.NumberInput(attrs={"min": "0", "step": "0.01", "placeholder": "Optional"}),
+        }
 
 
 def _stock_label(stock: Stock) -> str:

@@ -23,8 +23,24 @@
     {% endif %}
     <a class="btn btn-small btn-gold" href="{% url 'portfolio_add_holding' portfolio.id %}">+ Add holding</a>
     <a class="btn btn-small btn-ghost" href="{% url 'portfolio_add_transaction' portfolio.id %}">+ Add transaction</a>
+    <a class="btn btn-small btn-ghost" href="{% url 'portfolio_export_csv' portfolio.id %}">Export CSV</a>
     <button class="btn btn-small btn-ghost" type="button" id="portfolioRefreshBtn">↻ Refresh</button>
   </div>
+</div>
+
+<div class="grid-2" style="margin-top:1rem;">
+  <section class="panel">
+    <h3>Goal tracker</h3>
+    {% if goal.target_value %}
+      <p><strong>{{ risk.goal_progress }}%</strong> of your BDT {{ goal.target_value|floatformat:0 }} target{% if goal.target_date %} by {{ goal.target_date|date:"d M Y" }}{% endif %}.</p>
+      <div class="alloc-bar"><div class="alloc-bar-fill" style="width:{% if risk.goal_progress > 100 %}100{% else %}{{ risk.goal_progress }}{% endif %}%;"></div></div>
+    {% else %}<p class="muted">Set a value target to track your progress.</p>{% endif %}
+  </section>
+  <section class="panel">
+    <h3>Risk snapshot</h3>
+    <p>Largest position: <strong>{{ risk.largest_position|floatformat:1 }}%</strong> · personal limit: {{ risk.limit|floatformat:0 }}%</p>
+    <p class="{% if risk.is_concentrated %}down{% else %}up{% endif %}">{% if risk.is_concentrated %}One holding exceeds your concentration limit.{% else %}No holding exceeds your selected concentration limit.{% endif %}</p>
+  </section>
 </div>
 
 <div class="disclaimer">{{ disclaimer }}</div>
@@ -236,6 +252,16 @@
         <input type="text" name="name" maxlength="64" placeholder="e.g. Long-term, Trading" required>
       </label>
       <button class="btn btn-small" type="submit">Create portfolio</button>
+    </form>
+  </section>
+  <section class="panel">
+    <h3>Goal & risk preference</h3>
+    <form method="post" action="{% url 'portfolio_goal_save' portfolio.id %}" class="form">
+      {% csrf_token %}
+      <label>Target portfolio value {{ goal_form.target_value }}</label>
+      <label>Target date {{ goal_form.target_date }}</label>
+      <label>Maximum single-position allocation (%) {{ goal_form.max_single_position_pct }}</label>
+      <button class="btn btn-small" type="submit">Save goal</button>
     </form>
   </section>
   <section class="panel">
