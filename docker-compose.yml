@@ -76,6 +76,13 @@ services:
       TELEGRAM_ML_DAILY_REPORT: ${TELEGRAM_ML_DAILY_REPORT:-True}
       TELEGRAM_ML_REPORT_TIME: ${TELEGRAM_ML_REPORT_TIME:-17:00}
       TELEGRAM_ML_REPORT_TIMEZONE: ${TELEGRAM_ML_REPORT_TIMEZONE:-Asia/Dhaka}
+      # SMTP is optional; when EMAIL_HOST is set Django sends real email
+      # instead of writing messages to the console backend.
+      EMAIL_HOST: ${EMAIL_HOST:-}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
+      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
+      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-noreply@bazaar.local}
     volumes:
       - ./data:/app/data
     ports:
