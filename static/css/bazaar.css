@@ -651,6 +651,7 @@ body.nav-open { overflow: hidden; }
   width: min(100%, 520px);
   margin: 1rem auto;
   text-align: center;
+  position: relative;
 }
 .single-card-header h2 {
   margin: 0 0 .35rem;
@@ -661,7 +662,8 @@ body.nav-open { overflow: hidden; }
   letter-spacing: -0.055em;
   line-height: 1;
 }
-.single-card-header > a { display: inline-block; }
+.single-card-header > a { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+@media (max-width: 560px) { .single-card-header > a { position: static; transform: none; display: inline-block; margin-top: .55rem; } }
 .panel h2, .panel h3 {
   font-family: var(--font-display);
   margin: 0 0 0.8rem;
