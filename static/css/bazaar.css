@@ -1,3 +1,18 @@
+@font-face {
+  font-family: "Noto Sans Bengali";
+  src: url("../fonts/NotoSansBengali-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Noto Sans Bengali";
+  src: url("../fonts/NotoSansBengali-Bold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
 :root {
   --ink: #14231c;
   --muted: #4d6358;
@@ -15,6 +30,13 @@
   --radius: 18px;
   --font-display: "Fraunces", Georgia, serif;
   --font-body: "Outfit", system-ui, sans-serif;
+}
+
+/* Bangla is selected through the navbar language switch. Keep English
+   typography unchanged while ensuring Bengali glyphs are locally served. */
+html[lang="bn"] {
+  --font-body: "Noto Sans Bengali", "Noto Sans Bengali UI", sans-serif;
+  --font-display: "Noto Sans Bengali", "Noto Sans Bengali UI", sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -413,6 +435,18 @@ a:hover { color: var(--gold); }
 
 /* Account area */
 .nav-account { display: flex; align-items: center; gap: 0.7rem; flex: none; }
+.nav-language-form { margin: 0; }
+.nav-language-form select {
+  min-height: 2.35rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 0.35rem 1.8rem 0.35rem 0.55rem;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
 .nav-user-btn { gap: 0.55rem; padding: 0.35rem 0.6rem 0.35rem 0.35rem; }
 .nav-avatar {
   width: 1.9rem; height: 1.9rem;
@@ -517,6 +551,8 @@ a:hover { color: var(--gold); }
     padding-top: 0.9rem;
     border-top: 1px solid var(--line);
   }
+  .nav-language-form { width: 100%; }
+  .nav-language-form select { width: 100%; }
   .nav-user { width: 100%; }
   .nav-user-btn { width: 100%; justify-content: flex-start; min-height: 44px; }
   .nav-username { max-width: none; flex: 1; }

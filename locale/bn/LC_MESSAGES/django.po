@@ -1,0 +1,130 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Bazaar\n"
+"Language: bn\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Open navigation menu"
+msgstr "নেভিগেশন মেনু খুলুন"
+
+msgid "Close navigation menu"
+msgstr "নেভিগেশন মেনু বন্ধ করুন"
+
+msgid "Menu"
+msgstr "মেনু"
+
+msgid "Admin Panel"
+msgstr "অ্যাডমিন প্যানেল"
+
+msgid "Staff Panel"
+msgstr "স্টাফ প্যানেল"
+
+msgid "My Panel"
+msgstr "আমার প্যানেল"
+
+msgid "Stocks"
+msgstr "শেয়ারসমূহ"
+
+msgid "Accounts"
+msgstr "অ্যাকাউন্টসমূহ"
+
+msgid "Users"
+msgstr "ব্যবহারকারীরা"
+
+msgid "Feedback"
+msgstr "মতামত"
+
+msgid "Portfolio"
+msgstr "পোর্টফোলিও"
+
+msgid "Watchlist"
+msgstr "ওয়াচলিস্ট"
+
+msgid "Tools"
+msgstr "টুলস"
+
+msgid "Approved Tools"
+msgstr "অনুমোদিত টুলস"
+
+msgid "Market screener"
+msgstr "মার্কেট স্ক্রিনার"
+
+msgid "Backtests"
+msgstr "ব্যাকটেস্ট"
+
+msgid "Alerts"
+msgstr "সতর্কতা"
+
+msgid "Compare stocks"
+msgstr "শেয়ার তুলনা"
+
+msgid "Sector heatmap"
+msgstr "সেক্টর হিটম্যাপ"
+
+msgid "Operations"
+msgstr "অপারেশনস"
+
+msgid "Data QA"
+msgstr "ডেটা মান"
+
+msgid "ML Reliability"
+msgstr "এমএল নির্ভরযোগ্যতা"
+
+msgid "Paper Trading"
+msgstr "পেপার ট্রেডিং"
+
+msgid "Django Admin"
+msgstr "জ্যাঙ্গো অ্যাডমিন"
+
+msgid "Language"
+msgstr "ভাষা"
+
+msgid "Profile"
+msgstr "প্রোফাইল"
+
+msgid "Logout"
+msgstr "লগআউট"
+
+msgid "Login"
+msgstr "লগইন"
+
+msgid "DSE quotes loading…"
+msgstr "ডিএসই মূল্য লোড হচ্ছে…"
+
+msgid "CSE quotes loading…"
+msgstr "সিএসই মূল্য লোড হচ্ছে…"
+
+msgid "analyses"
+msgstr "বিশ্লেষণ করে"
+
+msgid "using approximately one year of price history. Signals are probabilistic estimates — not financial advice."
+msgstr "প্রায় এক বছরের মূল্য ইতিহাস ব্যবহার করে। সংকেতগুলো সম্ভাব্যতার ভিত্তিতে তৈরি অনুমান — এগুলো আর্থিক পরামর্শ নয়।"
+
+msgid "Market dashboard"
+msgstr "মার্কেট ড্যাশবোর্ড"
+
+msgid "As of"
+msgstr "তারিখ"
+
+msgid "scored instruments"
+msgstr "স্কোর করা শেয়ার"
+
+msgid "Live DSE data last updated at"
+msgstr "লাইভ ডিএসই ডেটা সর্বশেষ আপডেট হয়েছে"
+
+msgid "DSE market closed · last verified data"
+msgstr "ডিএসই বাজার বন্ধ · সর্বশেষ যাচাইকৃত ডেটা"
+
+msgid "Buy signals"
+msgstr "কেনার সংকেত"
+
+msgid "Sell signals"
+msgstr "বিক্রির সংকেত"
+
+msgid "Research candidates"
+msgstr "গবেষণার জন্য শেয়ার"
+
+msgid "Watch"
+msgstr "পর্যবেক্ষণ"

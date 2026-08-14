@@ -1,12 +1,13 @@
 {% extends "base.html" %}
+{% load i18n %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
 <div class="section-title">
   <div>
-    <h2>Market dashboard</h2>
-    <p class="muted">As of {{ summary.as_of }} · {{ summary.total }} scored instruments</p>
+    <h2>{% translate "Market dashboard" %}</h2>
+    <p class="muted">{% translate "As of" %} {{ summary.as_of }} · {{ summary.total }} {% translate "scored instruments" %}</p>
     <p class="muted">
-      {% if dse_session.is_open %}Live DSE data last updated at{% else %}DSE market closed · last verified data{% endif %}
+      {% if dse_session.is_open %}{% translate "Live DSE data last updated at" %}{% else %}{% translate "DSE market closed · last verified data" %}{% endif %}
       <span id="dataLastUpdated" data-iso="{% if data_last_updated %}{{ data_last_updated|date:'c' }}{% endif %}">{% if data_last_updated %}{{ data_last_updated|date:"d M Y, H:i" }}{% else %}—{% endif %}</span>
       {% if not dse_session.is_open %}· next session opens {{ dse_session.next_when }}{% endif %}
     </p>
@@ -31,10 +32,10 @@
 {% endif %}
 
 <div class="grid-4">
-  <div class="stat"><div class="label">Buy signals</div><div class="value">{{ summary.buy }}</div></div>
-  <div class="stat"><div class="label">Sell signals</div><div class="value">{{ summary.sell }}</div></div>
-  <div class="stat"><div class="label">Research candidates</div><div class="value">{{ summary.research_candidates }}</div></div>
-  <div class="stat"><div class="label">Watch</div><div class="value">{{ summary.watch }}</div></div>
+  <div class="stat"><div class="label">{% translate "Buy signals" %}</div><div class="value">{{ summary.buy }}</div></div>
+  <div class="stat"><div class="label">{% translate "Sell signals" %}</div><div class="value">{{ summary.sell }}</div></div>
+  <div class="stat"><div class="label">{% translate "Research candidates" %}</div><div class="value">{{ summary.research_candidates }}</div></div>
+  <div class="stat"><div class="label">{% translate "Watch" %}</div><div class="value">{{ summary.watch }}</div></div>
 </div>
 
 {% if sentiment %}

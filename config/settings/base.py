@@ -60,6 +60,9 @@ MIDDLEWARE = [
     # tagged with a request_id (see config/logging_utils.py).
     "market.middleware.RequestIDMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    # Reads the language stored by Django's POST-only set_language view.
+    # It must follow sessions and precede CommonMiddleware/view rendering.
+    "django.middleware.locale.LocaleMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -116,7 +119,12 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-LANGUAGE_CODE = "en-us"
+LANGUAGE_CODE = "en"
+LANGUAGES = [
+    ("en", "English"),
+    ("bn", "বাংলা"),
+]
+LOCALE_PATHS = [BASE_DIR / "locale"]
 # TIME_ZONE set above from env (default Asia/Dhaka)
 USE_I18N = True
 USE_TZ = True

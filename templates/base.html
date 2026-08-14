@@ -1,5 +1,7 @@
+{% load i18n %}
+{% get_current_language as CURRENT_LANGUAGE %}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ CURRENT_LANGUAGE }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -43,7 +45,7 @@
               {% endif %}
             </a>
           {% empty %}
-            <span class="ticker-item">DSE quotes loading…</span>
+            <span class="ticker-item">{% translate "DSE quotes loading…" %}</span>
           {% endfor %}
         </div>
       </div>
@@ -79,7 +81,7 @@
               {% endif %}
             </a>
           {% empty %}
-            <span class="ticker-item">CSE quotes loading…</span>
+            <span class="ticker-item">{% translate "CSE quotes loading…" %}</span>
           {% endfor %}
         </div>
       </div>
@@ -101,7 +103,7 @@
           <div class="market-status-chip {% if market_hours.dse.is_open %}is-open{% else %}is-closed{% endif %}" data-ex="DSE">
             <span class="ms-ex">DSE</span>
             <span class="ms-state">{{ market_hours.dse.status }}</span>
-            <span class="ms-next">{% if market_hours.dse.is_open %}closes{% else %}opens{% endif %} {{ market_hours.dse.next_when }}</span>
+            <span class="ms-next">{% if market_hours.dse.is_open %}Closes{% else %}Opens{% endif %} {{ market_hours.dse.next_when }}</span>
           </div>
           {% if cse_enabled %}
           <div class="market-status-chip {% if market_hours.cse.is_open %}is-open{% else %}is-closed{% endif %}" data-ex="CSE">
@@ -113,7 +115,7 @@
         </div>
         {% endif %}
       </div>
-      <button type="button" class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="siteNav" aria-label="Open navigation menu">
+      <button type="button" class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="siteNav" aria-label="{% translate 'Open navigation menu' %}">
         <span class="nav-toggle-bars" aria-hidden="true"><span></span><span></span><span></span></span>
       </button>
 
@@ -122,8 +124,8 @@
       <nav class="site-nav" id="siteNav" aria-label="Primary">
         <div class="site-nav-panel">
           <div class="nav-panel-head">
-            <span class="nav-panel-title">Menu</span>
-            <button type="button" class="nav-close" id="navClose" aria-label="Close navigation menu">
+            <span class="nav-panel-title">{% translate "Menu" %}</span>
+            <button type="button" class="nav-close" id="navClose" aria-label="{% translate 'Close navigation menu' %}">
               <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
@@ -131,58 +133,58 @@
           {% if user.is_authenticated %}
           <ul class="nav-links">
             {% if is_admin_role %}
-              <li><a href="{% url 'admin_panel' %}" class="{% if active_nav == 'panel' %}active{% endif %}"{% if active_nav == 'panel' %} aria-current="page"{% endif %}><span>Admin Panel</span></a></li>
+              <li><a href="{% url 'admin_panel' %}" class="{% if active_nav == 'panel' %}active{% endif %}"{% if active_nav == 'panel' %} aria-current="page"{% endif %}><span>{% translate "Admin Panel" %}</span></a></li>
             {% elif is_staff_role %}
-              <li><a href="{% url 'staff_panel' %}" class="{% if active_nav == 'panel' %}active{% endif %}"{% if active_nav == 'panel' %} aria-current="page"{% endif %}><span>Staff Panel</span></a></li>
+              <li><a href="{% url 'staff_panel' %}" class="{% if active_nav == 'panel' %}active{% endif %}"{% if active_nav == 'panel' %} aria-current="page"{% endif %}><span>{% translate "Staff Panel" %}</span></a></li>
             {% else %}
-              <li><a href="{% url 'user_panel' %}" class="{% if active_nav == 'panel' %}active{% endif %}"{% if active_nav == 'panel' %} aria-current="page"{% endif %}><span>My Panel</span></a></li>
+              <li><a href="{% url 'user_panel' %}" class="{% if active_nav == 'panel' %}active{% endif %}"{% if active_nav == 'panel' %} aria-current="page"{% endif %}><span>{% translate "My Panel" %}</span></a></li>
             {% endif %}
 
             <li>
               <a href="{% url 'stock_list' %}" class="{% if active_nav == 'stocks' %}active{% endif %}"{% if active_nav == 'stocks' %} aria-current="page"{% endif %}>
-                <span>Stocks</span>
+                <span>{% translate "Stocks" %}</span>
               </a>
             </li>
 
             {% if is_admin_role %}
-              <li><a href="{% url 'account_list' %}" class="{% if active_nav == 'accounts' %}active{% endif %}"{% if active_nav == 'accounts' %} aria-current="page"{% endif %}><span>Accounts</span></a></li>
+              <li><a href="{% url 'account_list' %}" class="{% if active_nav == 'accounts' %}active{% endif %}"{% if active_nav == 'accounts' %} aria-current="page"{% endif %}><span>{% translate "Accounts" %}</span></a></li>
             {% elif is_staff_role %}
-              <li><a href="{% url 'account_list' %}" class="{% if active_nav == 'accounts' %}active{% endif %}"{% if active_nav == 'accounts' %} aria-current="page"{% endif %}><span>Users</span></a></li>
-              <li><a href="{% url 'feedback_triage_list' %}" class="{% if active_nav == 'feedback' %}active{% endif %}"{% if active_nav == 'feedback' %} aria-current="page"{% endif %}><span>Feedback</span></a></li>
+              <li><a href="{% url 'account_list' %}" class="{% if active_nav == 'accounts' %}active{% endif %}"{% if active_nav == 'accounts' %} aria-current="page"{% endif %}><span>{% translate "Users" %}</span></a></li>
+              <li><a href="{% url 'feedback_triage_list' %}" class="{% if active_nav == 'feedback' %}active{% endif %}"{% if active_nav == 'feedback' %} aria-current="page"{% endif %}><span>{% translate "Feedback" %}</span></a></li>
             {% else %}
-              <li><a href="{% url 'portfolio_redirect' %}" class="{% if active_nav == 'portfolio' %}active{% endif %}"{% if active_nav == 'portfolio' %} aria-current="page"{% endif %}><span>Portfolio</span></a></li>
-              <li><a href="{% url 'watchlist' %}" class="{% if active_nav == 'watchlist' %}active{% endif %}"{% if active_nav == 'watchlist' %} aria-current="page"{% endif %}><span>Watchlist</span></a></li>
-              <li><a href="{% url 'feedback_my_list' %}" class="{% if active_nav == 'feedback' %}active{% endif %}"{% if active_nav == 'feedback' %} aria-current="page"{% endif %}><span>Feedback</span></a></li>
+              <li><a href="{% url 'portfolio_redirect' %}" class="{% if active_nav == 'portfolio' %}active{% endif %}"{% if active_nav == 'portfolio' %} aria-current="page"{% endif %}><span>{% translate "Portfolio" %}</span></a></li>
+              <li><a href="{% url 'watchlist' %}" class="{% if active_nav == 'watchlist' %}active{% endif %}"{% if active_nav == 'watchlist' %} aria-current="page"{% endif %}><span>{% translate "Watchlist" %}</span></a></li>
+              <li><a href="{% url 'feedback_my_list' %}" class="{% if active_nav == 'feedback' %}active{% endif %}"{% if active_nav == 'feedback' %} aria-current="page"{% endif %}><span>{% translate "Feedback" %}</span></a></li>
             {% endif %}
 
             <li class="nav-dropdown">
               <button type="button" class="nav-dropdown-btn{% if active_nav == 'tools' %} active{% endif %}" aria-haspopup="true" aria-expanded="false" aria-controls="toolsMenu"{% if active_nav == 'tools' %} aria-current="true"{% endif %}>
-                <span>{% if is_admin_role %}Tools{% elif is_staff_role %}Approved Tools{% else %}Tools{% endif %}</span>
+                <span>{% if is_admin_role %}{% translate "Tools" %}{% elif is_staff_role %}{% translate "Approved Tools" %}{% else %}{% translate "Tools" %}{% endif %}</span>
                 <svg class="nav-icon nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="6 9 12 15 18 9"/></svg>
               </button>
               <div class="nav-dropdown-menu" id="toolsMenu">
-                <a href="{% url 'dashboard' %}">Market screener</a>
-                <a href="{% url 'backtests' %}">Backtests</a>
-                <a href="{% url 'alerts' %}">Alerts</a>
-                <a href="{% url 'compare_stocks' %}">Compare stocks</a>
-                <a href="{% url 'sector_heatmap' %}">Sector heatmap</a>
-                {% if is_admin_role %}<a href="{% url 'feedback_admin_dashboard' %}">Feedback</a>{% endif %}
-                {% if is_admin_role %}<a href="{% url 'admin_reminders' %}">Reminders</a>{% endif %}
+                <a href="{% url 'dashboard' %}">{% translate "Market screener" %}</a>
+                <a href="{% url 'backtests' %}">{% translate "Backtests" %}</a>
+                <a href="{% url 'alerts' %}">{% translate "Alerts" %}</a>
+                <a href="{% url 'compare_stocks' %}">{% translate "Compare stocks" %}</a>
+                <a href="{% url 'sector_heatmap' %}">{% translate "Sector heatmap" %}</a>
+                {% if is_admin_role %}<a href="{% url 'feedback_admin_dashboard' %}">{% translate "Feedback" %}</a>{% endif %}
+                {% if is_admin_role %}<a href="{% url 'admin_reminders' %}">{% translate "Reminders" %}</a>{% endif %}
               </div>
             </li>
 
             {% if is_admin_role or is_staff_role %}
               <li class="nav-dropdown">
                 <button type="button" class="nav-dropdown-btn{% if active_nav == 'admin' %} active{% endif %}" aria-haspopup="true" aria-expanded="false" aria-controls="staffMenu"{% if active_nav == 'admin' %} aria-current="true"{% endif %}>
-                  <span>Operations</span>
+                  <span>{% translate "Operations" %}</span>
                   <svg class="nav-icon nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="6 9 12 15 18 9"/></svg>
                 </button>
                 <div class="nav-dropdown-menu" id="staffMenu">
-                  <a href="{% url 'data_quality' %}">Data QA</a>
-                  <a href="{% url 'ops_report' %}">Operations</a>
-                  {% if is_admin_role %}<a href="{% url 'ml_reliability' %}">ML Reliability</a>{% endif %}
-                  {% if is_admin_role %}<a href="{% url 'paper_trading' %}">Paper Trading</a>{% endif %}
-                  {% if is_admin_role %}<a href="/admin/">Django Admin</a>{% endif %}
+                  <a href="{% url 'data_quality' %}">{% translate "Data QA" %}</a>
+                  <a href="{% url 'ops_report' %}">{% translate "Operations" %}</a>
+                  {% if is_admin_role %}<a href="{% url 'ml_reliability' %}">{% translate "ML Reliability" %}</a>{% endif %}
+                  {% if is_admin_role %}<a href="{% url 'paper_trading' %}">{% translate "Paper Trading" %}</a>{% endif %}
+                  {% if is_admin_role %}<a href="/admin/">{% translate "Django Admin" %}</a>{% endif %}
                 </div>
               </li>
             {% endif %}
@@ -190,6 +192,14 @@
           {% endif %}
 
           <div class="nav-account">
+            <form class="nav-language-form" method="post" action="{% url 'set_language' %}">
+              {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+              <label class="sr-only" for="languageSelect">{% translate "Language" %}</label>
+              <select id="languageSelect" name="language" onchange="this.form.submit()">
+                <option value="en"{% if CURRENT_LANGUAGE == "en" %} selected{% endif %}>English</option>
+                <option value="bn"{% if CURRENT_LANGUAGE == "bn" %} selected{% endif %}>বাংলা</option>
+              </select>
+            </form>
             {% if user.is_authenticated %}
               <div class="nav-dropdown nav-user">
                 <button type="button" class="nav-dropdown-btn nav-user-btn" aria-haspopup="true" aria-expanded="false" aria-controls="userMenu">
@@ -198,13 +208,13 @@
                   <svg class="nav-icon nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="6 9 12 15 18 9"/></svg>
                 </button>
                 <div class="nav-dropdown-menu nav-dropdown-menu-end" id="userMenu">
-                  <a href="{% url 'profile' %}">Profile</a>
-                  <form class="nav-logout-form" method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit" class="nav-logout-btn">Logout</button></form>
+                  <a href="{% url 'profile' %}">{% translate "Profile" %}</a>
+                  <form class="nav-logout-form" method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit" class="nav-logout-btn">{% translate "Logout" %}</button></form>
                 </div>
               </div>
             {% else %}
               <a class="nav-login" href="{% url 'login' %}">
-                <span>Login</span>
+                <span>{% translate "Login" %}</span>
               </a>
             {% endif %}
           </div>
@@ -226,10 +236,11 @@
   </main>
 
   <footer class="site-footer">
-    <p><strong>Bazaar</strong> analyses {% if cse_enabled %}DSE &amp; CSE{% else %}DSE{% endif %} using ~1 year of price history. Signals are probabilistic estimates — not financial advice.</p>
+    <p><strong>Bazaar</strong> {% translate "analyses" %} {% if cse_enabled %}DSE &amp; CSE{% else %}DSE{% endif %} {% translate "using approximately one year of price history. Signals are probabilistic estimates — not financial advice." %}</p>
   </footer>
   <script src="/static/js/ticker.js" defer></script>
   <script src="/static/js/nav.js" defer></script>
+  {% if CURRENT_LANGUAGE == "bn" %}<script src="/static/js/bangla-ui.js" defer></script>{% endif %}
   {% block extra_js %}{% endblock %}
 </body>
 </html>
