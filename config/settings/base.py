@@ -364,7 +364,7 @@ except Exception as _tz_exc:
 # Automatic live market sync (ticker + portfolio quotes) — no Redis
 # required to run the app, but Celery Beat drives the actual cadence.
 AUTO_MARKET_SYNC = _bool_env("AUTO_MARKET_SYNC", "True")
-AUTO_SYNC_INTERVAL_MARKET = _positive_int("AUTO_SYNC_INTERVAL_MARKET", "200")  # seconds, while DSE is open
+AUTO_SYNC_INTERVAL_MARKET = _positive_int("AUTO_SYNC_INTERVAL_MARKET", "120")  # seconds, while DSE is open
 # Outside-hours freshness check — set AUTO_SYNC_INTERVAL_OFF high (or
 # AUTO_MARKET_SYNC=False) to disable the off-hours cadence entirely;
 # there's no separate on/off switch for just this half since the
