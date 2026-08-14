@@ -21,6 +21,7 @@ class ProfileForm(forms.Form):
     preferred_exchanges = forms.CharField(required=False, max_length=16)
     email_alerts = forms.BooleanField(required=False)
     telegram_alerts = forms.BooleanField(required=False)
+    digest_watchlist_only = forms.BooleanField(required=False)
 
     def clean_min_score_alert(self):
         value = self.cleaned_data.get("min_score_alert")

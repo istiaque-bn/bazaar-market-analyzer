@@ -17,6 +17,13 @@
   </div>
 </div>
 
+{% if user.is_authenticated %}
+<section class="panel next-steps-card">
+  <div><h3>What would you like to do?</h3><p class="muted">Start with your own shares, then use signals as research—not instructions.</p></div>
+  <div class="quick-actions"><a class="btn btn-small btn-gold" href="{% url 'watchlist' %}">Add to watchlist</a><a class="btn btn-small btn-ghost" href="{% url 'portfolio_redirect' %}">Import portfolio</a><a class="btn btn-small btn-ghost" href="{% url 'stock_list' %}">View today’s signals</a></div>
+</section>
+{% endif %}
+
 {% if is_admin_role %}
 <div class="pipeline-bar">
   <p class="muted" style="margin:0; flex:1 1 220px;">
@@ -37,6 +44,11 @@
   <div class="stat"><div class="label">{% translate "Research candidates" %}</div><div class="value">{{ summary.research_candidates }}</div></div>
   <div class="stat"><div class="label">{% translate "Watch" %}</div><div class="value">{{ summary.watch }}</div></div>
 </div>
+
+<section class="panel signal-guide-card">
+  <h3>How to read a signal</h3>
+  <p><strong>Buy</strong> means the saved research inputs are relatively positive; <strong>Sell</strong> means caution is higher; <strong>Watch/Hold</strong> means there is not enough evidence to act. Open any share to see its rationale, confidence, and main risks. Signals are research prompts—not buy or sell instructions.</p>
+</section>
 
 {% if sentiment %}
 <div class="sentiment-row" style="margin-top:1.2rem;">

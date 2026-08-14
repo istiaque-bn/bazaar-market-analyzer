@@ -131,8 +131,9 @@
 {% if not summary.holdings %}
 <div class="panel empty-state">
   <p><strong>No open holdings yet.</strong></p>
-  <p class="muted">Add your first holding to start tracking cost basis and profit/loss against live {% if cse_enabled %}DSE/CSE{% else %}DSE{% endif %} prices.</p>
+  <p class="muted">Import a broker CSV or add your first holding to start tracking cost basis and profit/loss against live {% if cse_enabled %}DSE/CSE{% else %}DSE{% endif %} prices.</p>
   <a class="btn btn-gold" href="{% url 'portfolio_add_holding' portfolio.id %}">+ Add your first holding</a>
+  <button class="btn btn-ghost" type="button" onclick="document.getElementById('csvImport').showModal()">Import broker CSV</button>
 </div>
 {% else %}
 <form class="filters" method="get" id="holdingsFilterForm">

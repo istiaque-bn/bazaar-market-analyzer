@@ -194,6 +194,7 @@ def profile(request):
         profile_obj.telegram_alerts = data["telegram_alerts"]
         profile_obj.min_score_alert = data["min_score_alert"]
         profile_obj.preferred_exchanges = data["preferred_exchanges"]
+        profile_obj.digest_watchlist_only = data["digest_watchlist_only"]
         profile_obj.save()
         if "email" in request.POST:
             request.user.email = data["email"]
@@ -353,6 +354,11 @@ def user_panel(request):
             "recent_transactions": recent_transactions,
             "alerts": alerts,
             "market_hours": both_exchanges_status(),
+            "onboarding": {
+                "has_watchlist": watchlist_count > 0,
+                "has_portfolio": portfolio.transactions.exists(),
+                "has_notifications": bool(getattr(request.user, "profile", None) and (request.user.profile.email_alerts or request.user.profile.telegram_alerts)),
+            },
         },
     )
 

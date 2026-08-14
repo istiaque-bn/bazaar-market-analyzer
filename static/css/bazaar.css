@@ -652,6 +652,11 @@ body.nav-open { overflow: hidden; }
   margin: 0 0 0.8rem;
   letter-spacing: -0.02em;
 }
+.next-steps-card, .onboarding-card { margin: 1rem 0; display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+.signal-guide-card { margin-top:1rem; border-left:4px solid var(--gold); }
+.onboarding-list { margin:.4rem 0 0; padding-left:1.35rem; display:grid; gap:.45rem; }
+.onboarding-list .is-done { color:var(--rise); text-decoration:line-through; }
+@media (max-width: 700px) { .next-steps-card, .onboarding-card { align-items:stretch; flex-direction:column; }.next-steps-card .quick-actions { width:100%; }.next-steps-card .btn { flex:1; } }
 
 .grid-2 { display: grid; gap: 1rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid-3 { display: grid; gap: 1rem; grid-template-columns: repeat(3, minmax(0, 1fr)); }

@@ -63,6 +63,9 @@ _BENGALI_STATIC_COPY = {
     "Portfolio performance": "পোর্টফোলিও পারফরম্যান্স", "Virtual trade log": "ভার্চুয়াল লেনদেন তালিকা", "Date": "তারিখ", "Side": "ধরন", "Execution": "এক্সিকিউশন", "Fee": "ফি", "Reason": "কারণ",
     "Strategy guardrails": "কৌশলগত সুরক্ষা নিয়ম", "Evidence, not an edge claim": "প্রমাণ, লাভের নিশ্চয়তা নয়", "Learning feedback": "শেখার ফলাফল", "What the paper trades are teaching us": "পেপার ট্রেড থেকে আমরা কী শিখছি",
     "No real money or broker transactions.": "কোনো আসল অর্থ বা ব্রোকার লেনদেন নয়।", "No virtual trades have been executed.": "এখনও কোনো ভার্চুয়াল লেনদেন হয়নি।", "The chart will appear after at least two daily closing snapshots.": "কমপক্ষে দুই দিনের ক্লোজিং স্ন্যাপশটের পর চার্ট দেখা যাবে।",
+    "Start here": "এখান থেকে শুরু করুন", "What would you like to do?": "আপনি কী করতে চান?", "Add to watchlist": "ওয়াচলিস্টে যোগ করুন", "Import portfolio": "পোর্টফোলিও ইমপোর্ট করুন", "View today’s signals": "আজকের সংকেত দেখুন",
+    "Import broker CSV": "ব্রোকার CSV ইমপোর্ট করুন", "Receive only my watchlist in the daily digest": "দৈনিক সারাংশে শুধু আমার ওয়াচলিস্ট নিন",
+    "How to read a signal": "সংকেত কীভাবে বুঝবেন",
 }
 _BENGALI_STATIC_PATTERN = re.compile(
     r"(?<=>)(\s*)(" + "|".join(re.escape(key) for key in sorted(_BENGALI_STATIC_COPY, key=len, reverse=True)) + r")(\s*)(?=<)"

@@ -20,8 +20,9 @@
     </label>
     <label><input type="checkbox" name="email_alerts" {% if profile.email_alerts %}checked{% endif %}> {% translate "Email alerts" %}</label>
     <label><input type="checkbox" name="telegram_alerts" {% if profile.telegram_alerts %}checked{% endif %}> {% translate "Telegram alerts and personal price/signal notifications" %}</label>
+    <label><input type="checkbox" name="digest_watchlist_only" {% if profile.digest_watchlist_only %}checked{% endif %}> Receive only my watchlist in the daily digest</label>
     <button class="btn" type="submit">{% translate "Save" %}</button>
   </form>
-  <p class="muted">{% translate "Telegram is opt-in. Your personal chat ID is used only for the alerts you enable; daily digests include a summary of your saved watchlist." %}</p>
+  <p class="muted">{% translate "Telegram is opt-in. Your personal chat ID is used only for the alerts you enable; daily digests include a summary of your saved watchlist." %} Daily digests are sent after market close on trading days.</p>
 </section>
 {% endblock %}

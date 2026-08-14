@@ -156,7 +156,7 @@ def _digest_text() -> str:
     return "\n".join(lines)
 
 
-def _personal_watchlist_digest_text(user, market_digest: str | None = None) -> str:
+def _personal_watchlist_digest_text(user, market_digest: str | None = None, *, include_market: bool = True) -> str:
     """Add a concise, user-specific watchlist section to the daily digest.
 
     The market digest remains the shared in-app record.  Delivery channels
@@ -166,8 +166,9 @@ def _personal_watchlist_digest_text(user, market_digest: str | None = None) -> s
     """
     watchlist = Watchlist.objects.filter(user=user, name="Default").first()
     stocks = list(watchlist.stocks.all().order_by("trading_code")) if watchlist else []
+    prefix = (market_digest or _digest_text()) if include_market else "Bazaar personal daily brief"
     if not stocks:
-        return (market_digest or _digest_text()) + "\n\nYour watchlist\nNo shares saved yet. Add shares from a stock page to receive a personal summary."
+        return prefix + "\n\nYour watchlist\nNo shares saved yet. Add shares from a stock page to receive a personal summary."
 
     latest = {}
     for analysis in AnalysisResult.objects.filter(stock__in=stocks).order_by("stock_id", "-as_of"):
@@ -183,7 +184,7 @@ def _personal_watchlist_digest_text(user, market_digest: str | None = None) -> s
         for label, count in action_counts.items()
         if count
     )
-    lines = [market_digest or _digest_text(), "", f"Your watchlist ({len(stocks)} shares)", counts]
+    lines = [prefix, "", f"Your watchlist ({len(stocks)} shares)", counts]
     for stock in stocks:
         analysis = latest.get(stock.id)
         if not analysis:
@@ -246,7 +247,7 @@ def send_daily_digest():
         # matches every user via the Q(user=request.user) | Q(user__isnull=True)
         # filter used in views, so a second row would just duplicate it.
         profile = getattr(user, "profile", None)
-        personal_text = _personal_watchlist_digest_text(user, text)
+        personal_text = _personal_watchlist_digest_text(user, text, include_market=not profile.digest_watchlist_only if profile else True)
         if profile and profile.telegram_alerts and profile.telegram_chat_id:
             send_telegram_message(profile.telegram_chat_id, personal_text)
         if profile and profile.email_alerts and user.email:

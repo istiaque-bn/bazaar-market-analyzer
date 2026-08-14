@@ -8,6 +8,17 @@
   </div>
 </div>
 
+{% if not onboarding.has_watchlist or not onboarding.has_portfolio or not onboarding.has_notifications %}
+<section class="panel onboarding-card">
+  <div><h3>Start here</h3><p class="muted">Complete these short steps to make Bazaar useful for your own investments.</p></div>
+  <ol class="onboarding-list">
+    <li class="{% if onboarding.has_watchlist %}is-done{% endif %}">{% if onboarding.has_watchlist %}✓{% else %}1{% endif %} Add shares to your <a href="{% url 'watchlist' %}">Watchlist</a>.</li>
+    <li class="{% if onboarding.has_portfolio %}is-done{% endif %}">{% if onboarding.has_portfolio %}✓{% else %}2{% endif %} <a href="{% url 'portfolio_detail' portfolio.id %}">Import a CSV</a> or add your first holding.</li>
+    <li class="{% if onboarding.has_notifications %}is-done{% endif %}">{% if onboarding.has_notifications %}✓{% else %}3{% endif %} Choose your <a href="{% url 'profile' %}">daily digest and alert</a> preferences.</li>
+  </ol>
+</section>
+{% endif %}
+
 <div class="quick-actions">
   <a class="btn btn-small" href="{% url 'portfolio_detail' portfolio.id %}">Open Portfolio</a>
   <a class="btn btn-small btn-ghost" href="{% url 'portfolio_add_holding' portfolio.id %}">Add Holding</a>

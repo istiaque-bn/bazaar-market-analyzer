@@ -9,6 +9,7 @@ class UserProfile(models.Model):
     telegram_alerts = models.BooleanField(default=False)
     min_score_alert = models.FloatField(default=40)
     preferred_exchanges = models.CharField(max_length=16, default="DSE,CSE")
+    digest_watchlist_only = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     # --- Role-management system -------------------------------------
