@@ -1,4 +1,4 @@
-from accounts.roles import is_admin, is_staff_member, role_display, role_home_url_name
+from accounts.roles import is_admin, is_staff_member, role_home_url_name
 
 
 def role_context(request):

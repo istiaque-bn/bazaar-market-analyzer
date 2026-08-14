@@ -4,7 +4,7 @@ from __future__ import annotations
 from django.db.models import QuerySet
 from django.utils import timezone
 
-from market.models import AnalysisResult, SignalAction, Stock
+from market.models import AnalysisResult, SignalAction
 from market.services.exchange_config import enabled_exchanges
 
 

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pandas as pd
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
 from django.utils import timezone
 
 from market.models import AdjustmentStatus, DataSource, Exchange, ImportBatch, PriceHistory, Stock

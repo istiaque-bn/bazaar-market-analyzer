@@ -29,6 +29,7 @@ truststore==0.10.4  # verifies against the OS-native trust store — fixes real-
 joblib==1.5.3
 gunicorn==23.0.0
 coverage==7.15.2
+ruff==0.16.3
 
 # --- Production infrastructure (Phase 8) --------------------------------
 psycopg[binary]==3.3.4  # PostgreSQL driver — config/settings/production.py

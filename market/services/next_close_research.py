@@ -7,7 +7,7 @@ any challenger is allowed to be evaluated.
 from __future__ import annotations
 
 import pandas as pd
-from django.db.models import Count, Q
+from django.db.models import Q
 
 from market.models import Exchange, PriceHistory, Stock
 

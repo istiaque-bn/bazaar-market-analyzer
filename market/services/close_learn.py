@@ -21,7 +21,6 @@ import joblib
 import numpy as np
 import pandas as pd
 from django.conf import settings
-from django.db.models import Avg
 from django.utils import timezone
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.linear_model import LogisticRegression
@@ -30,7 +29,6 @@ from xgboost import XGBClassifier
 
 from market.models import CloseLearnState, Exchange, NextDayCloseForecast, PriceHistory, Stock
 from market.services.indicators import compute_indicators, prices_to_df, volatility_regime
-from market.services.market_hours import TRADING_WEEKDAYS
 from market.services.ml_training import (
     active_model_version,
     apply_imputer,
@@ -43,6 +41,13 @@ from market.services.ml_training import (
     regression_skill,
     validate_chronological,
     walk_forward_folds,
+)
+from market.services.close_learn_state import (
+    get_combined_bias,
+    get_learn_state,
+    liquid_stock_ids,
+    next_trading_day,
+    stock_bias_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -122,55 +127,6 @@ STOCK_BIAS_MIN_SETTLES = 8
 
 # Cache market/sector frames within a process run
 _CONTEXT_CACHE: dict[str, pd.DataFrame] = {}
-
-
-def next_trading_day(from_date: date) -> date:
-    from market.services.trading_calendar import closure_reason
-
-    d = from_date
-    # 15 days is generous headroom over the longest known closure cluster
-    # (a 7-day Eid break butted up against a weekend).
-    for _ in range(15):
-        d = d + timedelta(days=1)
-        if d.weekday() in TRADING_WEEKDAYS and closure_reason(d) is None:
-            return d
-    return from_date + timedelta(days=2)
-
-
-def get_learn_state(key: str = "global") -> CloseLearnState:
-    state, _ = CloseLearnState.objects.get_or_create(key=key)
-    return state
-
-
-def stock_bias_key(stock_id: int) -> str:
-    return f"stock:{stock_id}"
-
-
-def liquid_stock_ids(limit: int = LIQUID_TOP_N, *, as_of: date | None = None) -> set[int]:
-    """Top names by recent average volume known on ``as_of`` only."""
-    as_of = as_of or timezone.localdate()
-    qs = (
-        PriceHistory.objects.live()
-        .filter(date__gte=as_of - timedelta(days=45), date__lte=as_of)
-        .values("stock_id")
-        .annotate(avg_vol=Avg("volume"))
-        .order_by("-avg_vol")[:limit]
-    )
-    return {row["stock_id"] for row in qs}
-
-
-def get_combined_bias(stock: Stock | None, liquid_ids: set[int] | None = None) -> tuple[float, float, float]:
-    """Return (combined, global_bias, stock_bias)."""
-    global_state = get_learn_state("global")
-    g = float(global_state.return_bias or 0.0)
-    s = 0.0
-    if stock is not None:
-        ids = liquid_ids if liquid_ids is not None else liquid_stock_ids()
-        if stock.id in ids:
-            st = get_learn_state(stock_bias_key(stock.id))
-            if st.settled_count >= STOCK_BIAS_MIN_SETTLES:
-                s = float(st.return_bias or 0.0)
-    return g + s, g, s
 
 
 def _clear_context_cache():
@@ -1245,7 +1201,8 @@ def _evaluate_direction_candidate(panel: pd.DataFrame, *, kind: str, rolling_day
         m = _direction_metrics(y_test, pred, probs)
         majority = int(pd.Series(y_train).mode().iloc[0])
         b = _direction_metrics(y_test, np.full(len(y_test), majority))
-        metrics.append(m); baselines.append(b)
+        metrics.append(m)
+        baselines.append(b)
         rows.append({"fold": f.fold, "train_start": train_start.date().isoformat(), "train_end": f.train_end.date().isoformat(), "test_start": f.test_start.date().isoformat(), "test_end": f.test_end.date().isoformat(), "train_rows": len(train), "test_rows": len(test), "metrics": m, "skill": round(m["balanced_accuracy"] - b["balanced_accuracy"], 4)})
     if not rows:
         return {"ok": False, "error": "no usable rolling folds", "model_kind": kind, "rolling_days": rolling_days}

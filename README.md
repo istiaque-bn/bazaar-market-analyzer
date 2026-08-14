@@ -18,13 +18,13 @@ source .venv/bin/activate
 cp .env.example .env
 pip install -r requirements.txt
 python manage.py migrate
-python manage.py createsuperuser  # required — see "Roles & permissions" below; there is no public sign-up
+python manage.py createsuperuser  # creates the first Admin; public registrations need Admin/Staff approval
 python manage.py run_market_pipeline --all
 python manage.py runserver
 ```
 
-Open http://127.0.0.1:8000/ — you'll land on Login; there is no public
-page or sign-up any more (see below).
+Open http://127.0.0.1:8000/ — you can sign in or create a pending user
+account from the public sign-up page (see below).
 
 Settings live in `config/settings/` (`base.py` + `development.py` /
 `test.py` / `production.py`). `manage.py`/`wsgi.py`/`asgi.py`/`celery.py`
@@ -37,9 +37,10 @@ explicitly.
 
 ## Roles & permissions
 
-Bazaar is an invite-only platform with three roles, sourced entirely from
-Django's own `is_staff`/`is_superuser` flags — there is no separate `role`
-field that could drift out of sync with them (`accounts/roles.py`):
+Bazaar supports public registration for regular users plus Admin/Staff-created
+accounts. The three roles are sourced entirely from Django's own
+`is_staff`/`is_superuser` flags — there is no separate `role` field that could
+drift out of sync with them (`accounts/roles.py`):
 
 | Role  | `is_superuser` | `is_staff` |
 |-------|-----------------|------------|
@@ -51,14 +52,20 @@ An inactive account (`is_active=False`) has no role for access purposes,
 even though its `is_staff`/`is_superuser` flags are left untouched — see
 "Deactivation" below.
 
-### Public registration is removed
+### Public pending-approval registration
 
-There is no self-service sign-up. `/accounts/signup/` is a tombstone —
-GET and POST both return `403` and create nothing (`accounts.views.
-signup_disabled`). The same is true of `/api/auth/register/`
-(`api.views.RegisterAPI`). Accounts are created only by an Admin or Staff
-member from **Accounts → Create User / Create Staff**, or the very first
-Admin via `python manage.py createsuperuser`.
+`/accounts/signup/` lets a visitor register a regular User account. The new
+account is inactive and marked pending approval, so it cannot sign in. Bazaar
+sends an email-verification link and notifies Administrators; an Admin or
+Staff member must approve the verified account from the Accounts area. On
+approval, Bazaar generates the user's temporary password through the existing
+account-delivery flow, and the user must change it on first sign-in.
+
+The API registration endpoint remains intentionally disabled:
+`/api/auth/register/` returns `403` and creates no account. Admins and Staff
+can also create regular users directly from **Accounts → Create User**;
+Admins alone can create Staff accounts. Use `python manage.py createsuperuser`
+to create the first Admin.
 
 ### Permission matrix
 
@@ -169,7 +176,7 @@ feature flags" above) — never shown as an empty placeholder.
 ### Testing
 
 ```bash
-DJANGO_SETTINGS_MODULE=config.settings.test python manage.py test accounts market api notifications
+DJANGO_SETTINGS_MODULE=config.settings.test python manage.py test accounts market api notifications feedback
 ```
 
 Role/auth-specific tests live in `accounts/tests.py` (role helpers,
@@ -666,7 +673,7 @@ process startup.
 
 ```bash
 # Run the full suite (Redis must be running — some locking tests use it directly)
-python manage.py test accounts api market notifications
+DJANGO_SETTINGS_MODULE=config.settings.test python manage.py test accounts api market notifications feedback
 
 # Portfolio feature only
 python manage.py test market.tests.test_portfolio
@@ -678,7 +685,7 @@ python manage.py test market.tests.test_exchange_config
 python manage.py test accounts market.tests.test_navbar
 
 # CI-friendly: run under coverage and fail the build below the configured gate
-coverage run manage.py test accounts api market notifications
+DJANGO_SETTINGS_MODULE=config.settings.test coverage run manage.py test accounts api market notifications feedback
 coverage report          # terminal summary, fails if TOTAL < fail_under (.coveragerc)
 coverage html             # optional: htmlcov/index.html
 ```
@@ -692,7 +699,7 @@ module that never reads a local developer `.env`. It deliberately does
 did, and it silently broke `test_task_idempotency.py` (which exercises
 Celery's own default eager-retry behavior and assumes `AUTO_MARKET_SYNC`
 is on) until caught by running the full suite under it:
-`DJANGO_SETTINGS_MODULE=config.settings.test python manage.py test accounts api market notifications`
+`DJANGO_SETTINGS_MODULE=config.settings.test python manage.py test accounts api market notifications feedback`
 — both are covered by `market/tests/test_settings.py`, and the full suite
 passes under either.
 

@@ -225,7 +225,7 @@ def sync_dse_pe_ratios() -> dict:
     stocks = list(Stock.objects.filter(exchange=Exchange.DSE, is_active=True, trading_code__in=pe_by_code.keys()))
     for stock in stocks:
         stock.pe_ratio = pe_by_code[stock.trading_code]
-    updated = Stock.objects.bulk_update(stocks, ["pe_ratio"], batch_size=200)
+    Stock.objects.bulk_update(stocks, ["pe_ratio"], batch_size=200)
     return {"ok": True, "updated": len(stocks), "matched_of_scraped": len(stocks), "scraped_rows": len(df)}
 
 

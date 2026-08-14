@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import io
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import pandas as pd
 import requests
@@ -21,7 +21,6 @@ from market.services.data_quality import create_import_batch, finish_import_batc
 from market.services.dse_fetcher import (
     DEMO_SYMBOLS,
     _safe_float,
-    _safe_int,
     generate_synthetic_history,
     save_history,
     upsert_live_quotes,

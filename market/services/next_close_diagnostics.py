@@ -11,11 +11,16 @@ MIN_DIAGNOSTIC_SAMPLE = 20
 
 def _confidence_bucket(value):
     value = float(value or 0)
-    if value < .55: return "Below 55%"
-    if value < .60: return "55–59%"
-    if value < .65: return "60–64%"
-    if value < .70: return "65–69%"
-    if value < .80: return "70–79%"
+    if value < .55:
+        return "Below 55%"
+    if value < .60:
+        return "55–59%"
+    if value < .65:
+        return "60–64%"
+    if value < .70:
+        return "65–69%"
+    if value < .80:
+        return "70–79%"
     return "80%+"
 
 

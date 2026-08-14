@@ -21,9 +21,6 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from datetime import date
-
-from django.db import transaction
 from django.utils import timezone
 
 from market.models import (

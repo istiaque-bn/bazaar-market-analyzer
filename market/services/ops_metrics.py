@@ -8,7 +8,6 @@ close-learn skill from Phases 4/7).
 """
 from __future__ import annotations
 
-from collections import Counter
 from datetime import timedelta
 
 from django.utils import timezone

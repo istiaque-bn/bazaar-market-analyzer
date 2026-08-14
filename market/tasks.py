@@ -96,7 +96,7 @@ def fetch_all_market_data(include_history: bool = False):
             if not include_history:
                 return live
 
-            from market.models import Exchange, Stock
+            from market.models import Stock
             from market.services.exchange_config import enabled_exchanges
 
             signatures = []

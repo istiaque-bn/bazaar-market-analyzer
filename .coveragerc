@@ -4,6 +4,7 @@ source =
     api
     market
     notifications
+    feedback
 branch = True
 omit =
     */migrations/*

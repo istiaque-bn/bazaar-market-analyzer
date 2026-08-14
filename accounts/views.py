@@ -26,7 +26,6 @@ from accounts.forms import (
 from accounts.models import UserProfile
 from accounts.roles import is_admin, role_display, role_home_url
 from accounts.services import (
-    AccountActionError,
     create_account,
     demote_to_user,
     promote_to_staff,

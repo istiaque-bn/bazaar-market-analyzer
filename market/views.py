@@ -10,7 +10,6 @@ from django.views.decorators.http import require_POST
 from datetime import datetime
 
 from accounts.decorators import admin_required, staff_or_admin_required
-from accounts.roles import role_home_url
 from market.forms import PortfolioCSVImportForm, PortfolioForm, PortfolioGoalForm, ResearchNoteForm, TransactionForm
 from market.forms import AdminReminderForm
 from market.models import (
@@ -27,84 +26,13 @@ from market.models import (
     TransactionType,
     Watchlist,
 )
-from market.services.autosync import get_last_success_at
-from market.services.ops_alerts import STALE_DATA_DAYS, recent_silent_sync_error
 from market.services.indicators import prices_to_df
 from market.services.predictor import CONFIDENCE_SCALE, RESEARCH_DISCLAIMER, predict_price_at_date
-from market.services.screener import potential_shares, safe_buys, screen_summary, sell_candidates, sentiment_label, top_by_sector
-from market.services.signal_status import market_edge_status, signal_status
+from market.services.signal_status import signal_status
+from market.views_dashboard import _dashboard_health_issue, dashboard, home  # noqa: F401
+from market.portfolio_access import owned_portfolio as _owned_portfolio
 from notifications.forms import AlertRuleForm
 from notifications.models import Alert, AlertRule
-
-
-def home(request):
-    """Anonymous visitors get only Login (+ static assets); there is no
-    public marketing page any more — authenticated visitors land on the
-    Market dashboard regardless of role (accounts.roles.role_home_url)."""
-    if request.user.is_authenticated:
-        return redirect(role_home_url(request.user))
-    return redirect("login")
-
-
-@login_required
-def dashboard(request):
-    from market.services.exchange_config import enabled_exchanges
-    from market.services.market_hours import session_status
-
-    enabled = enabled_exchanges()
-    summary = screen_summary()
-    potentials = list(potential_shares(12))
-    safes = list(safe_buys(6))
-    sells = list(sell_candidates(6))
-    snapshots = MarketSnapshot.objects.filter(exchange__in=enabled).order_by("-as_of")[:4]
-    # One gauge per enabled exchange, from each exchange's own latest
-    # snapshot (not just the newest 4 rows overall, which could all be one
-    # exchange and silently drop the other's gauge on a mixed-cadence day).
-    sentiment = []
-    for ex in enabled:
-        snap = MarketSnapshot.objects.filter(exchange=ex).order_by("-as_of").first()
-        if snap:
-            s = sentiment_label(snap.advancers, snap.decliners, snap.unchanged)
-            s["exchange"] = ex
-            s["as_of"] = snap.as_of
-            sentiment.append(s)
-    backtests = BacktestRun.objects.filter(Q(exchange__in=enabled) | Q(exchange="") | Q(exchange__isnull=True)).order_by("-created_at")[:4]
-    sectors = top_by_sector(2)
-    alerts = []
-    if request.user.is_authenticated:
-        alerts = list(Alert.objects.filter(Q(user=request.user) | Q(user__isnull=True))[:8])
-    close_learn = None
-    try:
-        from market.services.close_learn import learn_status
-
-        close_learn = learn_status()
-    except Exception:
-        close_learn = None
-    try:
-        edge = market_edge_status()
-    except Exception:
-        edge = {"has_edge": False, "edge_reason": "Model status unavailable."}
-    health_issue = _dashboard_health_issue(summary.get("as_of")) if request.user.is_staff else None
-    return render(
-        request,
-        "market/dashboard.html",
-        {
-            "summary": summary,
-            "potentials": potentials,
-            "safes": safes,
-            "sells": sells,
-            "snapshots": snapshots,
-            "sentiment": sentiment,
-            "backtests": backtests,
-            "sectors": sectors,
-            "alerts": alerts,
-            "close_learn": close_learn,
-            "edge": edge,
-            "data_last_updated": get_last_success_at(),
-            "dse_session": session_status("DSE"),
-            "health_issue": health_issue,
-        },
-    )
 
 
 @admin_required
@@ -186,22 +114,6 @@ def admin_reminders_view(request):
         messages.success(request, "Reminder saved. You will receive it on the selected date.")
         return redirect("admin_reminders")
     return render(request, "market/admin_reminders.html", {"form": form, "reminders": AdminReminder.objects.filter(admin=request.user)})
-
-
-def _dashboard_health_issue(as_of) -> str | None:
-    """Cheap, staff-only pre-flight for the dashboard banner — deliberately
-    NOT the full ops_alerts.evaluate_alerts()/ops_summary(), since that
-    includes a provenance_report() scan over the whole PriceHistory table
-    that's too expensive to run on every dashboard load. Just the two
-    checks relevant to "is what I'm looking at right now trustworthy":
-    is the analysis stale, and is the last sync silently failing."""
-    today = timezone.localdate()
-    if as_of and (today - as_of).days > STALE_DATA_DAYS:
-        return f"Signals are {(today - as_of).days} days old (last analyzed {as_of}) — the pipeline may not be running."
-    error = recent_silent_sync_error("market.tasks.sync_live_market")
-    if error:
-        return f"Live sync is silently failing: {error[:150]}"
-    return None
 
 
 def _get_stock_for_public_route(exchange: str, code: str) -> Stock:
@@ -1081,15 +993,6 @@ PORTFOLIO_DISCLAIMER = (
     "Figures on this page are personal-tracking estimates computed from cached/delayed "
     "market data — not a brokerage statement, tax document, or investment advice."
 )
-
-
-def _owned_portfolio(request, portfolio_id):
-    """Every portfolio-scoped view routes through this — a user can only
-    ever look up their own portfolio, full stop. get_object_or_404 with
-    user=request.user in the filter means a wrong/foreign id 404s exactly
-    like a nonexistent one, rather than leaking whether it belongs to
-    someone else."""
-    return get_object_or_404(Portfolio, id=portfolio_id, user=request.user)
 
 
 @login_required

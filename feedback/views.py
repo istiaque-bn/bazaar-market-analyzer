@@ -20,7 +20,7 @@ from feedback.forms import (
     InternalNoteForm,
     StatusChangeForm,
 )
-from feedback.models import CLOSED_STATUSES, Feedback, FeedbackCategory, FeedbackStatus
+from feedback.models import Feedback, FeedbackCategory, FeedbackStatus
 from feedback.services import (
     FeedbackActionError,
     add_follow_up,
