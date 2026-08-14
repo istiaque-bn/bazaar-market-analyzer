@@ -63,6 +63,7 @@ MIDDLEWARE = [
     # Reads the language stored by Django's POST-only set_language view.
     # It must follow sessions and precede CommonMiddleware/view rendering.
     "django.middleware.locale.LocaleMiddleware",
+    "market.middleware.BengaliStaticCopyMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
