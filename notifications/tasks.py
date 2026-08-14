@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from market.services.ml_daily_report import COMPARISON_TOLERANCE_PCT, build_report_context, render_report_sections, split_for_telegram
 from market.services.predictor import RESEARCH_DISCLAIMER
+from market.models import AnalysisResult, Watchlist
 from market.services.screener import potential_shares, safe_buys, screen_summary, sell_candidates
 from market.services.signal_status import market_edge_status
 from market.services.task_status import record_task_run
@@ -155,6 +156,47 @@ def _digest_text() -> str:
     return "\n".join(lines)
 
 
+def _personal_watchlist_digest_text(user, market_digest: str | None = None) -> str:
+    """Add a concise, user-specific watchlist section to the daily digest.
+
+    The market digest remains the shared in-app record.  Delivery channels
+    receive this version so a user's Telegram/email message answers the more
+    useful question: what changed in *their* saved shares?  It uses only the
+    latest persisted analysis, never a fresh quote or prediction request.
+    """
+    watchlist = Watchlist.objects.filter(user=user, name="Default").first()
+    stocks = list(watchlist.stocks.all().order_by("trading_code")) if watchlist else []
+    if not stocks:
+        return (market_digest or _digest_text()) + "\n\nYour watchlist\nNo shares saved yet. Add shares from a stock page to receive a personal summary."
+
+    latest = {}
+    for analysis in AnalysisResult.objects.filter(stock__in=stocks).order_by("stock_id", "-as_of"):
+        latest.setdefault(analysis.stock_id, analysis)
+
+    action_counts = {"BUY": 0, "SELL": 0, "WATCH": 0, "HOLD": 0, "UNAVAILABLE": 0}
+    for stock in stocks:
+        action = latest.get(stock.id).action if stock.id in latest else "UNAVAILABLE"
+        action_counts[action] = action_counts.get(action, 0) + 1
+
+    counts = " · ".join(
+        f"{label.title()} {count}"
+        for label, count in action_counts.items()
+        if count
+    )
+    lines = [market_digest or _digest_text(), "", f"Your watchlist ({len(stocks)} shares)", counts]
+    for stock in stocks:
+        analysis = latest.get(stock.id)
+        if not analysis:
+            lines.append(f"• {stock.trading_code} ({stock.exchange}): analysis is not available yet.")
+            continue
+        rationale = (analysis.rationale or "No additional explanation is available.").replace("\n", " ").strip()
+        lines.append(
+            f"• {stock.trading_code} ({stock.exchange}): {analysis.action} "
+            f"(score {analysis.score:.0f}, confidence {float(analysis.confidence or 0):.0%}) — {rationale[:180]}"
+        )
+    return "\n".join(lines)
+
+
 @shared_task(
     name="notifications.tasks.send_daily_digest",
     autoretry_for=(TimeoutError, OperationalError, requests.exceptions.RequestException),
@@ -204,12 +246,13 @@ def send_daily_digest():
         # matches every user via the Q(user=request.user) | Q(user__isnull=True)
         # filter used in views, so a second row would just duplicate it.
         profile = getattr(user, "profile", None)
+        personal_text = _personal_watchlist_digest_text(user, text)
         if profile and profile.telegram_alerts and profile.telegram_chat_id:
-            send_telegram_message(profile.telegram_chat_id, text)
+            send_telegram_message(profile.telegram_chat_id, personal_text)
         if profile and profile.email_alerts and user.email:
             send_mail(
                 subject=f"[Bazaar] Daily market digest {timezone.localdate()}",
-                message=text,
+                message=personal_text,
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[user.email],
                 fail_silently=True,

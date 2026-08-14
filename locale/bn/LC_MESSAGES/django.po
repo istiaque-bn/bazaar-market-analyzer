@@ -128,3 +128,141 @@ msgstr "গবেষণার জন্য শেয়ার"
 
 msgid "Watch"
 msgstr "পর্যবেক্ষণ"
+
+msgid "Your watchlist"
+msgstr "আপনার ওয়াচলিস্ট"
+
+msgid "Code"
+msgstr "কোড"
+
+msgid "Action"
+msgstr "সংকেত"
+
+msgid "Score"
+msgstr "স্কোর"
+
+msgid "Mature"
+msgstr "পরিণত"
+
+msgid "Peak"
+msgstr "শীর্ষ"
+
+msgid "Note"
+msgstr "নোট"
+
+msgid "Disabled"
+msgstr "বন্ধ"
+
+msgid "is currently disabled — analysis unavailable"
+msgstr "বর্তমানে বন্ধ — বিশ্লেষণ পাওয়া যাচ্ছে না"
+
+msgid "Remove"
+msgstr "সরান"
+
+msgid "Watchlist empty — open a stock and add it."
+msgstr "ওয়াচলিস্ট খালি — একটি শেয়ার খুলে যোগ করুন।"
+
+msgid "Alerts & digests"
+msgstr "সতর্কতা ও সারাংশ"
+
+msgid "Create personal rules from saved market data. Telegram requires a chat ID and opt-in in your profile."
+msgstr "সংরক্ষিত বাজারের তথ্য থেকে ব্যক্তিগত নিয়ম তৈরি করুন। টেলিগ্রামের জন্য প্রোফাইলে চ্যাট আইডি ও সম্মতি প্রয়োজন।"
+
+msgid "New personal alert"
+msgstr "নতুন ব্যক্তিগত সতর্কতা"
+
+msgid "Stock"
+msgstr "শেয়ার"
+
+msgid "Alert type"
+msgstr "সতর্কতার ধরন"
+
+msgid "Target price"
+msgstr "লক্ষ্য মূল্য"
+
+msgid "target-price alerts"
+msgstr "লক্ষ্য-মূল্য সতর্কতা"
+
+msgid "Daily move %"
+msgstr "দৈনিক পরিবর্তন %"
+
+msgid "percentage-move alerts"
+msgstr "শতকরা পরিবর্তনের সতর্কতা"
+
+msgid "Minimum confidence %"
+msgstr "ন্যূনতম আস্থা %"
+
+msgid "confidence alerts"
+msgstr "আস্থাভিত্তিক সতর্কতা"
+
+msgid "Show in app"
+msgstr "অ্যাপে দেখান"
+
+msgid "Send to Telegram"
+msgstr "টেলিগ্রামে পাঠান"
+
+msgid "Create alert"
+msgstr "সতর্কতা তৈরি করুন"
+
+msgid "My rules"
+msgstr "আমার নিয়মসমূহ"
+
+msgid "Target"
+msgstr "লক্ষ্য"
+
+msgid "Move"
+msgstr "পরিবর্তন"
+
+msgid "Confidence"
+msgstr "আস্থা"
+
+msgid "Active"
+msgstr "সক্রিয়"
+
+msgid "Paused"
+msgstr "স্থগিত"
+
+msgid "Pause"
+msgstr "স্থগিত করুন"
+
+msgid "Enable"
+msgstr "সক্রিয় করুন"
+
+msgid "Delete"
+msgstr "মুছুন"
+
+msgid "No personal alert rules yet."
+msgstr "এখনও কোনো ব্যক্তিগত সতর্কতা নিয়ম নেই।"
+
+msgid "Delivered alerts"
+msgstr "পাঠানো সতর্কতা"
+
+msgid "No alerts yet."
+msgstr "এখনও কোনো সতর্কতা নেই।"
+
+msgid "Notification settings"
+msgstr "নোটিফিকেশন সেটিংস"
+
+msgid "Email"
+msgstr "ইমেইল"
+
+msgid "Telegram chat ID"
+msgstr "টেলিগ্রাম চ্যাট আইডি"
+
+msgid "Min score for alerts"
+msgstr "সতর্কতার জন্য ন্যূনতম স্কোর"
+
+msgid "Preferred exchanges"
+msgstr "পছন্দের এক্সচেঞ্জ"
+
+msgid "Email alerts"
+msgstr "ইমেইল সতর্কতা"
+
+msgid "Telegram alerts and personal price/signal notifications"
+msgstr "টেলিগ্রাম সতর্কতা ও ব্যক্তিগত মূল্য/সংকেত নোটিফিকেশন"
+
+msgid "Save"
+msgstr "সংরক্ষণ করুন"
+
+msgid "Telegram is opt-in. Your personal chat ID is used only for the alerts you enable; daily digests include a summary of your saved watchlist."
+msgstr "টেলিগ্রাম ঐচ্ছিক। আপনার ব্যক্তিগত চ্যাট আইডি শুধু চালু করা সতর্কতার জন্য ব্যবহৃত হবে; দৈনিক সারাংশে আপনার সংরক্ষিত ওয়াচলিস্টের বিবরণ থাকবে।"

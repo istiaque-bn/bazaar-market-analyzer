@@ -1,26 +1,27 @@
 {% extends "base.html" %}
-{% block title %}Profile{% endblock %}
+{% load i18n %}
+{% block title %}{% translate "Profile" %}{% endblock %}
 {% block content %}
 <section class="panel" style="max-width:520px;">
-  <h2>Notification settings</h2>
+  <h2>{% translate "Notification settings" %}</h2>
   <form method="post" class="form">
     {% csrf_token %}
-    <label>Email
+    <label>{% translate "Email" %}
       <input type="email" name="email" value="{{ user.email }}">
     </label>
-    <label>Telegram chat ID
+    <label>{% translate "Telegram chat ID" %}
       <input type="text" name="telegram_chat_id" value="{{ profile.telegram_chat_id }}">
     </label>
-    <label>Min score for alerts
+    <label>{% translate "Min score for alerts" %}
       <input type="number" step="1" name="min_score_alert" value="{{ profile.min_score_alert }}">
     </label>
-    <label>Preferred exchanges
+    <label>{% translate "Preferred exchanges" %}
       <input type="text" name="preferred_exchanges" value="{{ profile.preferred_exchanges }}">
     </label>
-    <label><input type="checkbox" name="email_alerts" {% if profile.email_alerts %}checked{% endif %}> Email alerts</label>
-    <label><input type="checkbox" name="telegram_alerts" {% if profile.telegram_alerts %}checked{% endif %}> Telegram alerts and personal price/signal notifications</label>
-    <button class="btn" type="submit">Save</button>
+    <label><input type="checkbox" name="email_alerts" {% if profile.email_alerts %}checked{% endif %}> {% translate "Email alerts" %}</label>
+    <label><input type="checkbox" name="telegram_alerts" {% if profile.telegram_alerts %}checked{% endif %}> {% translate "Telegram alerts and personal price/signal notifications" %}</label>
+    <button class="btn" type="submit">{% translate "Save" %}</button>
   </form>
-  <p class="muted">Telegram is opt-in. Your personal chat ID is used only for the alerts you enable; global digests require the server Telegram configuration.</p>
+  <p class="muted">{% translate "Telegram is opt-in. Your personal chat ID is used only for the alerts you enable; daily digests include a summary of your saved watchlist." %}</p>
 </section>
 {% endblock %}

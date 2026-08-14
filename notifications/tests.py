@@ -9,12 +9,13 @@ from django.utils import timezone
 from rest_framework.authtoken.models import Token
 
 from accounts.models import UserProfile
-from market.models import AdminAuditAction, AdminAuditLog, MLModelVersion, TaskAlertState, TaskHealth, TaskHealthStatus
+from market.models import AdminAuditAction, AdminAuditLog, AnalysisResult, Exchange, MLModelVersion, Stock, TaskAlertState, TaskHealth, TaskHealthStatus, Watchlist
 from notifications.models import AdminReminder, Alert, AlertChannel, MlDailyReportDelivery, MlDailyReportStatus
 from notifications.services import TelegramPermanentError, TelegramTransientError, send_telegram_message, send_telegram_message_tracked
 from notifications.tasks import (
     _compare_with_previous,
     _digest_text,
+    _personal_watchlist_digest_text,
     _idempotency_key,
     send_daily_digest,
     deliver_admin_reminders,
@@ -102,6 +103,33 @@ class DigestModelStatusTests(TestCase):
         self.assertIn("Model status: demonstrated edge", text)
 
 
+class PersonalWatchlistDigestTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="digest-watchlist", password=PASSWORD)
+        self.stock = Stock.objects.create(exchange=Exchange.DSE, trading_code="BRIEF", company_name="Brief Co")
+        watchlist, _ = Watchlist.objects.get_or_create(user=self.user, name="Default")
+        watchlist.stocks.add(self.stock)
+        AnalysisResult.objects.create(
+            stock=self.stock,
+            as_of=timezone.localdate(),
+            action="BUY",
+            score=71,
+            confidence=0.76,
+            rationale="Price and volume meet the saved research criteria.",
+        )
+
+    def test_personal_digest_summarizes_saved_shares_and_explains_each_signal(self):
+        text = _personal_watchlist_digest_text(self.user, "Market overview")
+        self.assertIn("Your watchlist (1 shares)", text)
+        self.assertIn("Buy 1", text)
+        self.assertIn("BRIEF (DSE): BUY", text)
+        self.assertIn("Price and volume", text)
+
+    def test_personal_digest_invites_user_to_add_first_watchlist_share(self):
+        user = User.objects.create_user(username="empty-watchlist", password=PASSWORD)
+        self.assertIn("No shares saved yet", _personal_watchlist_digest_text(user, "Market overview"))
+
+
 @override_settings(TELEGRAM_BOT_TOKEN="", TELEGRAM_CHAT_ID="")
 class DailyDigestDedupTests(TestCase):
     """send_daily_digest used to create both a global Alert(user=None) and an
@@ -135,6 +163,17 @@ class DailyDigestDedupTests(TestCase):
         self.assertEqual(Alert.objects.count(), 1)
         self.assertIn("skipped", second)
         self.assertNotIn("skipped", first)
+
+    @mock.patch("notifications.tasks.send_telegram_message", return_value=True)
+    def test_opted_in_user_receives_personal_watchlist_section(self, mock_telegram):
+        profile = self.user.profile
+        profile.telegram_alerts = True
+        profile.telegram_chat_id = "100200300"
+        profile.save(update_fields=["telegram_alerts", "telegram_chat_id"])
+
+        send_daily_digest()
+
+        self.assertIn("Your watchlist", mock_telegram.call_args.args[1])
 
 
 @override_settings(TELEGRAM_BOT_TOKEN="tok-abc", TELEGRAM_ADMIN_CHAT_ID="999888777")

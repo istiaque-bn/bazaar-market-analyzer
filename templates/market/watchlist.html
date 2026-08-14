@@ -1,11 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Watchlist{% endblock %}
+{% load i18n %}
+{% block title %}{% translate "Watchlist" %}{% endblock %}
 {% block content %}
-<div class="section-title"><h2>Your watchlist</h2></div>
+<div class="section-title"><h2>{% translate "Your watchlist" %}</h2></div>
 <div class="panel">
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Code</th><th>Action</th><th>Score</th><th>Mature</th><th>Peak</th><th>Note</th><th></th></tr></thead>
+      <thead><tr><th>{% translate "Code" %}</th><th>{% translate "Action" %}</th><th>{% translate "Score" %}</th><th>{% translate "Mature" %}</th><th>{% translate "Peak" %}</th><th>{% translate "Note" %}</th><th></th></tr></thead>
       <tbody>
         {% for stock, analysis in rows %}
         <tr>
@@ -14,7 +15,7 @@
               <a href="{% url 'stock_detail' stock.exchange stock.trading_code %}">{{ stock.trading_code }}</a> {{ stock.exchange }}
             {% else %}
               {{ stock.trading_code }} {{ stock.exchange }}
-              <span class="badge quote-badge quote-exchange_disabled tiny" title="{{ stock.exchange }} is currently disabled — analysis unavailable">Disabled</span>
+              <span class="badge quote-badge quote-exchange_disabled tiny" title="{{ stock.exchange }} {% translate "is currently disabled — analysis unavailable" %}">{% translate "Disabled" %}</span>
             {% endif %}
           </td>
           <td>{% if analysis %}<span class="badge badge-{{ analysis.action|lower }}">{{ analysis.action }}</span>{% else %}—{% endif %}</td>
@@ -26,13 +27,13 @@
             {% if stock.exchange not in enabled_exchanges %}
             <form class="inline" method="post" action="{% url 'toggle_watchlist' stock.exchange stock.trading_code %}">
               {% csrf_token %}
-              <button class="btn btn-small btn-ghost" type="submit">Remove</button>
+              <button class="btn btn-small btn-ghost" type="submit">{% translate "Remove" %}</button>
             </form>
             {% endif %}
           </td>
         </tr>
         {% empty %}
-        <tr><td colspan="7" class="muted">Watchlist empty — open a stock and add it.</td></tr>
+        <tr><td colspan="7" class="muted">{% translate "Watchlist empty — open a stock and add it." %}</td></tr>
         {% endfor %}
       </tbody>
     </table>

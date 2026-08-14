@@ -1,18 +1,19 @@
 {% extends "base.html" %}
-{% block title %}Alerts{% endblock %}
+{% load i18n %}
+{% block title %}{% translate "Alerts" %}{% endblock %}
 {% block content %}
-<div class="section-title"><div><h2>Alerts & digests</h2><p class="muted">Create personal rules from saved market data. Telegram requires a chat ID and opt-in in your profile.</p></div></div>
+<div class="section-title"><div><h2>{% translate "Alerts & digests" %}</h2><p class="muted">{% translate "Create personal rules from saved market data. Telegram requires a chat ID and opt-in in your profile." %}</p></div></div>
 <div class="grid-2">
-  <section class="panel"><h3>New personal alert</h3><form class="form" method="post" action="{% url 'alert_rule_create' %}">{% csrf_token %}
-    <label>Stock {{ rule_form.stock }}</label><label>Alert type {{ rule_form.rule_type }}</label>
-    <label>Target price <span class="muted tiny">(target-price alerts)</span>{{ rule_form.target_price }}</label>
-    <label>Daily move % <span class="muted tiny">(percentage-move alerts)</span>{{ rule_form.threshold_pct }}</label>
-    <label>Minimum confidence % <span class="muted tiny">(confidence alerts)</span>{{ rule_form.min_confidence }}</label>
-    <label><input type="checkbox" name="in_app_enabled" checked> Show in app</label><label><input type="checkbox" name="telegram_enabled" checked> Send to Telegram</label><button class="btn" type="submit">Create alert</button>
+  <section class="panel"><h3>{% translate "New personal alert" %}</h3><form class="form" method="post" action="{% url 'alert_rule_create' %}">{% csrf_token %}
+    <label>{% translate "Stock" %} {{ rule_form.stock }}</label><label>{% translate "Alert type" %} {{ rule_form.rule_type }}</label>
+    <label>{% translate "Target price" %} <span class="muted tiny">({% translate "target-price alerts" %})</span>{{ rule_form.target_price }}</label>
+    <label>{% translate "Daily move %" %} <span class="muted tiny">({% translate "percentage-move alerts" %})</span>{{ rule_form.threshold_pct }}</label>
+    <label>{% translate "Minimum confidence %" %} <span class="muted tiny">({% translate "confidence alerts" %})</span>{{ rule_form.min_confidence }}</label>
+    <label><input type="checkbox" name="in_app_enabled" checked> {% translate "Show in app" %}</label><label><input type="checkbox" name="telegram_enabled" checked> {% translate "Send to Telegram" %}</label><button class="btn" type="submit">{% translate "Create alert" %}</button>
   </form></section>
-  <section class="panel"><h3>My rules</h3>{% for rule in rules %}<div class="rule-row"><div><strong>{{ rule.stock.trading_code }}</strong> · {{ rule.get_rule_type_display }}<br><span class="muted tiny">{% if rule.target_price %}Target {{ rule.target_price }}{% elif rule.threshold_pct %}Move {{ rule.threshold_pct }}%{% elif rule.min_confidence %}Confidence {{ rule.min_confidence }}%{% endif %} · {% if rule.is_active %}Active{% else %}Paused{% endif %}</span></div><div><form class="inline" method="post" action="{% url 'alert_rule_toggle' rule.id %}">{% csrf_token %}<button class="linkish">{% if rule.is_active %}Pause{% else %}Enable{% endif %}</button></form><form class="inline" method="post" action="{% url 'alert_rule_delete' rule.id %}">{% csrf_token %}<button class="linkish">Delete</button></form></div></div>{% empty %}<p class="muted">No personal alert rules yet.</p>{% endfor %}</section>
+  <section class="panel"><h3>{% translate "My rules" %}</h3>{% for rule in rules %}<div class="rule-row"><div><strong>{{ rule.stock.trading_code }}</strong> · {{ rule.get_rule_type_display }}<br><span class="muted tiny">{% if rule.target_price %}{% translate "Target" %} {{ rule.target_price }}{% elif rule.threshold_pct %}{% translate "Move" %} {{ rule.threshold_pct }}%{% elif rule.min_confidence %}{% translate "Confidence" %} {{ rule.min_confidence }}%{% endif %} · {% if rule.is_active %}{% translate "Active" %}{% else %}{% translate "Paused" %}{% endif %}</span></div><div><form class="inline" method="post" action="{% url 'alert_rule_toggle' rule.id %}">{% csrf_token %}<button class="linkish">{% if rule.is_active %}{% translate "Pause" %}{% else %}{% translate "Enable" %}{% endif %}</button></form><form class="inline" method="post" action="{% url 'alert_rule_delete' rule.id %}">{% csrf_token %}<button class="linkish">{% translate "Delete" %}</button></form></div></div>{% empty %}<p class="muted">{% translate "No personal alert rules yet." %}</p>{% endfor %}</section>
 </div>
-<div class="section-title"><h2>Delivered alerts</h2></div>
+<div class="section-title"><h2>{% translate "Delivered alerts" %}</h2></div>
 <div class="stack">
   {% for a in alerts %}
   <article class="panel">
@@ -21,7 +22,7 @@
     <pre style="white-space:pre-wrap;font-family:inherit;margin:0;">{{ a.message }}</pre>
   </article>
   {% empty %}
-  <p class="muted">No alerts yet.</p>
+  <p class="muted">{% translate "No alerts yet." %}</p>
   {% endfor %}
 </div>
 {% endblock %}
