@@ -111,7 +111,7 @@ def dashboard(request):
 def paper_trading_view(request):
     from django.db.models import Avg, Count, Q
     from market.models import PaperLearningFeedback
-    from market.services.paper_learning import paper_learning_report
+    from market.services.paper_learning import paper_evidence_report
     from market.services.paper_trading import DEFAULT_CONFIG, account_summary, ensure_account
 
     account = ensure_account()
@@ -146,7 +146,7 @@ def paper_trading_view(request):
             "snapshots": account.equity_snapshots.all()[:30],
             "equity_chart": equity_chart,
             "feedback_stats": feedback_stats,
-            "learning_report": paper_learning_report(),
+            "learning_report": paper_evidence_report(account),
             "paper_config": {**DEFAULT_CONFIG, **(account.strategy_config or {})},
         },
     )

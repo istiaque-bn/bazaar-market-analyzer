@@ -263,6 +263,15 @@ def provenance_report() -> dict:
 
     from market.services.exchange_config import enabled_exchanges
 
+    # This is a readiness indicator for new research candidates, not a
+    # retroactive rewrite of market history.  Existing display paths preserve
+    # flagged evidence; stricter experiments opt out of it explicitly.
+    blank_sector_stocks = Stock.objects.filter(sector="").count()
+    strict_flag_occurrences = sum(
+        flag_counts.get(flag, 0)
+        for flag in (TRAINING_EXCLUDE_FLAGS | {"open_out_of_range"})
+    )
+
     enabled = enabled_exchanges()
     freshness = {}
     for ex in (Exchange.DSE, Exchange.CSE):
@@ -292,6 +301,12 @@ def provenance_report() -> dict:
         "unknown_provenance_rows": unknown_source,
         "flagged_rows": flagged,
         "flag_counts": dict(flag_counts),
+        "research_readiness": {
+            "blank_sector_stocks": blank_sector_stocks,
+            "unknown_provenance_rows": unknown_source,
+            "strict_flag_occurrences": strict_flag_occurrences,
+            "note": "Strict research excludes unknown-provenance and flagged OHLC rows; the normal display path retains them with labels.",
+        },
         "freshness": freshness,
         "recent_batches": recent_batches,
     }

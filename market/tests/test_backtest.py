@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from django.test import SimpleTestCase, TestCase
 
-from market.models import BacktestRun, Exchange, PriceHistory, Stock
+from market.models import BacktestRun, DataSource, Exchange, PriceHistory, Stock
 from market.services import backtest as backtest_module
 from market.services.backtest_engine import (
     CostConfig,
@@ -24,6 +24,7 @@ from market.services.backtest_engine import (
     _buy_and_hold_return_pct,
     _compute_metrics,
     _exchange_index_proxy_return_pct,
+    _load_universe,
     _signal_at,
 )
 
@@ -61,6 +62,30 @@ class SignalFunctionTests(SimpleTestCase):
         row = pd.Series({"rsi_14": 50.0, "macd": 0.5, "macd_signal": 0.3})
         prev = pd.Series({"macd": 0.2, "macd_signal": 0.25})
         self.assertTrue(_signal_at(row, prev))
+
+    def test_strict_candidate_requires_all_reversal_volume_and_breadth_gates(self):
+        prev = pd.Series({"macd": 0.1, "macd_signal": 0.2})
+        row = pd.Series({"rsi_14": 25.0, "macd": 0.3, "macd_signal": 0.2, "volume": 1250, "volume_sma_20": 1000})
+        self.assertTrue(_signal_at(row, prev, strategy="strict_research_v1", breadth_ok=True))
+        self.assertFalse(_signal_at(row, prev, strategy="strict_research_v1", breadth_ok=False))
+        low_volume = row.copy()
+        low_volume["volume"] = 1000
+        self.assertFalse(_signal_at(low_volume, prev, strategy="strict_research_v1", breadth_ok=True))
+
+
+class StrictUniverseTests(TestCase):
+    def test_liquidity_membership_is_frozen_before_the_test_window(self):
+        start = date(2024, 1, 1)
+        stable = Stock.objects.create(exchange=Exchange.DSE, trading_code="FRZ1", is_active=True)
+        late_liquid = Stock.objects.create(exchange=Exchange.DSE, trading_code="FRZ2", is_active=True)
+        rows = []
+        for i in range(130):
+            d = start + timedelta(days=i)
+            for stock, value, volume in ((stable, 1_000_000, 10_000), (late_liquid, 0 if i < 80 else 1_000_000, 0 if i < 80 else 10_000)):
+                rows.append(PriceHistory(stock=stock, date=d, open=100, high=101, low=99, close=100, volume=volume, value=value, source=DataSource.DSE_HISTORY))
+        PriceHistory.objects.bulk_create(rows)
+        universe = _load_universe(Exchange.DSE, start + timedelta(days=129), strict=True, as_of_date=start + timedelta(days=79), min_traded_value=100, universe_size=40)
+        self.assertEqual([s.trading_code for s in universe], ["FRZ1"])
 
 
 class NextSessionExecutionTests(TestCase):
@@ -158,6 +183,14 @@ class CapitalConstraintTests(TestCase):
         self.assertTrue(result["ok"])
         for e in result["equity_curve"]:
             self.assertLessEqual(e["n_positions"], 2)
+
+    def test_stop_loss_schedules_a_real_exit_after_an_intraday_breach(self):
+        closes = _oversold_series() + [30, 25, 20, 20, 20, 20]
+        _make_stock("STOP", closes)
+        start = date(2024, 1, 1)
+        end = start + timedelta(days=len(closes) - 1)
+        result = PortfolioBacktester(Exchange.DSE, start, end, CostConfig(), PortfolioConfig(hold_days=60, stop_loss_pct=2.0)).run()
+        self.assertTrue(any(t["reason"] == "stop_loss" for t in result["trades"]))
 
 
 class LookaheadPreventionTests(TestCase):
@@ -323,7 +356,7 @@ class RunBacktestPersistenceTests(TestCase):
         run2 = backtest_module.run_backtest(name="t1", strategy="s1", exchange=Exchange.DSE, start_date=start, end_date=end)
         self.assertNotEqual(run1.id, run2.id)
         self.assertEqual(BacktestRun.objects.filter(name="t1", strategy="s1").count(), 2)
-        self.assertEqual(run1.engine_version, "v2")
+        self.assertEqual(run1.engine_version, "v3")
 
     def test_legacy_v1_rows_are_untouched_by_the_new_engine(self):
         legacy = BacktestRun.objects.create(name="legacy", strategy="old", start_date=date(2020, 1, 1), end_date=date(2020, 12, 31))
@@ -345,7 +378,7 @@ class RunBacktestPersistenceTests(TestCase):
         start = date(2024, 1, 1)
         end = start + timedelta(days=len(closes) - 1)
         run = backtest_module.run_backtest(name="full", strategy="s", exchange=Exchange.DSE, start_date=start, end_date=end)
-        self.assertEqual(run.engine_version, "v2")
+        self.assertEqual(run.engine_version, "v3")
         self.assertGreater(run.total_trades, 0)
         self.assertIsNotNone(run.total_costs)
         self.assertGreater(run.total_costs, 0)

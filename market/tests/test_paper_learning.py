@@ -3,7 +3,7 @@ from datetime import date
 from django.test import TestCase
 
 from market.models import Exchange, PaperLearningFeedback, PaperPosition, PaperTradingAccount, Stock
-from market.services.paper_learning import paper_learning_report
+from market.services.paper_learning import paper_evidence_report, paper_learning_report
 
 
 class PaperLearningReportTests(TestCase):
@@ -40,3 +40,17 @@ class PaperLearningReportTests(TestCase):
 
         self.assertTrue(report["ready_for_review"])
         self.assertIn("80% and above", report["recommendation"])
+
+    def test_evidence_report_is_scoped_to_one_paper_account_and_never_calls_it_an_edge(self):
+        for number in range(3):
+            self._feedback(number, 0.8, 1.0)
+        other = PaperTradingAccount.objects.create(name="Other evidence account")
+        stock = Stock.objects.create(exchange=Exchange.DSE, trading_code="OTHER", last_price=100)
+        position = PaperPosition.objects.create(account=other, stock=stock, quantity=1, entry_price=100, opened_on=date(2026, 1, 1), is_open=False)
+        PaperLearningFeedback.objects.create(position=position, stock=stock, signal_date=date(2026, 1, 1), outcome_date=date(2026, 1, 5), gross_return_pct=50, net_return_pct=50, profitable_after_costs=True, holding_sessions=3, exit_reason="target")
+
+        account = PaperTradingAccount.objects.get(name="Learning test account")
+        report = paper_evidence_report(account)
+
+        self.assertEqual(report["completed_trades"], 3)
+        self.assertIn("Insufficient", report["evidence_status"])

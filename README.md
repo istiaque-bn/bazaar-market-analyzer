@@ -791,7 +791,7 @@ baseline on this historical sample," not as investment advice.
 backtester (`market/services/backtest.py` is a thin persistence wrapper
 around it) — replacing an older single-stock, cost-free simulator whose
 runs are kept as `BacktestRun.engine_version="v1"` rows (never deleted;
-new runs are `"v2"` and always **insert** a new row rather than overwrite
+new runs are `"v3"` and always **insert** a new row rather than overwrite
 one by name, so every run is a permanent, auditable historical record).
 
 ```python

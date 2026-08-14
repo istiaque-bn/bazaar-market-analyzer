@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from django.db.models import Sum
+
 from market.models import PaperLearningFeedback
 
 MIN_SAMPLE_FOR_RECOMMENDATION = 30
@@ -67,4 +69,40 @@ def paper_learning_report(feedbacks=None) -> dict:
         "confidence_rows": confidence_rows,
         "recommendation": recommendation,
         "ready_for_review": total >= MIN_SAMPLE_FOR_RECOMMENDATION and best is not None,
+    }
+
+
+def paper_evidence_report(account) -> dict:
+    """Auditable, after-cost paper evidence for one account only.
+
+    This is intentionally descriptive.  A positive value never becomes an
+    "edge" claim: it must later be compared with a locked out-of-sample
+    benchmark under the same cost model.
+    """
+    feedbacks = list(PaperLearningFeedback.objects.filter(position__account=account))
+    learning = paper_learning_report(feedbacks)
+    fees = account.trades.aggregate(total=Sum("fee"))["total"] or 0
+    snapshots = list(account.equity_snapshots.order_by("as_of").values_list("total_equity", flat=True))
+    max_drawdown = None
+    if snapshots:
+        peak = float(snapshots[0])
+        drawdowns = []
+        for equity in snapshots:
+            value = float(equity)
+            peak = max(peak, value)
+            drawdowns.append((value / peak - 1) * 100 if peak else 0)
+        max_drawdown = round(min(drawdowns), 2)
+    gross_total = round(sum(float(item.gross_return_pct) for item in feedbacks), 2)
+    net_total = round(sum(float(item.net_return_pct) for item in feedbacks), 2)
+    return {
+        **learning,
+        "total_estimated_fees": fees,
+        "gross_return_sum_pct": gross_total,
+        "net_return_sum_pct": net_total,
+        "max_drawdown_pct": max_drawdown,
+        "snapshot_count": len(snapshots),
+        "evidence_status": (
+            "Insufficient completed trades for review" if len(feedbacks) < MIN_SAMPLE_FOR_RECOMMENDATION
+            else "Reviewable paper sample only — not proof of an edge"
+        ),
     }

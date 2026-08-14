@@ -175,6 +175,40 @@ def _passes_three_day_book_rules(signal, cfg: dict) -> bool:
     return True
 
 
+def _passes_strict_research_rules(signal, cfg: dict) -> bool:
+    """Paper equivalent of the opt-in backtest challenger.
+
+    It deliberately does not inspect next_close forecasts.  The stored
+    forward-return probability remains a veto (minimum threshold), never an
+    ordering boost; candidates are ordered by the transparent rule score.
+    """
+    from market.models import StockGroup
+
+    stock = signal.stock
+    if stock.group == StockGroup.Z or not stock.last_price or not stock.last_volume:
+        return False
+    rows = list(
+        TechnicalSnapshot.objects.filter(stock_id=stock.id, as_of__lte=signal.as_of)
+        .order_by("-as_of")[:2]
+    )
+    if len(rows) < 2:
+        return False
+    current, previous = rows
+    if any(value is None for value in (current.rsi_14, current.macd, current.macd_signal, previous.macd, previous.macd_signal, current.volume_sma_20)):
+        return False
+    macd_cross = previous.macd <= previous.macd_signal and current.macd > current.macd_signal
+    volume_ok = stock.last_volume >= float(current.volume_sma_20) * float(cfg.get("volume_confirmation_ratio", 1.25))
+    if not (current.rsi_14 < 35 and macd_cross and volume_ok):
+        return False
+    # Frozen intraday selection is impossible in this daily paper runner;
+    # use only the current closed-session breadth as a real-time veto.
+    latest = TechnicalSnapshot.objects.filter(as_of=current.as_of, stock__exchange=stock.exchange, stock__is_active=True)
+    trend_rows = [(t.sma_50, t.stock.last_price) for t in latest.select_related("stock") if t.sma_50 and t.stock.last_price]
+    if not trend_rows or sum(price > sma for sma, price in trend_rows) / len(trend_rows) < float(cfg.get("breadth_threshold", 0.55)):
+        return False
+    return True
+
+
 def _eligible_entry_signals(*, as_of, cfg: dict, excluded_stock_ids: set[int], slots: int):
     """Return ranked candidates, applying the selected paper strategy only."""
     from market.services.exchange_config import enabled_exchanges
@@ -196,9 +230,12 @@ def _eligible_entry_signals(*, as_of, cfg: dict, excluded_stock_ids: set[int], s
         .exclude(risk_level="high")
         .exclude(stock_id__in=excluded_stock_ids)
         .select_related("stock")
-        .order_by("-probability", "-confidence", "-score")
     )
-    if cfg.get("strategy") != "three_day_book_rules":
+    # The strict candidate uses probability only as the filter above.  Its
+    # order is rule score/confidence, so forward_return_rf cannot boost a
+    # weak name into a trade.
+    base = base.order_by("-score", "-confidence") if cfg.get("strategy") == "strict_research_v1" else base.order_by("-probability", "-confidence", "-score")
+    if cfg.get("strategy") not in {"three_day_book_rules", "strict_research_v1"}:
         return list(base[:slots])
 
     # Do this once for the candidate set, so shares already marked as limited
@@ -211,7 +248,8 @@ def _eligible_entry_signals(*, as_of, cfg: dict, excluded_stock_ids: set[int], s
     for signal in signals:
         if quality.get(signal.stock_id, {}).get("limited"):
             continue
-        if _passes_three_day_book_rules(signal, cfg):
+        passes = _passes_three_day_book_rules(signal, cfg) if cfg.get("strategy") == "three_day_book_rules" else _passes_strict_research_rules(signal, cfg)
+        if passes:
             accepted.append(signal)
             if len(accepted) >= slots:
                 break

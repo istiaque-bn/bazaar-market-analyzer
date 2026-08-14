@@ -845,9 +845,12 @@ def sync_dse_history(
                 n = save_history(stock, df, source=DataSource.DSE_HISTORY, import_batch=batch)
             except Exception as exc:
                 logger.exception("DSE history save failed for %s: %s", code, exc)
-                skipped += 1
-                errors.append(f"{code}: {type(exc).__name__}: {exc}")
-                continue
+                # A persistence failure is not equivalent to an upstream
+                # per-symbol miss: continuing would publish a seemingly
+                # successful, partially-written batch and hide the data-loss
+                # risk.  Let the outer handler close the batch with its error
+                # and surface the failure to the caller.
+                raise
             bars_saved += int(n or 0)
             ok += 1
             try:

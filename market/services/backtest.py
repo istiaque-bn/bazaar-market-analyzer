@@ -22,7 +22,21 @@ from market.services.backtest_engine import (
     _exchange_index_proxy_return_pct,
 )
 
-ENGINE_VERSION = "v2"
+ENGINE_VERSION = "v3"
+
+
+def strict_candidate_portfolio_config() -> PortfolioConfig:
+    """Pre-registered challenger; do not make this the product default.
+
+    Its parameters were chosen before the final holdout run and are kept in
+    one place so evaluation cannot silently tune the holdout.
+    """
+    return PortfolioConfig(
+        strategy="strict_research_v1", position_size_pct=12.0, max_positions=5,
+        hold_days=40, target_return_pct=12.0, stop_loss_pct=6.0,
+        volume_confirmation_ratio=1.25, min_traded_value=250_000.0,
+        universe_size=40, breadth_threshold=0.55,
+    )
 
 
 def run_backtest(
@@ -45,7 +59,8 @@ def run_backtest(
         raise ValueError("start_date must be <= end_date")
 
     cost_config = cost_config or CostConfig()
-    portfolio_config = portfolio_config or PortfolioConfig(hold_days=hold_days)
+    if portfolio_config is None:
+        portfolio_config = strict_candidate_portfolio_config() if strategy == "strict_research_v1" else PortfolioConfig(hold_days=hold_days)
 
     engine = PortfolioBacktester(
         exchange=exchange,

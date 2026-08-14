@@ -30,7 +30,8 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from market.models import Stock
+from market.models import DataSource, Stock, StockGroup
+from market.services.data_quality import TRAINING_EXCLUDE_FLAGS
 from market.services.indicators import compute_indicators, prices_to_df
 
 MIN_HISTORY_BARS = 100
@@ -79,6 +80,14 @@ class PortfolioConfig:
     max_positions: int = 20
     hold_days: int = 20
     target_return_pct: float = 5.0
+    # ``rsi_macd_v1`` is deliberately the deployed baseline.  The strict
+    # candidate is opt-in until an untouched holdout has demonstrated an edge.
+    strategy: str = "rsi_macd_v1"
+    stop_loss_pct: float | None = None
+    volume_confirmation_ratio: float = 1.25
+    min_traded_value: float = 250_000.0
+    universe_size: int = 40
+    breadth_threshold: float = 0.55
 
     def as_dict(self) -> dict:
         return {
@@ -87,6 +96,12 @@ class PortfolioConfig:
             "max_positions": self.max_positions,
             "hold_days": self.hold_days,
             "target_return_pct": self.target_return_pct,
+            "strategy": self.strategy,
+            "stop_loss_pct": self.stop_loss_pct,
+            "volume_confirmation_ratio": self.volume_confirmation_ratio,
+            "min_traded_value": self.min_traded_value,
+            "universe_size": self.universe_size,
+            "breadth_threshold": self.breadth_threshold,
         }
 
 
@@ -131,7 +146,7 @@ class _PendingOrder:
     position: "_Position | None" = None
 
 
-def _signal_at(row: pd.Series, prev_row: pd.Series | None) -> bool:
+def _signal_at(row: pd.Series, prev_row: pd.Series | None, *, strategy: str = "rsi_macd_v1", breadth_ok: bool = True, volume_confirmation_ratio: float = 1.25) -> bool:
     """Same rule as the pre-Phase-5 engine: RSI oversold or a fresh MACD
     bullish cross, evaluated on day d's own indicator row only."""
     rsi = row.get("rsi_14")
@@ -144,17 +159,55 @@ def _signal_at(row: pd.Series, prev_row: pd.Series | None) -> bool:
         and prev_row["macd"] <= prev_row["macd_signal"]
         and row["macd"] > row["macd_signal"]
     )
-    return bool((pd.notna(rsi) and rsi < 35) or macd_up)
+    if strategy == "rsi_macd_v1":
+        return bool((pd.notna(rsi) and rsi < 35) or macd_up)
+    if strategy != "strict_research_v1":
+        raise ValueError(f"Unknown backtest strategy: {strategy}")
+    # The candidate intentionally waits for a reversal confirmation, not just
+    # an oversold print: both RSI and a fresh MACD cross plus above-normal
+    # volume.  A positive market breadth regime prevents mean-reversion buys
+    # during broad market declines.  All fields are from the signal bar.
+    volume = row.get("volume")
+    volume_sma = row.get("volume_sma_20")
+    volume_ok = pd.notna(volume) and pd.notna(volume_sma) and volume_sma > 0 and volume >= volume_sma * volume_confirmation_ratio
+    return bool(pd.notna(rsi) and rsi < 35 and macd_up and volume_ok and breadth_ok)
 
 
-def _load_universe(exchange: str | None, end_date: date, include_demo: bool = False) -> list[StockSeries]:
+def _load_universe(exchange: str | None, end_date: date, include_demo: bool = False, *, strict: bool = False, as_of_date: date | None = None, min_traded_value: float = 0, universe_size: int = 40) -> list[StockSeries]:
     qs = Stock.objects.filter(is_active=True)
     if exchange:
         qs = qs.filter(exchange=exchange)
     out = []
+    # Candidate membership is selected once using information available before
+    # the tested window. It is never recomputed from today's liquid names.
+    if strict:
+        qs = qs.exclude(group=StockGroup.Z)
+    ranked: list[tuple[float, Stock]] = []
     for stock in qs:
+        if strict:
+            cutoff = as_of_date or end_date
+            trailing = stock.prices.live().exclude(source=DataSource.UNKNOWN).filter(date__lte=cutoff).order_by("-date")[:60]
+            # Some legacy feeds stored a non-zero but clearly non-notional
+            # ``value`` field.  Use the conservative larger of supplied value
+            # and close × volume as the traded-value proxy, never raw volume.
+            values = [max(float(p.value or 0), float(p.close or 0) * float(p.volume or 0)) for p in trailing if not set(p.quality_flags or []) & (TRAINING_EXCLUDE_FLAGS | {"open_out_of_range"})]
+            if len(values) < 40 or (sum(values) / len(values)) < min_traded_value:
+                continue
+            ranked.append((sum(values) / len(values), stock))
+        else:
+            ranked.append((0, stock))
+    if strict:
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        ranked = ranked[:universe_size]
+    for _, stock in ranked:
         prices_qs = stock.prices.all() if include_demo else stock.prices.live()
-        df = prices_to_df(prices_qs.filter(date__lte=end_date))
+        if strict:
+            # Unknown-provenance rows are excluded from the candidate rather
+            # than silently treated as evidence of a tradable fill.
+            prices_qs = prices_qs.exclude(source=DataSource.UNKNOWN)
+            df = prices_to_df(prices_qs.filter(date__lte=end_date), exclude_quality_flags=TRAINING_EXCLUDE_FLAGS | {"open_out_of_range"})
+        else:
+            df = prices_to_df(prices_qs.filter(date__lte=end_date))
         if len(df) < MIN_HISTORY_BARS:
             continue
         ind = compute_indicators(df)
@@ -204,7 +257,12 @@ class PortfolioBacktester:
         return None
 
     def run(self) -> dict:
-        universe = _load_universe(self.exchange, self.end_date.date(), include_demo=self.include_demo)
+        strict = self.pf.strategy == "strict_research_v1"
+        universe = _load_universe(
+            self.exchange, self.end_date.date(), include_demo=self.include_demo,
+            strict=strict, as_of_date=(self.start_date - pd.Timedelta(days=1)).date(),
+            min_traded_value=self.pf.min_traded_value, universe_size=self.pf.universe_size,
+        )
         window_all_dates: set = set()
         for s in universe:
             s.window_dates = [d for d in s.dates if self.start_date <= d <= self.end_date]
@@ -230,11 +288,30 @@ class PortfolioBacktester:
         warnings_log: list[str] = []
         rejections = {"insufficient_liquidity_or_cash": 0, "max_positions": 0, "already_open": 0, "entry_abandoned_suspended": 0}
 
+        # Breadth is a frozen-universe, same-day diagnostic.  It deliberately
+        # uses no membership or returns from after the decision date.
+        breadth_by_date: dict[pd.Timestamp, float] = {}
+        if strict:
+            for d in calendar:
+                in_uptrend = []
+                for s in universe:
+                    if d not in s.frame.index:
+                        continue
+                    row = s.frame.loc[d]
+                    if pd.notna(row.get("sma_50")):
+                        in_uptrend.append(float(row["close"]) > float(row["sma_50"]))
+                breadth_by_date[d] = float(np.mean(in_uptrend)) if in_uptrend else 0.0
+
         def open_position(order: _PendingOrder, s: StockSeries, d: pd.Timestamp, row: pd.Series) -> bool:
             nonlocal cash
             open_px = float(row["open"])
             volume = float(row.get("volume") or 0)
             if open_px <= 0:
+                return False
+            # A zero-range session or an explicit bad-OHLC flag cannot support
+            # the assumed next-open fill. Reject rather than invent liquidity.
+            if strict and (float(row.get("high") or 0) <= float(row.get("low") or 0)):
+                rejections["insufficient_liquidity_or_cash"] += 1
                 return False
             exec_price = open_px * (1 + self.cost.adverse_price_pct)
             equity_now = cash + sum(p.shares * p.last_price for p in positions.values())
@@ -270,6 +347,7 @@ class PortfolioBacktester:
                 cash_paid=total_cash_out,
                 last_price=float(row["close"]),
                 last_price_date=d,
+                corp_action_flagged=bool(pd.notna(row.get("return_1d")) and abs(float(row["return_1d"])) * 100 >= CORP_ACTION_RETURN_THRESHOLD_PCT),
             )
             return True
 
@@ -389,10 +467,13 @@ class PortfolioBacktester:
                 idx_today = s.date_to_idx[d]
                 sessions_held = (idx_today - idx_entry) if idx_entry is not None else 0
                 target_hit = close_px >= pos.entry_exec_price * (1 + self.pf.target_return_pct / 100.0)
+                # Stop triggers from the bar low (not merely its close), then
+                # exits at the next executable open, allowing adverse gaps.
+                stop_hit = self.pf.stop_loss_pct is not None and float(row.get("low") or close_px) <= pos.entry_exec_price * (1 - self.pf.stop_loss_pct / 100.0)
                 time_hit = sessions_held >= self.pf.hold_days
-                if target_hit or time_hit:
+                if target_hit or stop_hit or time_hit:
                     nxt = self._stock_next_date(s, d)
-                    reason = "target" if target_hit else "hold_days"
+                    reason = "stop_loss" if stop_hit else ("target" if target_hit else "hold_days")
                     if nxt is None:
                         del positions[stock_id]
                         close_position(pos, d, close_px, apply_costs=False, reason="forced_close_no_further_data", corp_flag=pos.corp_action_flagged)
@@ -411,7 +492,11 @@ class PortfolioBacktester:
                     continue
                 row = s.frame.loc[d]
                 prev_row = s.frame.iloc[idx - 1]
-                if not _signal_at(row, prev_row):
+                breadth_ok = breadth_by_date.get(d, 0.0) >= self.pf.breadth_threshold
+                if not _signal_at(
+                    row, prev_row, strategy=self.pf.strategy, breadth_ok=breadth_ok,
+                    volume_confirmation_ratio=self.pf.volume_confirmation_ratio,
+                ):
                     continue
                 if s.stock_id in open_or_pending_buy:
                     rejections["already_open"] += 1

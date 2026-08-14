@@ -15,6 +15,13 @@
   <div class="stat"><div class="label">Flagged rows</div><div class="value">{{ report.flagged_rows }}</div></div>
 </div>
 
+<div class="disclaimer" style="margin-top:1.2rem;">
+  <strong>Research readiness:</strong> {{ report.research_readiness.blank_sector_stocks }} stocks have no sector;
+  {{ report.research_readiness.unknown_provenance_rows }} rows have unknown provenance; and
+  {{ report.research_readiness.strict_flag_occurrences }} flag occurrences would be excluded by the strict research candidate.
+  {{ report.research_readiness.note }}
+</div>
+
 <div class="disclaimer">
   "Unknown provenance" rows predate Phase 6 — provenance was never tracked before, and there is no
   reliable way to reconstruct it after the fact, so they are labeled unknown rather than guessed as
