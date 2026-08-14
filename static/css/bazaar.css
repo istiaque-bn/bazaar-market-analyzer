@@ -647,6 +647,12 @@ body.nav-open { overflow: hidden; }
 .panel[style*="max-width"] {
   margin-inline: auto;
 }
+.single-card-header {
+  width: min(100%, 520px);
+  margin: 1rem auto;
+  text-align: center;
+}
+.single-card-header > a { display: inline-block; }
 .panel h2, .panel h3 {
   font-family: var(--font-display);
   margin: 0 0 0.8rem;
