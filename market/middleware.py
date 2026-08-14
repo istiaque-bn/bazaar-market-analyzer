@@ -86,4 +86,10 @@ class BengaliStaticCopyMiddleware:
         html = response.content.decode(response.charset or "utf-8")
         html = _BENGALI_STATIC_PATTERN.sub(lambda match: f"{match.group(1)}{_BENGALI_STATIC_COPY[match.group(2)]}{match.group(3)}", html)
         response.content = html.encode(response.charset or "utf-8")
+        # CommonMiddleware may already have calculated this header before
+        # this response-time localization pass. Bengali UTF-8 text changes
+        # the byte length; leave it to the WSGI server to calculate the
+        # correct value rather than letting a browser truncate scripts near
+        # the end of the page (which breaks the navbar controls).
+        response.headers.pop("Content-Length", None)
         return response

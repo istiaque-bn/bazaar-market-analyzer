@@ -19,6 +19,7 @@ class BanglaInterfaceTests(TestCase):
         self.assertIn("মার্কেট ড্যাশবোর্ড", html)
         self.assertNotIn("bangla-ui.js", html)
         self.assertIn("সব এক্সচেঞ্জ", self.client.get(reverse("stock_list")).content.decode())
+        self.assertNotIn("Content-Length", self.client.get(reverse("stock_list")).headers)
 
     def test_english_remains_the_default_language(self):
         html = self.client.get(reverse("dashboard")).content.decode()
