@@ -55,6 +55,7 @@ def market_nav(request):
     from market.models import AnalysisResult, Exchange, MarketSnapshot, PriceHistory, Stock
     from market.services.exchange_config import enabled_exchanges
     from market.services.market_hours import both_exchanges_status
+    from market.services.autosync import get_last_success_at
     from market.services.screener import screen_summary
 
     enabled = enabled_exchanges()
@@ -119,6 +120,9 @@ def market_nav(request):
         "project_timezone": settings.TIME_ZONE,
         "local_now": local_now,
         "local_now_display": local_now.strftime("%a %d %b · %I:%M %p").lstrip("0").replace(" 0", " "),
+        # This is the last completed market-sync time, not the page-render
+        # time, so every page can state exactly how fresh its prices are.
+        "market_data_updated_at": get_last_success_at(),
         "active_nav": _active_nav(request),
         "enabled_exchanges": enabled,
         "dse_enabled": dse_on,

@@ -100,6 +100,10 @@
             <span class="local-clock-tz">{{ project_timezone }}</span>
             <span class="local-clock-time" id="localClockTime">{{ local_now_display }}</span>
           </div>
+          <div class="market-data-freshness" title="Time of the most recent successful market-data fetch">
+            <span class="market-data-freshness-label">{% translate "Data updated" %}</span>
+            <span class="market-data-freshness-time data-last-updated" data-iso="{% if market_data_updated_at %}{{ market_data_updated_at|date:'c' }}{% endif %}">{% if market_data_updated_at %}{{ market_data_updated_at|date:"d M, H:i" }}{% else %}{% translate "Waiting for first update" %}{% endif %}</span>
+          </div>
           <div class="market-status-chip {% if market_hours.dse.is_open %}is-open{% else %}is-closed{% endif %}" data-ex="DSE">
             <span class="ms-ex">DSE</span>
             <span class="ms-state">{{ market_hours.dse.status }}</span>

@@ -81,9 +81,8 @@
   }
 
   function updateDataLastUpdated(sync) {
-    const el = document.getElementById("dataLastUpdated");
-    if (!el || !sync || !sync.last_success) return;
-    if (el.dataset.iso === sync.last_success) return; // no change since last render
+    const elements = document.querySelectorAll(".data-last-updated, #dataLastUpdated");
+    if (!elements.length || !sync || !sync.last_success) return;
     try {
       const fmt = new Intl.DateTimeFormat("en-GB", {
         timeZone: "Asia/Dhaka",
@@ -96,8 +95,11 @@
       });
       const parts = {};
       fmt.formatToParts(new Date(sync.last_success)).forEach((p) => { parts[p.type] = p.value; });
-      el.textContent = `${parts.day} ${parts.month} ${parts.year}, ${parts.hour}:${parts.minute}`;
-      el.dataset.iso = sync.last_success;
+      elements.forEach((el) => {
+        if (el.dataset.iso === sync.last_success) return;
+        el.textContent = `${parts.day} ${parts.month} ${parts.year}, ${parts.hour}:${parts.minute}`;
+        el.dataset.iso = sync.last_success;
+      });
     } catch (_) {
       /* keep existing text */
     }

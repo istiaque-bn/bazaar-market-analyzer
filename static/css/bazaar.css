@@ -244,6 +244,29 @@ a:hover { color: var(--gold); }
   color: var(--ink);
   white-space: nowrap;
 }
+.market-data-freshness {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.1rem;
+  padding: 0.28rem 0.7rem;
+  border-radius: 10px;
+  border: 1px solid rgba(26, 122, 76, 0.3);
+  background: rgba(26, 122, 76, 0.07);
+  min-width: 8.8rem;
+}
+.market-data-freshness-label {
+  font-size: 0.65rem;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.market-data-freshness-time {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--forest-deep);
+  white-space: nowrap;
+}
 .market-status-chip {
   display: grid;
   grid-template-columns: auto auto;
