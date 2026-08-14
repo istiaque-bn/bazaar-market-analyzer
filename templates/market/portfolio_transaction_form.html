@@ -70,6 +70,15 @@
       {{ form.notes }}
     </label>
 
+    <fieldset style="border:1px solid var(--border); border-radius:10px; padding:1rem; margin:1rem 0;">
+      <legend style="padding:0 .35rem;">Investor journal (private)</legend>
+      <p class="muted tiny">Record your decision process. These notes never place a broker order or become investment advice.</p>
+      <label for="{{ form.thesis.id_for_label }}">Thesis {{ form.thesis.errors }}{{ form.thesis }}</label>
+      <label for="{{ form.target_price.id_for_label }}">Target price (BDT, optional) {{ form.target_price.errors }}{{ form.target_price }}</label>
+      <label for="{{ form.invalidation.id_for_label }}">Risk / invalidation {{ form.invalidation.errors }}{{ form.invalidation }}</label>
+      <label for="{{ form.post_trade_review.id_for_label }}">Post-trade review {{ form.post_trade_review.errors }}{{ form.post_trade_review }}</label>
+    </fieldset>
+
     <button class="btn" type="submit">
       {% if mode == "edit" %}Save changes{% elif mode == "add_holding" %}Add holding{% else %}Record transaction{% endif %}
     </button>

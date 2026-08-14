@@ -575,6 +575,11 @@ def create_transaction(
     fees: Decimal,
     transaction_date: date,
     notes: str = "",
+    *,
+    thesis: str = "",
+    target_price: Decimal | None = None,
+    invalidation: str = "",
+    post_trade_review: str = "",
 ) -> PortfolioTransaction:
     fees = fees if fees is not None else ZERO
     validate_transaction(portfolio, stock, transaction_type, quantity, price_per_share, fees, transaction_date)
@@ -587,6 +592,10 @@ def create_transaction(
         fees=fees,
         transaction_date=transaction_date,
         notes=notes or "",
+        thesis=thesis or "",
+        target_price=target_price,
+        invalidation=invalidation or "",
+        post_trade_review=post_trade_review or "",
     )
 
 
@@ -599,6 +608,11 @@ def update_transaction(
     fees: Decimal,
     transaction_date: date,
     notes: str = "",
+    *,
+    thesis: str = "",
+    target_price: Decimal | None = None,
+    invalidation: str = "",
+    post_trade_review: str = "",
 ) -> PortfolioTransaction:
     fees = fees if fees is not None else ZERO
     validate_transaction(
@@ -611,6 +625,10 @@ def update_transaction(
     txn.fees = fees
     txn.transaction_date = transaction_date
     txn.notes = notes or ""
+    txn.thesis = thesis or ""
+    txn.target_price = target_price
+    txn.invalidation = invalidation or ""
+    txn.post_trade_review = post_trade_review or ""
     txn.save()
     # An edit to an early transaction can invalidate a later one even
     # though validate_transaction (above) only checked up to *this* row's

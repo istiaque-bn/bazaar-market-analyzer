@@ -85,6 +85,10 @@ class TransactionForm(forms.Form):
     fees = forms.DecimalField(max_digits=12, decimal_places=4, min_value=Decimal("0"), required=False, initial=Decimal("0"))
     transaction_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
     notes = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 2, "maxlength": 2000}))
+    thesis = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 3, "maxlength": 4000, "placeholder": "Why do you own or trade this share?"}))
+    target_price = forms.DecimalField(required=False, max_digits=14, decimal_places=4, min_value=Decimal("0"), widget=forms.NumberInput(attrs={"min": "0", "step": "0.01", "placeholder": "Optional BDT target"}))
+    invalidation = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 2, "maxlength": 2000, "placeholder": "What would prove this idea wrong or make you exit?"}))
+    post_trade_review = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 3, "maxlength": 4000, "placeholder": "After closing or reducing: what happened and what did you learn?"}))
     allow_fractional = forms.BooleanField(required=False, widget=forms.HiddenInput)
 
 
@@ -117,15 +121,25 @@ class TransactionForm(forms.Form):
 
     def clean(self):
         cleaned = super().clean()
+        for name in ("thesis", "invalidation", "post_trade_review"):
+            cleaned[name] = (cleaned.get(name) or "").strip()
         quantity = cleaned.get("quantity")
         if quantity is not None and not cleaned.get("allow_fractional"):
-            # DSE/CSE only trade whole shares — the model itself stays a
-            # DecimalField (see market.models.PortfolioTransaction) so a
-            # future fractional-share venue wouldn't need a schema change,
-            # but the standard form enforces the real-world constraint.
             if quantity != quantity.to_integral_value():
                 self.add_error("quantity", "DSE/CSE shares must be a whole number.")
         return cleaned
+
+
+class PortfolioCSVImportForm(forms.Form):
+    csv_file = forms.FileField()
+
+    def clean_csv_file(self):
+        uploaded = self.cleaned_data["csv_file"]
+        if uploaded.size > 1_000_000:
+            raise forms.ValidationError("CSV file must be 1 MB or smaller.")
+        if not uploaded.name.lower().endswith(".csv"):
+            raise forms.ValidationError("Upload a .csv file exported from your broker.")
+        return uploaded
 
 
 class AdminReminderForm(forms.Form):

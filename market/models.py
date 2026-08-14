@@ -930,6 +930,13 @@ class PortfolioTransaction(models.Model):
     fees = models.DecimalField(max_digits=12, decimal_places=4, default=Decimal("0"))
     transaction_date = models.DateField(db_index=True)
     notes = models.TextField(blank=True)
+    # Personal decision journal. These fields are intentionally attached to
+    # the ledger row rather than market data: they record what the investor
+    # knew and intended at the time of this specific trade.
+    thesis = models.TextField(blank=True, max_length=4000)
+    target_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    invalidation = models.TextField(blank=True, max_length=2000)
+    post_trade_review = models.TextField(blank=True, max_length=4000)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

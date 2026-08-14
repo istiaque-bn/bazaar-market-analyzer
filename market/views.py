@@ -11,7 +11,7 @@ from datetime import datetime
 
 from accounts.decorators import admin_required, staff_or_admin_required
 from accounts.roles import role_home_url
-from market.forms import PortfolioForm, PortfolioGoalForm, ResearchNoteForm, TransactionForm
+from market.forms import PortfolioCSVImportForm, PortfolioForm, PortfolioGoalForm, ResearchNoteForm, TransactionForm
 from market.forms import AdminReminderForm
 from market.models import (
     AnalysisResult,
@@ -1151,6 +1151,7 @@ def portfolio_detail(request, portfolio_id):
             "market_hours": both_exchanges_status(),
             "disclaimer": PORTFOLIO_DISCLAIMER,
             "today": timezone.localdate(),
+            "csv_import_form": PortfolioCSVImportForm(),
         },
     )
 
@@ -1183,6 +1184,92 @@ def portfolio_export_csv(request, portfolio_id):
     for row in portfolio_summary(portfolio)["holdings"]:
         writer.writerow([row["trading_code"], row["exchange"], row["quantity"], row["average_price"], row["latest_price"], row["market_value"], row["unrealized_pl"], row["allocation_pct"]])
     return response
+
+
+@login_required
+@require_POST
+def portfolio_import_csv(request, portfolio_id):
+    """Import broker-exported BUY/SELL rows atomically.
+
+    Accepted headings (case-insensitive): code/trading_code, exchange,
+    quantity, price/price_per_share/avg_buy, transaction_date/date, fees,
+    type/transaction_type, notes, thesis, target_price, invalidation and
+    post_trade_review.  A rejected row imports nothing, so the user's ledger
+    cannot be left half-updated by a malformed broker export.
+    """
+    import csv
+    import io
+    from decimal import Decimal, InvalidOperation
+
+    from market.services.portfolio import PortfolioValidationError, create_transaction, validate_ledger_after_mutation
+
+    portfolio = _owned_portfolio(request, portfolio_id)
+    form = PortfolioCSVImportForm(request.POST, request.FILES)
+    if not form.is_valid():
+        messages.error(request, next(iter(form.errors.get("csv_file", ["Please choose a CSV file."]))))
+        return redirect("portfolio_detail", portfolio_id=portfolio.id)
+    try:
+        raw = form.cleaned_data["csv_file"].read().decode("utf-8-sig")
+        reader = csv.DictReader(io.StringIO(raw))
+        if not reader.fieldnames:
+            raise ValueError("CSV needs a header row.")
+        rows = [{(key or "").strip().lower(): (value or "").strip() for key, value in row.items()} for row in reader]
+        if not rows:
+            raise ValueError("CSV contains no transaction rows.")
+
+        def value(row, *names, default=""):
+            return next((row[name] for name in names if row.get(name, "") != ""), default)
+
+        prepared = []
+        for line, row in enumerate(rows, start=2):
+            code = value(row, "code", "trading_code", "symbol").upper()
+            exchange = value(row, "exchange", default="DSE").upper()
+            if not code:
+                raise ValueError(f"Row {line}: code is required.")
+            if exchange not in ("DSE", "CSE"):
+                raise ValueError(f"Row {line}: exchange must be DSE or CSE.")
+            stock = Stock.objects.filter(exchange=exchange, trading_code__iexact=code, is_active=True).first()
+            if not stock:
+                raise ValueError(f"Row {line}: {code} ({exchange}) is not an available stock.")
+            try:
+                quantity = Decimal(value(row, "quantity", "qty"))
+                price = Decimal(value(row, "price_per_share", "price", "avg_buy", "average_price"))
+                fees = Decimal(value(row, "fees", "fee", "charges", default="0"))
+                target_raw = value(row, "target_price", "target")
+                target = Decimal(target_raw) if target_raw else None
+            except InvalidOperation:
+                raise ValueError(f"Row {line}: quantity, price, fees, and target must be valid numbers.")
+            if quantity <= 0 or price < 0 or fees < 0 or (target is not None and target < 0):
+                raise ValueError(f"Row {line}: quantity must be positive; price, fees, and target cannot be negative.")
+            date_raw = value(row, "transaction_date", "date")
+            try:
+                transaction_date = datetime.strptime(date_raw, "%Y-%m-%d").date() if date_raw else timezone.localdate()
+            except ValueError:
+                raise ValueError(f"Row {line}: date must use YYYY-MM-DD.")
+            txn_type = value(row, "transaction_type", "type", "side", default="BUY").upper()
+            if txn_type not in (TransactionType.BUY, TransactionType.SELL):
+                raise ValueError(f"Row {line}: type must be BUY or SELL.")
+            if quantity != quantity.to_integral_value():
+                raise ValueError(f"Row {line}: DSE/CSE shares must be a whole number.")
+            prepared.append((transaction_date, line, stock, txn_type, quantity, price, fees, row, target))
+
+        with transaction.atomic():
+            changed_stocks = set()
+            for transaction_date, _line, stock, txn_type, quantity, price, fees, row, target in sorted(prepared, key=lambda item: (item[0], item[1])):
+                create_transaction(
+                    portfolio, stock, txn_type, quantity, price, fees, transaction_date,
+                    value(row, "notes", "note"), thesis=value(row, "thesis"), target_price=target,
+                    invalidation=value(row, "invalidation", "risk", "risk_invalidation"),
+                    post_trade_review=value(row, "post_trade_review", "review"),
+                )
+                changed_stocks.add(stock)
+            for stock in changed_stocks:
+                validate_ledger_after_mutation(portfolio, stock)
+    except (UnicodeDecodeError, ValueError, PortfolioValidationError) as exc:
+        messages.error(request, f"Import cancelled: {exc}")
+        return redirect("portfolio_detail", portfolio_id=portfolio.id)
+    messages.success(request, f"Imported {len(prepared)} transaction{'s' if len(prepared) != 1 else ''} from CSV.")
+    return redirect("portfolio_detail", portfolio_id=portfolio.id)
 
 
 @login_required
@@ -1269,6 +1356,7 @@ def portfolio_add_transaction(request, portfolio_id):
                 create_transaction(
                     portfolio, c["stock"], c["transaction_type"], c["quantity"],
                     c["price_per_share"], c["fees"], c["transaction_date"], c["notes"],
+                    thesis=c["thesis"], target_price=c["target_price"], invalidation=c["invalidation"], post_trade_review=c["post_trade_review"],
                 )
                 messages.success(request, f'{c["transaction_type"].title()} recorded for {c["stock"].trading_code}.')
                 return redirect("portfolio_detail", portfolio_id=portfolio.id)
@@ -1301,6 +1389,7 @@ def portfolio_add_holding(request, portfolio_id):
                 create_transaction(
                     portfolio, c["stock"], TransactionType.BUY, c["quantity"],
                     c["price_per_share"], c["fees"], c["transaction_date"], c["notes"],
+                    thesis=c["thesis"], target_price=c["target_price"], invalidation=c["invalidation"], post_trade_review=c["post_trade_review"],
                 )
                 messages.success(request, f'Added {c["stock"].trading_code} to "{portfolio.name}".')
                 return redirect("portfolio_detail", portfolio_id=portfolio.id)
@@ -1329,6 +1418,7 @@ def portfolio_edit_transaction(request, portfolio_id, txn_id):
                 update_transaction(
                     txn, c["transaction_type"], c["quantity"], c["price_per_share"],
                     c["fees"], c["transaction_date"], c["notes"],
+                    thesis=c["thesis"], target_price=c["target_price"], invalidation=c["invalidation"], post_trade_review=c["post_trade_review"],
                 )
                 messages.success(request, "Transaction updated.")
                 return redirect("portfolio_transactions", portfolio_id=portfolio.id)
@@ -1344,6 +1434,10 @@ def portfolio_edit_transaction(request, portfolio_id, txn_id):
                 "fees": txn.fees,
                 "transaction_date": txn.transaction_date,
                 "notes": txn.notes,
+                "thesis": txn.thesis,
+                "target_price": txn.target_price,
+                "invalidation": txn.invalidation,
+                "post_trade_review": txn.post_trade_review,
                 "allow_fractional": txn.quantity != txn.quantity.to_integral_value(),
             },
             portfolio=portfolio,

@@ -19,6 +19,7 @@ urlpatterns = [
     path("portfolio/<int:portfolio_id>/rename/", views.portfolio_rename, name="portfolio_rename"),
     path("portfolio/<int:portfolio_id>/goal/", views.portfolio_goal_save, name="portfolio_goal_save"),
     path("portfolio/<int:portfolio_id>/export.csv", views.portfolio_export_csv, name="portfolio_export_csv"),
+    path("portfolio/<int:portfolio_id>/import.csv", views.portfolio_import_csv, name="portfolio_import_csv"),
     path("portfolio/<int:portfolio_id>/set-default/", views.portfolio_set_default, name="portfolio_set_default"),
     path("portfolio/<int:portfolio_id>/delete/", views.portfolio_delete, name="portfolio_delete"),
     path("portfolio/<int:portfolio_id>/quotes.json", views.portfolio_quotes_json, name="portfolio_quotes_json"),

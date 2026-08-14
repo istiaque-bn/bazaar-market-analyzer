@@ -23,10 +23,22 @@
     {% endif %}
     <a class="btn btn-small btn-gold" href="{% url 'portfolio_add_holding' portfolio.id %}">+ Add holding</a>
     <a class="btn btn-small btn-ghost" href="{% url 'portfolio_add_transaction' portfolio.id %}">+ Add transaction</a>
+    <button class="btn btn-small btn-ghost" type="button" onclick="document.getElementById('csvImport').showModal()">Import CSV</button>
     <a class="btn btn-small btn-ghost" href="{% url 'portfolio_export_csv' portfolio.id %}">Export CSV</a>
     <button class="btn btn-small btn-ghost" type="button" id="portfolioRefreshBtn">↻ Refresh</button>
   </div>
 </div>
+
+<dialog id="csvImport" class="panel" style="max-width:560px;">
+  <form method="post" action="{% url 'portfolio_import_csv' portfolio.id %}" enctype="multipart/form-data" class="form">
+    {% csrf_token %}
+    <h3>Import broker CSV</h3>
+    <p class="muted">No broker connection is needed. Required columns: <code>code</code>, <code>quantity</code>, and <code>price</code>. Optional: <code>exchange</code> (DSE by default), <code>date</code>, <code>type</code> (BUY by default), <code>fees</code>, <code>notes</code>, <code>thesis</code>, <code>target_price</code>, <code>invalidation</code>, and <code>post_trade_review</code>.</p>
+    <label>CSV file {{ csv_import_form.csv_file }}</label>
+    <p class="muted tiny">Dates must be YYYY-MM-DD. The complete file is validated before anything is saved.</p>
+    <div class="portfolio-actions"><button class="btn" type="submit">Validate and import</button><button class="btn btn-ghost" type="button" onclick="this.closest('dialog').close()">Cancel</button></div>
+  </form>
+</dialog>
 
 <div class="grid-2" style="margin-top:1rem;">
   <section class="panel">
@@ -211,7 +223,7 @@
 <div class="panel">
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Date</th><th>Type</th><th>Code</th><th>Qty</th><th>Price</th><th>Fees</th><th>Total</th><th></th></tr></thead>
+      <thead><tr><th>Date</th><th>Type</th><th>Code</th><th>Qty</th><th>Price</th><th>Fees</th><th>Total</th><th>Journal</th><th></th></tr></thead>
       <tbody>
         {% for t in recent_transactions %}
         <tr>
@@ -222,10 +234,11 @@
           <td>{{ t.price_per_share|bdt:2 }}</td>
           <td>{{ t.fees|bdt:2 }}</td>
           <td>{{ t.gross_amount|bdt:2 }}</td>
+          <td class="muted tiny">{% if t.thesis %}<strong>Thesis:</strong> {{ t.thesis|truncatechars:80 }}{% elif t.notes %}{{ t.notes|truncatechars:80 }}{% else %}—{% endif %}</td>
           <td><a class="btn btn-small btn-ghost" href="{% url 'portfolio_edit_transaction' portfolio.id t.id %}">Edit</a></td>
         </tr>
         {% empty %}
-        <tr><td colspan="8" class="muted">No transactions yet.</td></tr>
+        <tr><td colspan="9" class="muted">No transactions yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>

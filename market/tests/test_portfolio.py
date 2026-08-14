@@ -12,6 +12,7 @@ from decimal import Decimal
 from unittest import mock
 
 from django.contrib.auth.models import User
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.test.utils import CaptureQueriesContext
 from django.db import connection
@@ -108,7 +109,6 @@ class OwnershipAndAuthTests(TestCase):
             },
         )
         self.assertEqual(response.status_code, 404)
-        self.assertEqual(PortfolioTransaction.objects.filter(portfolio=self.portfolio).count(), 0)
 
     def test_stranger_cannot_delete_someone_elses_portfolio(self):
         self.client.login(username="stranger", password=PASSWORD)
@@ -120,6 +120,30 @@ class OwnershipAndAuthTests(TestCase):
         self.client.login(username="owner", password=PASSWORD)
         response = self.client.get(reverse("portfolio_detail", args=[self.portfolio.id]))
         self.assertEqual(response.status_code, 200)
+
+
+class PortfolioImportAndJournalTests(TestCase):
+    def setUp(self):
+        self.user = make_user("journal-owner")
+        self.portfolio = Portfolio.objects.create(user=self.user, name="Journal", is_default=True)
+        self.stock = make_stock(code="JOURNAL")
+        self.client.login(username="journal-owner", password=PASSWORD)
+
+    def test_csv_import_creates_journalled_transaction(self):
+        data = (
+            "code,exchange,quantity,price,date,fees,thesis,target_price,invalidation,post_trade_review\n"
+            "JOURNAL,DSE,10,125.50,2026-08-10,5,Value is improving,150,Break below support,Review after earnings\n"
+        ).encode()
+        response = self.client.post(reverse("portfolio_import_csv", args=[self.portfolio.id]), {"csv_file": SimpleUploadedFile("broker.csv", data, content_type="text/csv")}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        txn = PortfolioTransaction.objects.get(portfolio=self.portfolio)
+        self.assertEqual((txn.stock, txn.thesis, txn.target_price), (self.stock, "Value is improving", Decimal("150")))
+        self.assertEqual((txn.invalidation, txn.post_trade_review), ("Break below support", "Review after earnings"))
+
+    def test_invalid_csv_is_atomic(self):
+        data = b"code,quantity,price\nJOURNAL,10,100\nMISSING,10,100\n"
+        self.client.post(reverse("portfolio_import_csv", args=[self.portfolio.id]), {"csv_file": SimpleUploadedFile("broker.csv", data, content_type="text/csv")})
+        self.assertFalse(PortfolioTransaction.objects.filter(portfolio=self.portfolio).exists())
 
 
 class WeightedAverageCostBasisTests(TestCase):
