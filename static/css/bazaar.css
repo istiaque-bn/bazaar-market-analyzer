@@ -639,6 +639,14 @@ body.nav-open { overflow: hidden; }
   backdrop-filter: blur(8px);
   animation: rise 0.7s ease both;
 }
+
+/* Narrow, task-focused cards (transaction entry, profile, feedback,
+   account management, etc.) should sit in the visual centre of the page.
+   Full-width panels and dashboard/table cards have no max-width and keep
+   their existing layout. */
+.panel[style*="max-width"] {
+  margin-inline: auto;
+}
 .panel h2, .panel h3 {
   font-family: var(--font-display);
   margin: 0 0 0.8rem;
