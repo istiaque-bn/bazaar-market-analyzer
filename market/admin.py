@@ -8,6 +8,7 @@ from market.models import (
     CloseLearnState,
     ImportBatch,
     MarketHoliday,
+    MarketEvent,
     MarketSnapshot,
     MLModelVersion,
     NextDayCloseForecast,
@@ -83,6 +84,14 @@ admin.site.register(TechnicalSnapshot)
 admin.site.register(PatternHit)
 admin.site.register(MarketSnapshot)
 admin.site.register(Watchlist)
+
+
+@admin.register(MarketEvent)
+class MarketEventAdmin(admin.ModelAdmin):
+    list_display = ("event_date", "event_type", "title", "stock", "is_public")
+    list_filter = ("event_type", "is_public", "stock__exchange")
+    search_fields = ("title", "stock__trading_code")
+    date_hierarchy = "event_date"
 
 
 @admin.register(PaperTradingAccount)

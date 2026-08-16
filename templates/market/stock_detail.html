@@ -35,6 +35,7 @@
                 data-label="{{ meta.label }}">{{ meta.label }}</button>
       {% endfor %}
     </div>
+    <div class="chart-toolbar"><button type="button" class="range-pill is-active" id="chartLine">Line</button><button type="button" class="range-pill" id="chartCandles">Candles</button><span class="muted">Raw prices{% if provenance.available %} · {{ provenance.latest_adjustment }}{% endif %}</span></div>
     <div class="chart-box"><canvas id="priceChart"></canvas><div class="chart-tooltip" id="priceChartTooltip" hidden></div></div>
 
     <div class="date-predict" id="datePredict"
@@ -144,7 +145,7 @@
   </section>
   </section>
   <section class="stack">
-    <div class="panel">
+    {% if user.is_authenticated %}<div class="panel">
       <h3>Predictive estimate</h3>
       <p class="muted" style="margin-top:-0.4rem;">Experimental research output — probabilistic estimate, not investment advice.</p>
       {% if not analysis %}
@@ -178,7 +179,7 @@
         {% if analysis.ml_score %}<p>ML up-move score: {{ analysis.ml_score|floatformat:0 }}/100</p>{% endif %}
         <p class="muted">{{ analysis.rationale }}</p>
       {% endif %}
-    </div>
+    </div>{% endif %}
     <div class="panel">
       <h3>Next-day close (learn loop)</h3>
       {% if not next_close_pending and not next_close_settled %}

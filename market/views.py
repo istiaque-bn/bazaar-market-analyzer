@@ -159,7 +159,6 @@ def _get_stock_for_public_route(exchange: str, code: str) -> Stock:
     return stock
 
 
-@login_required
 def stock_list(request):
     from market.services.exchange_config import enabled_exchanges
     from market.services.stock_quality import assess_stock_quality
@@ -298,7 +297,6 @@ def _history_rows_for_stock(stock, range_key: str = "30d"):
     return range_key, meta["label"], table_rows, chart
 
 
-@login_required
 def stock_detail(request, exchange: str, code: str):
     stock = _get_stock_for_public_route(exchange, code)
     analysis = AnalysisResult.objects.filter(stock=stock).order_by("-as_of").first()
@@ -409,6 +407,24 @@ def stock_detail(request, exchange: str, code: str):
             "research_note_form": ResearchNoteForm(),
         },
     )
+
+
+def market_events(request):
+    """Public, source-linked events supplied by staff pending an official feed."""
+    from market.models import MarketEvent
+
+    events = MarketEvent.objects.filter(is_public=True, event_date__gte=timezone.localdate()).select_related("stock")[:100]
+    return render(request, "market/market_events.html", {"events": events})
+
+
+def public_market_overview(request):
+    from market.services.exchange_config import enabled_exchanges
+
+    snapshots = MarketSnapshot.objects.filter(exchange__in=enabled_exchanges()).order_by("exchange", "-as_of")
+    latest = {}
+    for snapshot in snapshots:
+        latest.setdefault(snapshot.exchange, snapshot)
+    return render(request, "market/public_overview.html", {"snapshots": latest.values()})
 
 
 @login_required

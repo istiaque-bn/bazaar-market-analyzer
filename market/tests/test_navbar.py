@@ -174,10 +174,11 @@ class PageLoadSmokeTests(TestCase):
         # The public product page is available; market tools require sign-in.
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
-        for path in ("/stocks/", "/dashboard/"):
+        for path in ("/dashboard/",):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.client.get("/stocks/").status_code, 200)
         response = self.client.get("/accounts/login/")
         self.assertEqual(response.status_code, 200)
         response = self.client.get("/accounts/signup/")

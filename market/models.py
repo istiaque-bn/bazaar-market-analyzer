@@ -488,6 +488,37 @@ class MarketHoliday(models.Model):
         return f"{self.date} - {self.name}"
 
 
+class MarketEvent(models.Model):
+    """Public event calendar entries, maintained by staff until an approved
+    official events feed is available.  Every entry carries its source URL
+    so visitors can verify it rather than treating it as exchange data."""
+
+    class EventType(models.TextChoices):
+        CORPORATE_ANNOUNCEMENT = "announcement", "Corporate announcement"
+        IPO = "ipo", "IPO"
+        RECORD_DATE = "record_date", "Record date"
+        AGM = "agm", "AGM"
+        EGM = "egm", "EGM"
+        MARKET = "market", "Market event"
+
+    event_type = models.CharField(max_length=20, choices=EventType.choices, default=EventType.MARKET)
+    title = models.CharField(max_length=240)
+    event_date = models.DateField(db_index=True)
+    stock = models.ForeignKey(Stock, null=True, blank=True, on_delete=models.SET_NULL, related_name="market_events")
+    details = models.TextField(blank=True)
+    source_url = models.URLField(blank=True)
+    is_public = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["event_date", "title"]
+        indexes = [models.Index(fields=["event_date", "is_public"])]
+
+    def __str__(self):
+        return f"{self.event_date} · {self.title}"
+
+
 class Watchlist(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="watchlists")
     name = models.CharField(max_length=64, default="Default")
