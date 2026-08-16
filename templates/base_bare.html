@@ -2,7 +2,7 @@
 {% load i18n %}
 {% get_current_language as CURRENT_LANGUAGE %}
 <!DOCTYPE html>
-<html lang="{{ CURRENT_LANGUAGE }}">
+<html lang="{{ CURRENT_LANGUAGE }}" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,7 +10,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{% static 'css/bazaar.css' %}">
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem('bazaar-theme')||'light'}catch(e){}</script>
+  <link rel="stylesheet" href="{% static 'css/bazaar.css' %}?v=product-20260817">
   {% block extra_head %}{% endblock %}
 </head>
 <body class="bare-body {% block body_class %}{% endblock %}">
@@ -25,6 +26,7 @@
   <main class="bare-main">
     {% block content %}{% endblock %}
   </main>
+  <script src="{% static 'js/theme.js' %}" defer></script>
   {% block extra_js %}{% endblock %}
 </body>
 </html>

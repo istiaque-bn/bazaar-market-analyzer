@@ -20,10 +20,10 @@ from notifications.models import Alert
 
 
 def home(request):
-    """Redirect anonymous visitors to login and users to their role panel."""
+    """Show the public product page, or a user's role-specific panel."""
     if request.user.is_authenticated:
         return redirect(role_home_url(request.user))
-    return redirect("login")
+    return render(request, "market/landing.html")
 
 
 def _dashboard_health_issue(as_of) -> str | None:

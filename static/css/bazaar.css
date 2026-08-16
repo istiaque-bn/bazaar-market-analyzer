@@ -39,6 +39,42 @@ html[lang="bn"] {
   --font-display: "Noto Sans Bengali", "Noto Sans Bengali UI", sans-serif;
 }
 
+html[data-theme="dark"] {
+  --ink: #e4eee8;
+  --muted: #afc1b6;
+  --paper: #101916;
+  --panel: rgba(25, 39, 33, .94);
+  --line: rgba(225, 242, 232, .17);
+  --forest: #75bd9c;
+  --forest-deep: #b5e2c9;
+  --gold: #e9bd66;
+  --gold-soft: #f4d69b;
+  --rise: #63c98d;
+  --fall: #ef8e81;
+  --watch: #e5c46c;
+  --shadow: 0 18px 50px rgba(0, 0, 0, .36);
+}
+html[data-theme="dark"] .bg-atmosphere { background: radial-gradient(900px 500px at 10% -10%, rgba(190, 139, 46, .12), transparent 55%), radial-gradient(700px 420px at 95% 5%, rgba(66, 146, 105, .16), transparent 50%), linear-gradient(160deg, #111c18 0%, #17211d 45%, #0d1713 100%); }
+html[data-theme="dark"] .site-header, html[data-theme="dark"] .site-footer, html[data-theme="dark"] .panel, html[data-theme="dark"] .card, html[data-theme="dark"] .modal-content, html[data-theme="dark"] input, html[data-theme="dark"] select, html[data-theme="dark"] textarea { background-color: var(--panel); color: var(--ink); border-color: var(--line); }
+html[data-theme="dark"] tbody tr:nth-child(even) td { background: rgba(255,255,255,.035); }
+html[data-theme="dark"] .btn.secondary { color: var(--forest-deep); border-color: var(--forest); }
+
+.theme-toggle { display: inline-flex; align-items: center; gap: .35rem; border: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 999px; padding: .38rem .62rem; font: inherit; font-size: .78rem; cursor: pointer; }
+.theme-toggle:hover { border-color: var(--gold); color: var(--gold); }
+
+.landing-hero { max-width: 1180px; margin: 3.5rem auto 2rem; padding: 2.5rem; min-height: 410px; display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(250px, .65fr); gap: 2.5rem; align-items: center; border: 1px solid var(--line); border-radius: calc(var(--radius) + 8px); background: linear-gradient(135deg, rgba(31, 91, 69, .12), rgba(255, 252, 246, .55)); box-shadow: var(--shadow); }
+.landing-hero h1 { max-width: 760px; margin: .4rem 0 1rem; font-family: var(--font-display); font-size: clamp(2.5rem, 5vw, 4.7rem); letter-spacing: -.045em; line-height: 1.02; }
+.eyebrow { margin: 0; color: var(--forest); font-size: .75rem; font-weight: 700; letter-spacing: .14em; }
+.landing-lead { max-width: 650px; color: var(--muted); font-size: 1.15rem; }
+.landing-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1.6rem; }
+.landing-stat-card { padding: 1.6rem; border-radius: var(--radius); color: #eff8f0; background: linear-gradient(145deg, #0f3a2c, #1f5b45); box-shadow: 0 15px 35px rgba(15,58,44,.25); }
+.landing-stat-card span { color: #c9e5d2; font-size: .78rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }.landing-stat-card strong { display: block; margin: .8rem 0; font: 700 2rem/1.1 var(--font-display); }.landing-stat-card p { color: #e2f0e5; }
+.landing-section { max-width: 1180px; margin: 3rem auto; }.landing-section > h2 { font-family: var(--font-display); }
+.landing-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 1rem; }.landing-grid .panel { min-height: 180px; }.landing-grid h2, .landing-guide h2 { font-family: var(--font-display); }
+.landing-guide { padding: 2rem; display: grid; grid-template-columns: 1.3fr .7fr; gap: 2rem; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }.landing-guide p { color: var(--muted); }.landing-links { display: grid; align-content: center; gap: .85rem; font-weight: 600; }
+.legal-page { max-width: 850px; margin: 3rem auto; padding: clamp(1.5rem, 4vw, 3.25rem); }.legal-page h1 { font-family: var(--font-display); font-size: clamp(2rem, 4vw, 3.25rem); margin-top: 0; }.legal-intro { color: var(--muted); font-size: 1.08rem; }.legal-section { padding: 1.15rem 0; border-top: 1px solid var(--line); }.legal-section h2 { font: 700 1.25rem var(--font-display); margin: 0 0 .35rem; }.legal-section p { margin: 0; }
+@media (max-width: 800px) { .landing-hero, .landing-guide { grid-template-columns: 1fr; margin-top: 1.5rem; }.landing-grid { grid-template-columns: 1fr; }.landing-hero { padding: 1.5rem; }.landing-section { margin: 2rem auto; } }
+
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {

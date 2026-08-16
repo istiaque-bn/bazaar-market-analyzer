@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Stock monitoring for Bangladesh{% endblock %}
+{% block content %}
+<section class="landing-hero">
+  <div>
+    <p class="eyebrow">STOCK BAZAAR · BANGLADESH</p>
+    <h1>Make your market research easier to understand.</h1>
+    <p class="landing-lead">Track DSE stocks, organise a private portfolio, keep an investor journal and read market signals in English or বাংলা.</p>
+    <div class="landing-actions"><a class="btn" href="{% url 'login' %}">Sign in</a><a class="btn secondary" href="{% url 'signup' %}">Create account</a></div>
+  </div>
+  <aside class="landing-stat-card"><span>Built for deliberate investors</span><strong>Research first.</strong><p>Watchlists, portfolio records, alerts and clear signal context in one place.</p></aside>
+</section>
+<section class="landing-section"><p class="eyebrow">WHAT YOU CAN DO</p><div class="landing-grid">
+  <article class="panel"><h2>Screen the market</h2><p>Explore stocks, sector context, comparisons and technical research signals while seeing when data was last updated.</p></article>
+  <article class="panel"><h2>Own your record</h2><p>Import a portfolio CSV or add holdings manually. Record transaction details, a thesis, target, risk and post-trade review.</p></article>
+  <article class="panel"><h2>Stay focused</h2><p>Build a watchlist, define alerts and receive digest-ready summaries based on the information you choose to follow.</p></article>
+</div></section>
+<section class="landing-section landing-guide"><div><p class="eyebrow">USE IT RESPONSIBLY</p><h2>Educational analysis, not a trading service.</h2><p>Stock Bazaar does not execute trades, hold funds or provide personalised investment advice. Market data and model outputs can be wrong or delayed. Always make independent decisions.</p></div><div class="landing-links"><a href="{% url 'product_documentation' %}">Read product documentation →</a><a href="{% url 'legal_page' 'methodology' %}">How methodology works →</a><a href="{% url 'legal_page' 'risk' %}">Read the risk disclosure →</a><a href="{% url 'legal_page' 'data' %}">Market-data notice →</a></div></section>
+{% endblock %}

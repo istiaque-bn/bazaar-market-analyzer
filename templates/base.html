@@ -1,7 +1,7 @@
 {% load i18n %}
 {% get_current_language as CURRENT_LANGUAGE %}
 <!DOCTYPE html>
-<html lang="{{ CURRENT_LANGUAGE }}">
+<html lang="{{ CURRENT_LANGUAGE }}" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,7 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/bazaar.css?v=footer-20260815">
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem('bazaar-theme')||'light'}catch(e){}</script>
+  <link rel="stylesheet" href="/static/css/bazaar.css?v=product-20260817">
   {% block extra_head %}{% endblock %}
 </head>
 <body>
@@ -90,7 +91,7 @@
 
     <header class="site-header">
       <div class="brand-block">
-        <a class="brand" href="{% if user.is_authenticated %}{% url role_home_url_name %}{% else %}{% url 'login' %}{% endif %}">
+        <a class="brand" href="{% if user.is_authenticated %}{% url role_home_url_name %}{% else %}{% url 'home' %}{% endif %}">
           <span class="brand-mark">বা</span>
           <span class="brand-text">Bazaar</span>
         </a>
@@ -192,6 +193,7 @@
           {% endif %}
 
           <div class="nav-account">
+            <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch colour theme" aria-pressed="false"><span aria-hidden="true">◐</span><span class="theme-toggle-label">Dark</span></button>
             <form class="nav-language-form" method="post" action="{% url 'set_language' %}">
               {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
               <label class="sr-only" for="languageSelect">{% translate "Language" %}</label>
@@ -237,7 +239,7 @@
 
   <footer class="site-footer">
     <p class="footer-copyright">© {% now "Y" %} <strong>Bazaar</strong>. {% translate "All rights reserved." %}</p>
-    <p class="footer-legal"><a href="{% url 'legal_page' 'privacy' %}">Privacy</a> · <a href="{% url 'legal_page' 'terms' %}">Terms</a> · <a href="{% url 'legal_page' 'risk' %}">Risk</a> · <a href="{% url 'legal_page' 'methodology' %}">Methodology</a></p>
+    <p class="footer-legal"><a href="{% url 'legal_page' 'privacy' %}">Privacy</a> · <a href="{% url 'legal_page' 'terms' %}">Terms</a> · <a href="{% url 'legal_page' 'risk' %}">Risk</a> · <a href="{% url 'legal_page' 'methodology' %}">Methodology</a> · <a href="{% url 'legal_page' 'data' %}">Data</a></p>
     {% if user.is_authenticated %}
       <div class="market-data-freshness footer-data-freshness" title="Time of the most recent successful market-data fetch">
         <span class="market-data-freshness-label">{% translate "Data updated" %}</span>
@@ -247,6 +249,7 @@
   </footer>
   <script src="/static/js/ticker.js" defer></script>
   <script src="/static/js/nav.js" defer></script>
+  <script src="/static/js/theme.js" defer></script>
   {% block extra_js %}{% endblock %}
 </body>
 </html>

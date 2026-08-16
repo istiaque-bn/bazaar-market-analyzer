@@ -14,18 +14,16 @@ def make_user(username: str, is_staff: bool = False, is_superuser: bool = False)
 
 
 class AnonymousNavTests(TestCase):
-    """Anonymous visitors get redirected to Login before any nav ever
-    renders — there is no public page left that shows the navbar."""
+    """Anonymous visitors can use the public landing page, not app tools."""
 
-    def test_root_redirects_to_login(self):
+    def test_root_loads_public_landing_page(self):
         response = self.client.get("/")
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Make your market research easier")
 
-    def test_login_page_has_no_signup_link(self):
+    def test_login_page_has_signup_link_when_signup_is_available(self):
         html = self.client.get("/accounts/login/").content.decode()
-        self.assertNotIn("/accounts/signup/", html)
-        self.assertNotIn("Sign up", html)
+        self.assertIn("/accounts/signup/", html)
 
     def test_login_page_has_no_primary_nav(self):
         html = self.client.get("/accounts/login/").content.decode()
@@ -173,16 +171,17 @@ class PageLoadSmokeTests(TestCase):
     in the navbar would 500 every page in the project, not just the nav."""
 
     def test_anonymous_pages_redirect_or_load(self):
-        # Anonymous visitors may only reach Login (+ static assets) —
-        # every other path must redirect, never 200 with the app chrome.
-        for path in ("/", "/stocks/", "/dashboard/"):
+        # The public product page is available; market tools require sign-in.
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        for path in ("/stocks/", "/dashboard/"):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 302)
         response = self.client.get("/accounts/login/")
         self.assertEqual(response.status_code, 200)
         response = self.client.get("/accounts/signup/")
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200)
 
     def test_authenticated_pages_load(self):
         make_user("dave")

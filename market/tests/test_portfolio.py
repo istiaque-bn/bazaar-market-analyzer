@@ -13,7 +13,7 @@ from unittest import mock
 
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.db import connection
 from django.urls import reverse
@@ -317,6 +317,7 @@ class SameTradingCodeAcrossExchangesTests(TestCase):
         self.dse_stock = make_stock(exchange=Exchange.DSE, code="SAME", price=50.0)
         self.cse_stock = make_stock(exchange=Exchange.CSE, code="SAME", price=80.0)
 
+    @override_settings(ENABLE_DSE=True, ENABLE_CSE=True)
     def test_dse_and_cse_holdings_of_the_same_code_are_tracked_separately(self):
         psvc.create_transaction(self.portfolio, self.dse_stock, "BUY", Decimal("10"), Decimal("50"), Decimal("0"), date(2026, 1, 1))
         psvc.create_transaction(self.portfolio, self.cse_stock, "BUY", Decimal("5"), Decimal("80"), Decimal("0"), date(2026, 1, 1))
@@ -531,8 +532,8 @@ class PortfolioViewMutationTests(TestCase):
         self.assertContains(response, "Portfolio")
         self.client.logout()
         response = self.client.get(reverse("home"))
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Make your market research easier")
 
 
 class PortfolioAPITests(TestCase):
