@@ -61,6 +61,7 @@ html[data-theme="dark"] .btn.secondary { color: var(--forest-deep); border-color
 
 .theme-toggle { display: inline-flex; align-items: center; gap: .35rem; border: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 999px; padding: .38rem .62rem; font: inherit; font-size: .78rem; cursor: pointer; }
 .theme-toggle:hover { border-color: var(--gold); color: var(--gold); }
+.new-feature-star { color: var(--gold); margin-left:.15rem; }
 
 .landing-hero { max-width: 1180px; margin: 3.5rem auto 2rem; padding: 2.5rem; min-height: 410px; display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(250px, .65fr); gap: 2.5rem; align-items: center; border: 1px solid var(--line); border-radius: calc(var(--radius) + 8px); background: linear-gradient(135deg, rgba(31, 91, 69, .12), rgba(255, 252, 246, .55)); box-shadow: var(--shadow); }
 .landing-hero h1 { max-width: 760px; margin: .4rem 0 1rem; font-family: var(--font-display); font-size: clamp(2.5rem, 5vw, 4.7rem); letter-spacing: -.045em; line-height: 1.02; }

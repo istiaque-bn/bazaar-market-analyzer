@@ -7,6 +7,17 @@ import re
 from config.logging_utils import request_id_var
 
 REQUEST_ID_HEADER = "X-Request-ID"
+class NewFeatureSeenMiddleware:
+    def __init__(self, get_response): self.get_response = get_response
+    def __call__(self, request):
+        from market.context_processors import NEW_FEATURES
+        name = getattr(getattr(request, "resolver_match", None), "url_name", None)
+        if getattr(request.user, "is_superuser", False) and name:
+            seen = set(request.session.get("seen_new_features", []))
+            for key, targets in NEW_FEATURES.items():
+                if name in targets: seen.add(key)
+            request.session["seen_new_features"] = list(seen)
+        return self.get_response(request)
 
 
 class RequestIDMiddleware:

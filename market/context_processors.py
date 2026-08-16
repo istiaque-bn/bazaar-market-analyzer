@@ -37,6 +37,7 @@ NAV_GROUPS = {
     "tools": {"dashboard", "backtests", "alerts"},
     "admin": {"data_quality", "ops_report", "ml_reliability"},
 }
+NEW_FEATURES = {"stocks": {"stock_list", "stock_detail"}, "events": {"market_events"}}
 
 
 def _active_nav(request):
@@ -110,6 +111,7 @@ def market_nav(request):
         latest_snaps.setdefault(snap.exchange, snap)
 
     local_now = timezone.localtime()
+    seen = set(request.session.get("seen_new_features", [])) if getattr(request.user, "is_superuser", False) else set(NEW_FEATURES)
     return {
         "ticker_quotes_dse": pack(dse_stocks),
         "ticker_quotes_cse": pack(cse_stocks),
@@ -127,4 +129,5 @@ def market_nav(request):
         "enabled_exchanges": enabled,
         "dse_enabled": dse_on,
         "cse_enabled": cse_on,
+        "new_feature_groups": set(NEW_FEATURES) - seen,
     }

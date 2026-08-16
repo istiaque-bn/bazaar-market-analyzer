@@ -71,6 +71,7 @@ MIDDLEWARE = [
     # sign-out reason with Django's message framework.
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "market.middleware.NewFeatureSeenMiddleware",
     # After AuthenticationMiddleware (needs request.user): promptly logs
     # out a deactivated account's live session and forces a
     # temporary-password holder through the password-change screen.

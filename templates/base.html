@@ -143,7 +143,7 @@
 
             <li>
               <a href="{% url 'stock_list' %}" class="{% if active_nav == 'stocks' %}active{% endif %}"{% if active_nav == 'stocks' %} aria-current="page"{% endif %}>
-                <span>{% translate "Stocks" %}</span>
+                <span>{% translate "Stocks" %}{% if 'stocks' in new_feature_groups %}<sup class="new-feature-star">★</sup>{% endif %}</span>
               </a>
             </li>
 
@@ -169,6 +169,7 @@
                 <a href="{% url 'alerts' %}">{% translate "Alerts" %}</a>
                 <a href="{% url 'compare_stocks' %}">{% translate "Compare stocks" %}</a>
                 <a href="{% url 'sector_heatmap' %}">{% translate "Sector heatmap" %}</a>
+                <a href="{% url 'market_events' %}">Market events{% if 'events' in new_feature_groups %}<sup class="new-feature-star">★</sup>{% endif %}</a>
                 {% if is_admin_role %}<a href="{% url 'feedback_admin_dashboard' %}">{% translate "Feedback" %}</a>{% endif %}
                 {% if is_admin_role %}<a href="{% url 'admin_reminders' %}">{% translate "Reminders" %}</a>{% endif %}
               </div>
