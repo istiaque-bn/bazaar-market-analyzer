@@ -747,6 +747,15 @@ def ml_reliability_view(request):
 
 
 @admin_required
+def shadow_model_monitor(request):
+    from market.models import ShadowForecast, TaskRun
+    from market.services.shadow_model import shadow_report
+    rows = ShadowForecast.objects.select_related("stock").order_by("-target_date", "stock__trading_code")[:100]
+    tasks = TaskRun.objects.filter(task_name__in=["market.tasks.run_shadow_model", "notifications.tasks.send_shadow_model_report"]).order_by("-started_at")[:20]
+    return render(request, "market/shadow_model_monitor.html", {"report": shadow_report(), "forecasts": rows, "tasks": tasks})
+
+
+@admin_required
 @require_POST
 def run_pipeline_view(request):
     """Enqueue a pipeline job — Admin-only ("Manage DSE pipeline and

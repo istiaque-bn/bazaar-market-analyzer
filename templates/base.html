@@ -185,6 +185,7 @@
                   <a href="{% url 'data_quality' %}">{% translate "Data QA" %}</a>
                   <a href="{% url 'ops_report' %}">{% translate "Operations" %}</a>
                   {% if is_admin_role %}<a href="{% url 'ml_reliability' %}">{% translate "ML Reliability" %}</a>{% endif %}
+                  {% if is_admin_role %}<a href="{% url 'shadow_model_monitor' %}">Shadow model</a>{% endif %}
                   {% if is_admin_role %}<a href="{% url 'paper_trading' %}">{% translate "Paper Trading" %}</a>{% endif %}
                   {% if is_admin_role %}<a href="/admin/">{% translate "Django Admin" %}</a>{% endif %}
                 </div>

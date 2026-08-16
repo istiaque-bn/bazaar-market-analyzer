@@ -55,6 +55,7 @@ urlpatterns = [
     path("data-quality/", views.data_quality_view, name="data_quality"),
     path("ops/", views.ops_report_view, name="ops_report"),
     path("ml-reliability/", views.ml_reliability_view, name="ml_reliability"),
+    path("shadow-model/", views.shadow_model_monitor, name="shadow_model_monitor"),
     path("paper-trading/", views.paper_trading_view, name="paper_trading"),
     path("paper-trading/control/", views.paper_trading_control, name="paper_trading_control"),
     path("tools/reminders/", views.admin_reminders_view, name="admin_reminders"),
