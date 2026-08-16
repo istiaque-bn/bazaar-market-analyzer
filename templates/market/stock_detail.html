@@ -203,7 +203,7 @@
             <strong>{{ next_close_settled.as_of|date:"Y-m-d" }} forecast for {{ next_close_settled.target_date|date:"Y-m-d" }}:</strong>
             predicted {{ next_close_settled_price|floatformat:2 }}
             · actual {{ next_close_settled.actual_close|floatformat:2 }}
-            · error {% if next_close_settled.pct_error %}{{ next_close_settled.pct_error|floatformat:2 }}%{% else %}—{% endif %}
+            · error {% if next_close_settled.pct_error != None %}{{ next_close_settled.pct_error|floatformat:2 }}%{% else %}—{% endif %}
           </p>
         {% endif %}
       {% endif %}
