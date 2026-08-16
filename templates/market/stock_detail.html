@@ -393,14 +393,23 @@ function sliceOverviewData(days) {
 }
 
 let overviewLayout = null;
+let overviewMode = 'line';
 const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function renderOverviewFrame(ctx, layout, progress) {
-  const { closes, x, y, w, h, pad } = layout;
+  const { closes, data, x, y, w, h, pad } = layout;
   ctx.clearRect(0, 0, w, h);
   ctx.strokeStyle = 'rgba(20,35,28,0.08)';
   ctx.beginPath(); ctx.moveTo(pad, pad); ctx.lineTo(pad, h-pad); ctx.lineTo(w-pad, h-pad); ctx.stroke();
   const visible = Math.max(1, Math.round(closes.length * progress));
+  if (overviewMode === 'candles') {
+    const lows = data.map(d => d.low), highs = data.map(d => d.high);
+    const lo = Math.min(...lows), hi = Math.max(...highs);
+    const cy = v => h - pad - ((v - lo) / ((hi - lo) || 1)) * (h - pad * 2);
+    const width = Math.max(2, Math.min(10, (w - pad * 2) / Math.max(data.length, 1) * .65));
+    for (let i=0;i<visible;i++) { const d=data[i], px=x(i), up=d.close>=d.open; ctx.strokeStyle=up?'#1a7a4c':'#a33b2d'; ctx.fillStyle=ctx.strokeStyle; ctx.beginPath(); ctx.moveTo(px,cy(d.high));ctx.lineTo(px,cy(d.low));ctx.stroke(); ctx.fillRect(px-width/2, Math.min(cy(d.open),cy(d.close)), width, Math.max(1,Math.abs(cy(d.close)-cy(d.open)))); }
+    return;
+  }
   const grad = ctx.createLinearGradient(0, pad, 0, h-pad);
   grad.addColorStop(0, 'rgba(31,91,69,0.35)');
   grad.addColorStop(1, 'rgba(31,91,69,0.02)');
@@ -602,6 +611,8 @@ function drawOverviewChart(data) {
   }
   apply(active);
 })();
+
+(function chartModeControls(){ const line=document.getElementById('chartLine'), candles=document.getElementById('chartCandles'); function set(mode){overviewMode=mode; line.classList.toggle('is-active',mode==='line');candles.classList.toggle('is-active',mode==='candles');if(overviewLayout)renderOverviewFrame(document.getElementById('priceChart').getContext('2d'),overviewLayout,1)} line&&line.addEventListener('click',()=>set('line'));candles&&candles.addEventListener('click',()=>set('candles')); })();
 
 (function datePricePredict(){
   const root = document.getElementById('datePredict');

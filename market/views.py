@@ -315,6 +315,7 @@ def stock_detail(request, exchange: str, code: str):
                 "date": r["date"].strftime("%Y-%m-%d") if hasattr(r["date"], "strftime") else str(r["date"]),
                 "close": round(float(r["close"]), 2),
                 "volume": int(r["volume"]),
+                "open": round(float(r["open"]), 2), "high": round(float(r["high"]), 2), "low": round(float(r["low"]), 2),
             }
             for _, r in tail.iterrows()
         ]
