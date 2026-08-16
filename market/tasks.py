@@ -377,6 +377,13 @@ def close_learn_settlement():
         return run_close_learn_cycle(as_of=timezone.localdate(), train=True)
 
 
+@shared_task(name="market.tasks.run_shadow_model", time_limit=600, soft_time_limit=540)
+@record_task_run("market.tasks.run_shadow_model")
+def run_shadow_model():
+    from market.services.shadow_model import run_shadow_cycle
+    return run_shadow_cycle()
+
+
 @shared_task(
     name="market.tasks.sync_holiday_calendar",
     autoretry_for=_TRANSIENT_ERRORS,

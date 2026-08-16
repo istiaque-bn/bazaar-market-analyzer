@@ -19,6 +19,15 @@ from market.services.task_status import record_task_run
 from notifications.models import Alert, AlertChannel, AlertRule, AlertRuleType, AdminReminder, MlDailyReportDelivery, MlDailyReportStatus, mask_recipient
 from notifications.services import TelegramPermanentError, TelegramTransientError, send_telegram_message, send_telegram_message_tracked
 
+@shared_task(name="notifications.tasks.send_shadow_model_report")
+@record_task_run("notifications.tasks.send_shadow_model_report")
+def send_shadow_model_report():
+    from market.services.shadow_model import shadow_report
+    r=shadow_report()
+    text=f"Shadow ML daily report\nSettled: {r['n']}\nModel MAE: {r.get('mae','—')} · naive MAE: {r.get('naive_mae','—')}\nSkill vs naive: {r.get('skill','—')}\nDirection hit: {r.get('direction','—')}\nCandidate is isolated and cannot change production forecasts."
+    if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_ADMIN_CHAT_ID: send_telegram_message(settings.TELEGRAM_ADMIN_CHAT_ID,text)
+    return {"ok":True,**r}
+
 
 @shared_task(name="notifications.tasks.deliver_admin_reminders")
 @record_task_run("notifications.tasks.deliver_admin_reminders")

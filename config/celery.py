@@ -79,6 +79,7 @@ app.conf.beat_schedule = {
         "task": "notifications.tasks.send_ml_daily_report",
         "schedule": 60.0,
     },
+    "send-shadow-ml-report": {"task": "notifications.tasks.send_shadow_model_report", "schedule": crontab(hour=17, minute=5, day_of_week=_BD_WEEK)},
     # Check operational health frequently, but the task sends a Telegram
     # alert only for new/re-fired conditions and applies its own cooldown.
     "send-ops-alerts-to-admin": {
@@ -115,6 +116,7 @@ app.conf.beat_schedule = {
         "task": "market.tasks.close_learn_settlement",
         "schedule": crontab(hour=14, minute=45, day_of_week=_BD_WEEK),
     },
+    "shadow-model-1450": {"task": "market.tasks.run_shadow_model", "schedule": crontab(hour=14, minute=50, day_of_week=_BD_WEEK)},
     "market-close-telegram": {
         "task": "notifications.tasks.send_market_close_notification",
         "schedule": crontab(hour=14, minute=45, day_of_week=_BD_WEEK),

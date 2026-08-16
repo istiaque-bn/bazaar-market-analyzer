@@ -577,6 +577,18 @@ class NextDayCloseForecast(models.Model):
         return f"{self.stock.trading_code} → {self.target_date} pred={self.predicted_close}"
 
 
+class ShadowForecast(models.Model):
+    """Candidate-only next-close forecast; never read by production serving."""
+    stock = models.ForeignKey(Stock, on_delete=models.CASCADE, related_name="shadow_forecasts")
+    as_of = models.DateField(db_index=True); target_date = models.DateField(db_index=True)
+    last_close = models.FloatField(); predicted_close = models.FloatField(); predicted_return = models.FloatField()
+    candidate_name = models.CharField(max_length=64, default="shadow_analogue")
+    actual_close = models.FloatField(null=True, blank=True); settled_at = models.DateTimeField(null=True, blank=True)
+    class Meta:
+        unique_together = ("stock", "target_date", "candidate_name")
+        indexes = [models.Index(fields=["candidate_name", "settled_at"])]
+
+
 class CloseLearnState(models.Model):
     """Running correction learned from settled next-day close forecasts."""
 
