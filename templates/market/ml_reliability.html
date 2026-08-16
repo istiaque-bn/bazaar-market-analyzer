@@ -111,8 +111,8 @@
   {% if reg %}
   <div class="grid-4" style="margin-top:0.8rem;">
     <div class="stat"><div class="label">MAE (return)</div><div class="value">{{ reg.model.mae|default:"—" }}</div></div>
-    <div class="stat"><div class="label">Direction hit rate</div><div class="value">{{ reg.model.direction_hit_rate|default:"—" }}</div></div>
-    <div class="stat"><div class="label">Skill vs. naive (zero-return)</div><div class="value">{{ reg.skill_vs_baseline.naive_zero_return|default:"—" }}</div></div>
+    <div class="stat"><div class="label">Direction hit rate</div><div class="value">{{ reg.model.direction_hit_rate|default_if_none:"—" }}</div></div>
+    <div class="stat"><div class="label">Skill vs. naive (zero-return)</div><div class="value">{{ reg.skill_vs_baseline.naive_zero_return|default_if_none:"—" }}</div></div>
     <div class="stat"><div class="label">Bias</div><div class="value">{{ reg.model.bias|default:"—" }}</div></div>
   </div>
   <p class="muted">Skill vs. persistence baseline: {{ reg.skill_vs_baseline.rule_based_persistence|default:"—" }} · RMSE: {{ reg.model.rmse|default:"—" }} · Correlation: {{ reg.model.correlation|default:"—" }}</p>
