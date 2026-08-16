@@ -10,6 +10,7 @@ REQUEST_ID_HEADER = "X-Request-ID"
 class NewFeatureSeenMiddleware:
     def __init__(self, get_response): self.get_response = get_response
     def __call__(self, request):
+        response = self.get_response(request)
         from market.context_processors import NEW_FEATURES
         name = getattr(getattr(request, "resolver_match", None), "url_name", None)
         if getattr(request.user, "is_superuser", False) and name:
@@ -17,7 +18,7 @@ class NewFeatureSeenMiddleware:
             for key, targets in NEW_FEATURES.items():
                 if name in targets: seen.add(key)
             request.session["seen_new_features"] = list(seen)
-        return self.get_response(request)
+        return response
 
 
 class RequestIDMiddleware:
