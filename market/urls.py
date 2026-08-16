@@ -3,6 +3,7 @@ from django.urls import path
 from market import views
 
 urlpatterns = [
+    path("legal/<slug:slug>/", views.legal_page, name="legal_page"),
     path("", views.home, name="home"),
     path("dashboard/", views.dashboard, name="dashboard"),
     path("stocks/", views.stock_list, name="stock_list"),

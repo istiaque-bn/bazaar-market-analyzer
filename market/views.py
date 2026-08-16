@@ -3,7 +3,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Q
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
@@ -33,6 +33,24 @@ from market.views_dashboard import _dashboard_health_issue, dashboard, home  # n
 from market.portfolio_access import owned_portfolio as _owned_portfolio
 from notifications.forms import AlertRuleForm
 from notifications.models import Alert, AlertRule
+
+
+LEGAL_PAGES = {
+    "privacy": ("Privacy Policy", "Stock Bazaar collects only the account, portfolio, watchlist, feedback, and notification information needed to operate the service. We do not sell personal information. Contact stockbazex@gmail.com to request access, correction, or deletion, subject to legal and security retention needs."),
+    "terms": ("Terms of Service", "Stock Bazaar is an educational market-analysis service operated by Stock Monitoring. It does not provide brokerage, order execution, custody, or personalised investment advice. You remain solely responsible for investment decisions and compliance with applicable law."),
+    "risk": ("Risk Disclosure", "Capital-market investing can result in partial or total loss. Prices, forecasts, research signals, backtests, and model outputs are uncertain and may be wrong. Past performance, historical analysis, and simulated results do not guarantee future results."),
+    "conflicts": ("Conflict-of-Interest Disclosure", "Stock Bazaar does not execute trades or hold customer securities. If an operator, contributor, or affiliate has a material interest in a covered security or receives compensation connected to coverage, that conflict should be disclosed before publication."),
+    "methodology": ("Model Methodology", "Bazaar combines historical market data with technical indicators, historical analogues, and experimental machine-learning models. Models are evaluated against simpler baselines and may be disabled when live evidence is weak. Outputs are research estimates, not recommendations."),
+    "refunds": ("Refund Policy", "No paid plans or payment collection are currently active. Refunds are therefore not applicable. Any future paid product will publish its price, eligibility, cancellation, and refund terms before payment is accepted."),
+    "data": ("Market Data and Licensing Notice", "DSE/CSE data may be delayed, incomplete, or subject to source terms. Stock Bazaar is not affiliated with DSE, CSE, or BSEC. Before commercial redistribution or real-time data claims, Stock Bazaar must obtain the required written permissions or licences from the relevant exchange/data provider."),
+}
+
+
+def legal_page(request, slug):
+    page = LEGAL_PAGES.get(slug)
+    if page is None:
+        raise Http404("Policy page not found.")
+    return render(request, "market/legal.html", {"title": page[0], "body": page[1]})
 
 
 @admin_required
