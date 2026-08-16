@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily Bazaar encrypted Google Drive backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 Asia/Dhaka
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=Create, verify, and encrypt-upload Bazaar backup
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bazaar-backup-to-drive

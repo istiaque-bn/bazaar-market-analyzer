@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Create, verify, encrypt-upload, and integrity-check a Bazaar backup.
+set -euo pipefail
+
+cd /opt/bazaar
+docker compose --env-file .env.docker exec -T web python manage.py backup_bazaar --prune-keep 14
+
+backup_dir="$(find data/backups -mindepth 1 -maxdepth 1 -type d -print | sort | tail -n 1)"
+test -n "$backup_dir"
+backup_name="$(basename "$backup_dir")"
+
+docker compose --env-file .env.docker exec -T web python manage.py verify_backup "/app/$backup_dir"
+rclone copy "$backup_dir" "gdrive-crypt:bazaar/$backup_name" --checkers 4 --transfers 2
+rclone check "$backup_dir" "gdrive-crypt:bazaar/$backup_name" --one-way
+logger --tag bazaar-backup "verified encrypted Google Drive backup uploaded: $backup_name"
