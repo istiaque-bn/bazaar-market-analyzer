@@ -309,6 +309,33 @@ def provenance_report() -> dict:
     }
 
 
+def stock_provenance_summary(stock: Stock) -> dict:
+    """Return a small, honest provenance summary suitable for a stock page.
+
+    This deliberately reports stored facts only.  In particular, a stale
+    quote run is *not* called a suspension: that determination needs an
+    official exchange announcement feed.
+    """
+    rows = stock.prices.order_by("-date")
+    latest = rows.first()
+    if latest is None:
+        return {"available": False}
+    source_counts = _count_by(rows, "source")
+    adjustment_counts = _count_by(rows, "adjustment_status")
+    return {
+        "available": True,
+        "latest_date": latest.date,
+        "latest_source": latest.get_source_display(),
+        "latest_fetched_at": latest.fetched_at,
+        "latest_adjustment": latest.get_adjustment_status_display(),
+        "latest_flags": latest.quality_flags,
+        "source_counts": source_counts,
+        "adjustment_counts": adjustment_counts,
+        "is_synthetic": latest.is_synthetic,
+        "import_batch_id": latest.import_batch_id,
+    }
+
+
 def _count_by(qs, field: str) -> dict:
     out: Counter = Counter()
     for val in qs.values_list(field, flat=True).iterator():

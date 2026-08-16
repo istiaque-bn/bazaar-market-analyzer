@@ -331,6 +331,7 @@ def stock_detail(request, exchange: str, code: str):
     from market.models import NextDayCloseForecast
     from market.services.close_learn import compute_beta, learn_status
     from market.services.price_format import round_to_tick
+    from market.services.data_quality import stock_provenance_summary
 
     # Computed fresh from the same df as the price chart (not read from
     # TechnicalSnapshot.beta_90d) so the displayed number and its scatter
@@ -403,6 +404,7 @@ def stock_detail(request, exchange: str, code: str):
             "beta_90d": beta_90d,
             "beta_pairs": beta_pairs,
             "prediction_drivers": drivers,
+            "provenance": stock_provenance_summary(stock),
             "research_notes": ResearchNote.objects.filter(user=request.user, stock=stock) if request.user.is_authenticated else [],
             "research_note_form": ResearchNoteForm(),
         },

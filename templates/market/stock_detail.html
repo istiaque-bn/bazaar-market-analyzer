@@ -123,6 +123,19 @@
     {% endif %}
   </section>
   <section class="panel">
+    <h3>Data provenance</h3>
+    {% if provenance.available %}
+      <p><strong>Latest price bar:</strong> {{ provenance.latest_date|date:"d M Y" }} · {{ provenance.latest_source }}</p>
+      <p class="muted">Fetched {% if provenance.latest_fetched_at %}{{ provenance.latest_fetched_at|date:"d M Y, H:i" }}{% else %}at an unrecorded legacy time{% endif %} · {{ provenance.latest_adjustment }}</p>
+      {% if provenance.is_synthetic %}<p><span class="badge badge-watch">Synthetic / fallback data</span> This bar is excluded from live analysis by default.</p>{% endif %}
+      {% if provenance.latest_flags %}<p><span class="badge badge-watch">Quality flags</span> {{ provenance.latest_flags|join:", " }}</p>{% endif %}
+      <p class="muted">Historical rows by source: {% for source, count in provenance.source_counts.items %}{{ source }} ({{ count }}){% if not forloop.last %} · {% endif %}{% endfor %}.</p>
+      <p class="muted">Corporate-action adjustment data is not currently connected. Raw prices are labelled as received; do not assume historical prices are adjusted.</p>
+    {% else %}
+      <p class="muted">No historical price provenance is recorded for this security yet.</p>
+    {% endif %}
+  </section>
+  <section class="panel">
     <h3>Why this estimate?</h3>
     <p class="muted">These are the latest inputs behind the displayed research signal, not a guarantee or a new prediction.</p>
     <div class="driver-grid">

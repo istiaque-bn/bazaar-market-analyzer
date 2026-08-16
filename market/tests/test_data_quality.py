@@ -28,6 +28,7 @@ from market.services.data_quality import (
     provenance_report,
     run_quality_scan,
     scan_stock_quality,
+    stock_provenance_summary,
     validate_ohlcv,
 )
 
@@ -341,6 +342,17 @@ class DemoIsolationBacktestTests(TestCase):
 
 
 class ProvenanceReportTests(TestCase):
+    def test_stock_summary_reports_latest_source_and_raw_adjustment_state(self):
+        stock = _mk_stock()
+        _mk_bar(stock, date(2024, 1, 2), 101.0, source=DataSource.DSE_HISTORY, adjustment_status="raw")
+
+        summary = stock_provenance_summary(stock)
+
+        self.assertTrue(summary["available"])
+        self.assertEqual(summary["latest_source"], "DSE historical archive/bdshare")
+        self.assertEqual(summary["latest_adjustment"], "Raw / as-received (no corporate-action adjustment applied)")
+        self.assertEqual(summary["source_counts"][DataSource.DSE_HISTORY], 1)
+
     def test_counts_reflect_synthetic_and_unknown_rows(self):
         stock = _mk_stock()
         _mk_bar(stock, date(2024, 1, 1), 100.0)  # unknown
