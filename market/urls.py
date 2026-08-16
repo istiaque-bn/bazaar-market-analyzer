@@ -11,6 +11,7 @@ urlpatterns = [
     path("dashboard/", views.dashboard, name="dashboard"),
     path("stocks/", views.stock_list, name="stock_list"),
     path("stocks/<str:exchange>/<str:code>/", views.stock_detail, name="stock_detail"),
+    path("stocks/<str:exchange>/<str:code>/fundamentals/", views.fundamentals_view, name="fundamentals"),
     path("stocks/<str:exchange>/<str:code>/predict-price/", views.predict_price_view, name="predict_price"),
     path("stocks/<str:exchange>/<str:code>/watch/", views.toggle_watchlist, name="toggle_watchlist"),
     path("watchlist/", views.watchlist_view, name="watchlist"),

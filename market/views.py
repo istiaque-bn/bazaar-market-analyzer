@@ -428,6 +428,14 @@ def public_market_overview(request):
     return render(request, "market/public_overview.html", {"snapshots": latest.values()})
 
 
+def fundamentals_view(request, exchange, code):
+    stock = _get_stock_for_public_route(exchange, code)
+    rows = stock.fundamentals.all()
+    sector_pes = Stock.objects.filter(sector=stock.sector, pe_ratio__gt=0).values_list("pe_ratio", flat=True)
+    values = list(sector_pes)
+    return render(request, "market/fundamentals.html", {"stock": stock, "rows": rows, "sector_pe": round(sum(values)/len(values), 2) if values else None})
+
+
 @login_required
 def predict_price_view(request, exchange: str, code: str):
     """JSON: probable close on a selected date + confidence. A new

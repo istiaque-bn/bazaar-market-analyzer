@@ -9,6 +9,7 @@ from market.models import (
     ImportBatch,
     MarketHoliday,
     MarketEvent,
+    FundamentalSnapshot,
     MarketSnapshot,
     MLModelVersion,
     NextDayCloseForecast,
@@ -84,6 +85,7 @@ admin.site.register(TechnicalSnapshot)
 admin.site.register(PatternHit)
 admin.site.register(MarketSnapshot)
 admin.site.register(Watchlist)
+admin.site.register(FundamentalSnapshot)
 
 
 @admin.register(MarketEvent)

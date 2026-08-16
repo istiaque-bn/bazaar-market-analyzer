@@ -519,6 +519,20 @@ class MarketEvent(models.Model):
         return f"{self.event_date} · {self.title}"
 
 
+class FundamentalSnapshot(models.Model):
+    """Verified, staff-entered financial period. Blank values mean unavailable."""
+    stock = models.ForeignKey(Stock, on_delete=models.CASCADE, related_name="fundamentals")
+    period_end = models.DateField(db_index=True)
+    period_label = models.CharField(max_length=32, blank=True)
+    eps = models.FloatField(null=True, blank=True); revenue = models.FloatField(null=True, blank=True)
+    net_profit = models.FloatField(null=True, blank=True); nav_per_share = models.FloatField(null=True, blank=True)
+    operating_cash_flow = models.FloatField(null=True, blank=True); debt_to_equity = models.FloatField(null=True, blank=True)
+    current_ratio = models.FloatField(null=True, blank=True); dividend_per_share = models.FloatField(null=True, blank=True)
+    sponsor_pct = models.FloatField(null=True, blank=True); institutional_pct = models.FloatField(null=True, blank=True); foreign_pct = models.FloatField(null=True, blank=True)
+    auditor_qualification = models.TextField(blank=True); source_url = models.URLField(blank=True)
+    class Meta: unique_together = ("stock", "period_end"); ordering = ["-period_end"]
+
+
 class Watchlist(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="watchlists")
     name = models.CharField(max_length=64, default="Default")
