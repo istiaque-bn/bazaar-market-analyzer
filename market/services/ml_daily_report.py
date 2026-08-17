@@ -304,6 +304,7 @@ def build_report_context(as_of: date | None = None) -> dict:
             "correct": live_correct,
             "calibration_error": calibration_error,
         },
+        "latest_settled_outcome": assessment.period_end if assessment else None,
         "evidence": evidence,
         "status_label": status_label,
         "status_sentence": status_sentence,
@@ -344,13 +345,18 @@ def render_report_sections(context: dict, comparison: dict | None = None) -> lis
     if active_model:
         days_ago = (as_of - _local_date(active_model.trained_at)).days
         when = "today" if days_ago <= 0 else ("yesterday" if days_ago == 1 else f"{days_ago} days ago")
-        current_lines.append(f"• Last trained: {when}")
+        current_lines.append(f"• Model trained: {when} ({_local_date(active_model.trained_at)})")
+        current_lines.append(f"• Training-data cutoff: {active_model.data_cutoff}")
         current_lines.append(f"• Current use: {context['status_label']}")
     else:
         current_lines.append("• No ML model is currently approved for confident use.")
     current_lines.append(f"• Market: {context['exchange']}")
     current_lines.append(f"• New training today: {'Yes' if context['trained_today'] else 'No'}")
     sections.append("\n".join(current_lines))
+
+    settled = context.get("latest_settled_outcome")
+    if settled:
+        sections.append(f"Live-evidence status: latest settled outcome in this report is {settled}. New training and new settled evidence are measured separately.")
 
     if active_model:
         acc_lines = ["How accurate is it?"]
