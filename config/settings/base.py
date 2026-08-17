@@ -197,6 +197,15 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
+
+# Separate DB index from the Celery broker (db 0) so cache flushes/evictions
+# can never touch queued task messages, and vice versa.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.getenv("DJANGO_CACHE_URL", CELERY_BROKER_URL.rsplit("/", 1)[0] + "/1"),
+    }
+}
 # Nothing in this app ever reads a task's AsyncResult — every task's
 # outcome is tracked independently via market.models.TaskRun
 # (@record_task_run). Without this, every scheduled send from Celery

@@ -777,7 +777,7 @@ body.nav-open { overflow: hidden; }
 .stat {
   padding: 1rem 1.1rem;
   border-radius: 14px;
-  background: linear-gradient(160deg, rgba(255,255,255,0.7), rgba(240,246,241,0.9));
+  background: var(--panel);
   border: 1px solid var(--line);
 }
 .stat .label { color: var(--muted); font-size: 0.85rem; }

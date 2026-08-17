@@ -102,12 +102,31 @@ def model_evaluation_summary() -> dict:
     }
 
 
+OPS_SUMMARY_CACHE_KEY = "ops_metrics:ops_summary"
+OPS_SUMMARY_CACHE_SECONDS = 60
+
+
 def ops_summary() -> dict:
     """Everything the staff ops report page and the alert-threshold scan
-    need, gathered once."""
+    need, gathered once.
+
+    Cached for OPS_SUMMARY_CACHE_SECONDS: rejected_rows_summary() alone
+    scans the ~640k-row PriceHistory table, and task_health()/
+    model_evaluation_summary() each add a couple more seconds — every
+    admin/staff panel load, the ops report page, and the periodic Telegram
+    alert task were each independently paying that full cost. None of
+    these consumers need per-request freshness; a task list that runs
+    every 1-5 minutes doesn't change meaningfully within a minute.
+    """
+    from django.core.cache import cache
+
     from market.services.exchange_config import enabled_exchanges
 
-    return {
+    cached = cache.get(OPS_SUMMARY_CACHE_KEY)
+    if cached is not None:
+        return cached
+
+    result = {
         "generated_at": timezone.now().isoformat(),
         "tasks": task_health(),
         "predictions": prediction_volume(),
@@ -115,3 +134,5 @@ def ops_summary() -> dict:
         "models": model_evaluation_summary(),
         "enabled_exchanges": enabled_exchanges(),
     }
+    cache.set(OPS_SUMMARY_CACHE_KEY, result, OPS_SUMMARY_CACHE_SECONDS)
+    return result
