@@ -158,6 +158,21 @@ app.conf.beat_schedule = {
         "task": "market.tasks.sync_holiday_calendar",
         "schedule": crontab(hour=23, minute=30, day_of_month="28-31"),
     },
+    # DSE's AGM/EGM/Record Date PDF (market.services.dse_events) is itself
+    # only re-published once a day, so these entries just need to catch
+    # that update reasonably promptly rather than run often — 5x spread
+    # across the Sun-Thu trading session (avoiding the 09:55-10:10 and
+    # 14:25-15:00 clusters of other end-of-day tasks above), plus 3x
+    # spread across off-hours every day (including Fri/Sat, when there's
+    # no trading session at all).
+    "sync-dse-events-1030": {"task": "market.tasks.sync_dse_events", "schedule": crontab(hour=10, minute=30, day_of_week=_BD_WEEK)},
+    "sync-dse-events-1130": {"task": "market.tasks.sync_dse_events", "schedule": crontab(hour=11, minute=30, day_of_week=_BD_WEEK)},
+    "sync-dse-events-1230": {"task": "market.tasks.sync_dse_events", "schedule": crontab(hour=12, minute=30, day_of_week=_BD_WEEK)},
+    "sync-dse-events-1330": {"task": "market.tasks.sync_dse_events", "schedule": crontab(hour=13, minute=30, day_of_week=_BD_WEEK)},
+    "sync-dse-events-1415": {"task": "market.tasks.sync_dse_events", "schedule": crontab(hour=14, minute=15, day_of_week=_BD_WEEK)},
+    "sync-dse-events-0800": {"task": "market.tasks.sync_dse_events", "schedule": crontab(hour=8, minute=0)},
+    "sync-dse-events-1730": {"task": "market.tasks.sync_dse_events", "schedule": crontab(hour=17, minute=30)},
+    "sync-dse-events-2200": {"task": "market.tasks.sync_dse_events", "schedule": crontab(hour=22, minute=0)},
 }
 
 # Standalone forward-return model retrain — daily, at a fixed off-hours
