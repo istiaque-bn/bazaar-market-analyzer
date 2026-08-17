@@ -288,17 +288,23 @@ def _task_backlog_alert() -> list[dict]:
             getattr(settings, "QUEUE_MARKET_HEAVY", "market-heavy"),
             getattr(settings, "QUEUE_NOTIFICATIONS", "notifications"),
         )
-        total = sum(client.llen(q) for q in queues)
+        per_queue = {q: client.llen(q) for q in queues}
+        total = sum(per_queue.values())
     except Exception:
         return []
     if total <= TASK_BACKLOG_THRESHOLD:
         return []
+    # Included in the message text (not just detail) because that's the only
+    # part that survives into the Telegram alert and the persisted Alert row
+    # — detail is dropped there, so a bare total gives no way to tell which
+    # queue backed up after the fact.
+    breakdown = ", ".join(f"{q}={n}" for q, n in per_queue.items() if n)
     return [
         {
             "key": "task_backlog",
             "severity": "warning",
-            "message": f"{total} tasks queued and not yet started (threshold {TASK_BACKLOG_THRESHOLD}).",
-            "detail": {"count": total, "threshold": TASK_BACKLOG_THRESHOLD},
+            "message": f"{total} tasks queued and not yet started (threshold {TASK_BACKLOG_THRESHOLD}): {breakdown}.",
+            "detail": {"count": total, "threshold": TASK_BACKLOG_THRESHOLD, "per_queue": per_queue},
         }
     ]
 
