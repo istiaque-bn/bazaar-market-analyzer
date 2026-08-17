@@ -367,13 +367,15 @@ def _model_degradation_alerts(models: dict) -> list[dict]:
             )
     close = models["next_close_model"]
     if (close.get("n") or 0) >= 30 and (close.get("skill_vs_naive") or 0) <= 0:
+        skill = close.get("skill_vs_naive")
+        skill_display = "unavailable" if skill is None else f"{float(skill):.4f}"
         alerts.append(
             {
                 "key": "model_degraded_next_close",
                 "severity": "warning",
                 "message": (
-                    f"Next-close learner's live skill vs. naive is {close.get('skill_vs_naive')} "
-                    f"over {close.get('n')} settled forecasts (not positive)."
+                    f"Next-close learner's live skill vs. naive is {skill_display} "
+                    f"over {int(close.get('n') or 0):,} settled forecasts (not positive)."
                 ),
                 "detail": {"n": close.get("n"), "skill_vs_naive": close.get("skill_vs_naive")},
             }

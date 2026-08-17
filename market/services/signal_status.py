@@ -112,38 +112,18 @@ def ml_model_status(exchange: str) -> dict:
 
 
 def close_learn_edge_status() -> dict:
-    """Skill for the currently served next-close version.
+    """Fresh live skill for the served next-close forecasts.
 
-    Historical forecasts are useful diagnostics, but must not be used to
-    page about a newly deployed version: they include retired models and
-    candidate forecasts.  Prefer the durable, version-scoped reliability
-    assessment; retain the aggregate only when no version has ever been
-    active (legacy/dev compatibility).
+    ``NextDayCloseForecast`` is the authoritative settlement ledger for
+    this learner.  A reliability assessment is useful for the release
+    decision, but is an immutable historical snapshot; using it for an
+    operational alert can leave the alert reporting an old sample count
+    and skill after new forecasts settle.  Recompute from the ledger so
+    the operations page and alert always agree on the current evidence.
     """
     from market.services.close_learn import compute_skill_metrics
-    from market.models import ReliabilityAssessment
 
     active = MLModelVersion.objects.filter(model_name="next_close_rf", is_active=True).order_by("-trained_at").first()
-    if active is not None:
-        assessment = (
-            ReliabilityAssessment.objects.filter(
-                model_family="next_close_rf", model_version_tag=active.version
-            ).order_by("-run_at").first()
-        )
-        metrics = ((assessment.metrics or {}).get("regression") or {}) if assessment else {}
-        skill = (metrics.get("skill_vs_baseline") or {}).get("naive_zero_return")
-        n = assessment.sample_count if assessment else 0
-        model = metrics.get("model") or {}
-        baseline = (metrics.get("baselines") or {}).get("naive_zero_return") or {}
-        return {
-            "n": n, "skill_vs_naive": skill, "beats_naive_pct": None,
-            "direction_hit_rate": None, "model_mape": model.get("mape"),
-            "baseline_mape": baseline.get("mape"),
-            "baseline": "naive (tomorrow's close = today's close)",
-            "has_edge": n >= MIN_CLOSE_LEARN_SETTLED and skill is not None and skill > 0,
-            "version": active.version, "scope": "active_version",
-        }
-
     skill = compute_skill_metrics()
     n = skill.get("n") or 0
     skill_vs_naive = skill.get("skill_vs_naive")
@@ -157,7 +137,8 @@ def close_learn_edge_status() -> dict:
         "baseline_mape": skill.get("baseline_mape"),
         "baseline": "naive (tomorrow's close = today's close)",
         "has_edge": has_edge,
-        "scope": "historical_aggregate",
+        "scope": "live_settled_forecasts",
+        "version": active.version if active is not None else None,
     }
 
 

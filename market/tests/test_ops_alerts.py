@@ -235,6 +235,17 @@ class ModelDegradationAlertTests(TestCase):
         }
         self.assertEqual(_model_degradation_alerts(models), [])
 
+    def test_next_close_alert_formats_current_live_sample(self):
+        from market.services.ops_alerts import _model_degradation_alerts
+
+        models = {
+            "forward_return_model": {"DSE": {"deployed": False, "skill_vs_naive": None, "version": None}},
+            "next_close_model": {"n": 6137, "skill_vs_naive": -0.1888},
+        }
+        alerts = _model_degradation_alerts(models)
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("-0.1888 over 6,137 settled forecasts", alerts[0]["message"])
+
 
 class EvaluateAlertsOrderingTests(TestCase):
     def test_critical_alerts_sort_before_warnings(self):
