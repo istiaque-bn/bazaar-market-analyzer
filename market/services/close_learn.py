@@ -585,15 +585,23 @@ def forecast_next_close(
     }
 
 
-def compute_skill_metrics(limit: int = 8000) -> dict:
+def compute_skill_metrics(limit: int = 8000, since: date | None = None) -> dict:
     """
     Compare model vs naive baseline (predicted return = 0 ⇒ tomorrow close = today close).
     Positive skill_vs_naive means model MAE_return is lower than baseline.
+
+    ``since`` bounds the ledger scan to ``target_date >= since``. Without it,
+    a fix to the serving/bias logic can't show up in this metric until
+    enough new forecasts outnumber the old, pre-fix ones in the trailing
+    `limit` rows — e.g. a one-time state reset stays invisible for weeks
+    under an 8000-row window. Callers reporting *current* model health
+    (rather than an all-time ledger view) should pass a recent cutoff.
     """
+    qs = NextDayCloseForecast.objects.filter(actual_close__isnull=False)
+    if since is not None:
+        qs = qs.filter(target_date__gte=since)
     rows = list(
-        NextDayCloseForecast.objects.filter(actual_close__isnull=False)
-        .order_by("-target_date")
-        .values_list("last_close", "predicted_close", "predicted_return", "actual_close")[:limit]
+        qs.order_by("-target_date").values_list("last_close", "predicted_close", "predicted_return", "actual_close")[:limit]
     )
     if not rows:
         return {

@@ -98,17 +98,29 @@ class MlModelStatusTests(TestCase):
 
 class CloseLearnEdgeStatusTests(TestCase):
     def _settle_forecasts(self, n, *, skill_positive: bool):
-        stock = Stock.objects.create(exchange=Exchange.DSE, trading_code="CLF", company_name="Close Learn Fixture")
+        # Spread rows across multiple stocks (unique_together on stock+
+        # target_date) but keep every target_date within the last week, so
+        # they all land inside close_learn_edge_status's scoring window
+        # regardless of how large `n` is.
         today = timezone.localdate()
+        window = 7
         for i in range(n):
+            layer = i // window
+            day_offset = i % window
+            stock, _ = Stock.objects.get_or_create(
+                exchange=Exchange.DSE,
+                trading_code=f"CLF{layer}",
+                defaults={"company_name": "Close Learn Fixture"},
+            )
             last_close = 100.0
             # skill_positive: predicted return closely tracks actual (beats naive=0)
             actual_close = last_close * 1.01 if i % 2 == 0 else last_close * 0.99
             predicted_return = (actual_close / last_close - 1) if skill_positive else 0.05
+            target_date = today - timedelta(days=day_offset + 1)
             NextDayCloseForecast.objects.create(
                 stock=stock,
-                as_of=today - timedelta(days=n - i + 1),
-                target_date=today - timedelta(days=n - i),
+                as_of=target_date - timedelta(days=1),
+                target_date=target_date,
                 last_close=last_close,
                 predicted_close=last_close * (1 + predicted_return),
                 predicted_return=predicted_return,

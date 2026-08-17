@@ -36,6 +36,12 @@ MIN_ML_TRAIN_ROWS = 200
 # either way; treat it as "not enough evidence yet", not "no skill".
 MIN_CLOSE_LEARN_SETTLED = 30
 
+# How far back close_learn_edge_status looks. Bounded (rather than the full
+# ledger) so a serving/bias fix shows up in days, not the weeks it'd take
+# for new forecasts to outnumber old ones in an unbounded window — see
+# compute_skill_metrics's `since` docstring.
+CLOSE_LEARN_SKILL_WINDOW_DAYS = 14
+
 # DSE/CSE trade Sun-Thu; a normal weekend gap is up to 3 calendar days.
 # +1 day of buffer for a holiday before calling data stale.
 STALE_DATA_DAYS = 4
@@ -121,10 +127,13 @@ def close_learn_edge_status() -> dict:
     and skill after new forecasts settle.  Recompute from the ledger so
     the operations page and alert always agree on the current evidence.
     """
+    from datetime import timedelta
+
     from market.services.close_learn import compute_skill_metrics
 
     active = MLModelVersion.objects.filter(model_name="next_close_rf", is_active=True).order_by("-trained_at").first()
-    skill = compute_skill_metrics()
+    since = timezone.localdate() - timedelta(days=CLOSE_LEARN_SKILL_WINDOW_DAYS)
+    skill = compute_skill_metrics(since=since)
     n = skill.get("n") or 0
     skill_vs_naive = skill.get("skill_vs_naive")
     has_edge = n >= MIN_CLOSE_LEARN_SETTLED and skill_vs_naive is not None and skill_vs_naive > 0
@@ -137,7 +146,7 @@ def close_learn_edge_status() -> dict:
         "baseline_mape": skill.get("baseline_mape"),
         "baseline": "naive (tomorrow's close = today's close)",
         "has_edge": has_edge,
-        "scope": "live_settled_forecasts",
+        "scope": f"live_settled_forecasts_last_{CLOSE_LEARN_SKILL_WINDOW_DAYS}d",
         "version": active.version if active is not None else None,
     }
 
