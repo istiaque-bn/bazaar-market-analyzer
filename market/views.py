@@ -414,7 +414,11 @@ def market_events(request):
     """Public, source-linked events supplied by staff pending an official feed."""
     from market.models import MarketEvent
 
-    events = MarketEvent.objects.filter(is_public=True, event_date__gte=timezone.localdate()).select_related("stock")[:100]
+    events = (
+        MarketEvent.objects.filter(is_public=True, event_date__gte=timezone.localdate())
+        .select_related("stock")
+        .order_by("-event_date", "title")[:100]
+    )
     return render(request, "market/market_events.html", {"events": events})
 
 
