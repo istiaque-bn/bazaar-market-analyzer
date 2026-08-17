@@ -1517,8 +1517,13 @@ th.sort-desc::after { content: "↓"; opacity: 1; }
 .auth-two-col { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:.7rem; }
 .auth-check { display:flex; align-items:center; gap:.55rem; cursor:pointer; font-size:.9rem; }
 .auth-check input { width:1rem; height:1rem; accent-color:var(--rise); }
+/* Lives only inside .auth-page (registration/signup.html), whose shell is
+   a fixed dark navy/cyan regardless of the site-wide theme toggle — so
+   this needs its own fixed light text, not var(--muted)/var(--ink), which
+   resolve to their light-mode (dark) values whenever the toggle itself is
+   on light, making this unreadable against the always-dark card. */
 .telegram-setup { border:1px solid rgba(28, 207, 135, .38); border-radius:10px; padding:.7rem .85rem; background:rgba(11, 47, 40, .5); }
-.telegram-setup p { margin:.38rem 0; color:var(--muted); font-size:1rem; line-height:1.45; }
-.telegram-setup b { color:var(--text); }
+.telegram-setup p { margin:.38rem 0; color:rgba(219, 246, 241, .78); font-size:1rem; line-height:1.45; }
+.telegram-setup b { color:#8df1df; }
 @media (max-width: 560px) { .auth-two-col { grid-template-columns:1fr; } }
 @media (max-width: 560px) { .driver-grid { grid-template-columns:1fr; } .rule-row { align-items:flex-start; flex-direction:column; } }
