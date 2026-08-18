@@ -931,6 +931,9 @@ def settle_due_forecasts(through_date: date | None = None) -> dict:
 
     skill = compute_skill_metrics()
     _maybe_downgrade_on_live_skill(skill)
+    from market.services.signal_status import CLOSE_LEARN_SKILL_WINDOW_DAYS
+
+    skill_recent = compute_skill_metrics(since=timezone.localdate() - timedelta(days=CLOSE_LEARN_SKILL_WINDOW_DAYS))
     if settled:
         batch_mae = float(np.mean(abs_errs)) if abs_errs else 0.0
         batch_mape = float(np.mean(pct_errs)) if pct_errs else 0.0
@@ -955,11 +958,12 @@ def settle_due_forecasts(through_date: date | None = None) -> dict:
             "last_batch_mae": round(batch_mae, 4),
             "last_batch_mape": round(batch_mape, 4),
             "skill": skill,
+            "skill_recent": skill_recent,
         }
         state.save()
     else:
         # Still refresh skill snapshot
-        state.extras = {**(state.extras or {}), "skill": skill}
+        state.extras = {**(state.extras or {}), "skill": skill, "skill_recent": skill_recent}
         state.save(update_fields=["extras", "updated_at"])
 
     # Separately fetched/saved so it can't clobber (or be clobbered by) the
@@ -1315,20 +1319,27 @@ def _final_fit_and_save_next_close(panel: pd.DataFrame, eval_result: dict, *, ex
         notes="" if is_active else "Three-class candidate failed positive overall/recent skill or high-confidence precision gate; not deployed.",
     )
 
-    if exchange_scope == "combined":
-        state = get_learn_state()
-        state.last_trained_at = timezone.now()
-        state.extras = {
-            **(state.extras or {}),
-            "ml_mae_return": model_metrics.get("mae"),
-            "ml_direction_hit": model_metrics.get("direction_hit_rate"),
-            "ml_skill_vs_naive": skill,
-            "ml_train_rows": int(len(panel)),
-            "feature_cols": FEATURE_COLS,
-            "ml_status": status,
-            "ml_version": version,
-        }
-        state.save(update_fields=["last_trained_at", "extras", "updated_at"])
+    # Was gated to exchange_scope == "combined" only, so on a DSE-only
+    # deployment (CSE disabled) these fields froze at whatever the last
+    # combined-scope training was — the daily per-exchange retrains never
+    # touched them. Update on every scope; ml_exchange_scope records which
+    # training last wrote these, since this is a status snapshot for
+    # display, not a serving decision (that's MLModelVersion.is_active,
+    # tracked per-scope independently — see load_next_close_model).
+    state = get_learn_state()
+    state.last_trained_at = timezone.now()
+    state.extras = {
+        **(state.extras or {}),
+        "ml_mae_return": model_metrics.get("mae"),
+        "ml_direction_hit": model_metrics.get("direction_hit_rate"),
+        "ml_skill_vs_naive": skill,
+        "ml_train_rows": int(len(panel)),
+        "feature_cols": FEATURE_COLS,
+        "ml_status": status,
+        "ml_version": version,
+        "ml_exchange_scope": exchange_scope,
+    }
+    state.save(update_fields=["last_trained_at", "extras", "updated_at"])
 
     return {
         "ok": True,
@@ -1398,7 +1409,12 @@ def learn_status() -> dict:
         .order_by("-settled_at")
         .first()
     )
-    skill = (state.extras or {}).get("skill") or compute_skill_metrics()
+    from market.services.signal_status import CLOSE_LEARN_SKILL_WINDOW_DAYS
+
+    skill_all_time = (state.extras or {}).get("skill") or compute_skill_metrics()
+    skill = (state.extras or {}).get("skill_recent") or compute_skill_metrics(
+        since=timezone.localdate() - timedelta(days=CLOSE_LEARN_SKILL_WINDOW_DAYS)
+    )
     if skill and skill.get("skill_vs_naive") is not None:
         skill = {**skill, "skill_pct": round(float(skill["skill_vs_naive"]) * 100, 2)}
     stock_bias_n = CloseLearnState.objects.filter(key__startswith="stock:").filter(settled_count__gte=STOCK_BIAS_MIN_SETTLES).count()
@@ -1416,6 +1432,7 @@ def learn_status() -> dict:
         "stock_bias_active": stock_bias_n,
         "liquid_universe": len(liquid_stock_ids()),
         "skill": skill,
+        "skill_all_time": skill_all_time,
         "naive_fallback_active": bool((state.extras or {}).get("serve_naive_fallback", False)),
         "candidate_skill": (state.extras or {}).get("candidate_skill"),
         "extras": state.extras or {},

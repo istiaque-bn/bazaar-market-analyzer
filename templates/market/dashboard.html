@@ -182,7 +182,7 @@
       <div class="value {% if close_learn.skill.skill_vs_naive and close_learn.skill.skill_vs_naive > 0 %}up{% elif close_learn.skill.skill_vs_naive and close_learn.skill.skill_vs_naive < 0 %}down{% endif %}">
         {% if close_learn.skill.skill_pct != None %}{{ close_learn.skill.skill_pct|floatformat:1 }}%{% elif close_learn.skill.skill_vs_naive != None %}{{ close_learn.skill.skill_vs_naive|floatformat:3 }}{% else %}—{% endif %}
       </div>
-      <div class="muted tiny">1 − model/baseline return MAE</div>
+      <div class="muted tiny">1 − model/baseline return MAE · last 14d{% if close_learn.skill.n %}, n={{ close_learn.skill.n }}{% endif %}</div>
     </div>
     <div class="stat">
       <div class="label">Beats naive</div>
