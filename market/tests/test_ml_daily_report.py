@@ -4,7 +4,7 @@ function/DB-fixture tests only; no Celery, no Telegram network calls
 tests that exercise the actual send task)."""
 from datetime import timedelta
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from market.models import Exchange, MLModelVersion, PredictionSnapshot, ReliabilityAssessment
@@ -19,6 +19,16 @@ from market.services.ml_daily_report import (
 
 FAMILY = PredictionSnapshot.ModelFamily.FORWARD_RETURN_RF
 HORIZON = 10
+
+
+@override_settings(ENABLE_DSE=True, ENABLE_CSE=True)
+class MLDailyReportTestCase(TestCase):
+    """Base for this file's tests: fixtures below always train a
+    "combined"-scope MLModelVersion, and _resolve_scope only considers
+    "combined" when every exchange is enabled (matching the actual
+    serving path) — hardcode both exchanges on, same rationale as
+    config/settings/test.py, so these tests don't flip meaning depending
+    on the machine's local .env (e.g. a DSE-only deployment's ENABLE_CSE=False)."""
 
 
 def _classifier_metrics(n, precision, accuracy, positive_rate_pred, calibration_error=0.05):
@@ -74,7 +84,7 @@ def make_assessment(*, model_version, exchange=Exchange.DSE, status=ReliabilityA
     )
 
 
-class EvidenceLabelTests(TestCase):
+class EvidenceLabelTests(MLDailyReportTestCase):
     def test_thresholds(self):
         self.assertEqual(evidence_label(0), "No evidence")
         self.assertEqual(evidence_label(29), "Very limited")
@@ -86,7 +96,7 @@ class EvidenceLabelTests(TestCase):
         self.assertEqual(evidence_label(10_000), "Stronger evidence")
 
 
-class NoActiveModelTests(TestCase):
+class NoActiveModelTests(MLDailyReportTestCase):
     def test_no_model_ever_trained(self):
         ctx = build_report_context()
         self.assertIsNone(ctx["active_model"])
@@ -107,7 +117,7 @@ class NoActiveModelTests(TestCase):
         self.assertNotIn("correct about 0 times out of 100", joined)
 
 
-class ActiveModelLimitedEvidenceTests(TestCase):
+class ActiveModelLimitedEvidenceTests(MLDailyReportTestCase):
     def setUp(self):
         self.model = make_model_version(hist_n=148, hist_precision=0.62, hist_pos_rate=0.5)
 
@@ -139,7 +149,7 @@ class ActiveModelLimitedEvidenceTests(TestCase):
         self.assertIn("Collect more completed live predictions before changing the model.", ctx["recommendations"])
 
 
-class ActiveModelSufficientEvidenceTests(TestCase):
+class ActiveModelSufficientEvidenceTests(MLDailyReportTestCase):
     def setUp(self):
         self.model = make_model_version(hist_n=200, hist_precision=0.6, hist_pos_rate=0.5)
         self.assessment = make_assessment(
@@ -179,7 +189,7 @@ class ActiveModelSufficientEvidenceTests(TestCase):
         self.assertEqual(sections[-1], DISCLAIMER)
 
 
-class DecliningPerformanceTests(TestCase):
+class DecliningPerformanceTests(MLDailyReportTestCase):
     def setUp(self):
         self.model = make_model_version(hist_n=200, hist_precision=0.55, hist_pos_rate=0.5)
         make_assessment(model_version=self.model, status=ReliabilityAssessment.Status.CRITICAL, sample_count=150, precision=0.4, accuracy=0.4, positive_rate_pred=0.5)
@@ -194,7 +204,7 @@ class DecliningPerformanceTests(TestCase):
         self.assertIn("Pause automatic promotion and investigate recent predictions.", ctx["recommendations"])
 
 
-class CandidateFailedGateTests(TestCase):
+class CandidateFailedGateTests(MLDailyReportTestCase):
     def test_newer_failed_candidate_flagged_and_recommended(self):
         active = make_model_version(is_active=True, status="active", trained_days_ago=10, version="v1")
         make_model_version(is_active=False, status="experimental", trained_days_ago=1, version="v2")
@@ -205,7 +215,7 @@ class CandidateFailedGateTests(TestCase):
         self.assertEqual(ctx["active_model"].version, active.version)
 
 
-class WeakCalibrationTests(TestCase):
+class WeakCalibrationTests(MLDailyReportTestCase):
     def test_high_calibration_error_recommends_confidence_adjustment(self):
         model = make_model_version(hist_n=150)
         make_assessment(model_version=model, status=ReliabilityAssessment.Status.WATCH, sample_count=150, calibration_error=0.3)
@@ -216,7 +226,7 @@ class WeakCalibrationTests(TestCase):
         )
 
 
-class RecommendationCountTests(TestCase):
+class RecommendationCountTests(MLDailyReportTestCase):
     def test_maximum_three_recommendations(self):
         recs = generate_recommendations(
             assessment=type("A", (), {"status": ReliabilityAssessment.Status.CRITICAL})(),
@@ -235,7 +245,7 @@ class RecommendationCountTests(TestCase):
         self.assertEqual(recs, ["No specific concerns detected — continue routine monitoring."])
 
 
-class PlainLanguageTests(TestCase):
+class PlainLanguageTests(MLDailyReportTestCase):
     """No unexplained technical jargon leaks into the Telegram text."""
 
     BANNED_TERMS = [
@@ -263,7 +273,7 @@ class PlainLanguageTests(TestCase):
             self.assertNotIn(term.lower(), joined)
 
 
-class SplitForTelegramTests(TestCase):
+class SplitForTelegramTests(MLDailyReportTestCase):
     def test_never_splits_mid_section(self):
         sections = ["a" * 100, "b" * 100, "c" * 100]
         chunks = split_for_telegram(sections, limit=150)
@@ -283,7 +293,7 @@ class SplitForTelegramTests(TestCase):
         self.assertEqual(len(chunks), 1)
 
 
-class TrainedTodayTests(TestCase):
+class TrainedTodayTests(MLDailyReportTestCase):
     def test_trained_today_true_when_trained_today(self):
         make_model_version(trained_days_ago=0)
         ctx = build_report_context()

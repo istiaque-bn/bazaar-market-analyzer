@@ -100,11 +100,21 @@ def _resolve_scope(model_name: str) -> tuple[str, MLModelVersion | None]:
     anywhere, report on whichever scope was most recently trained (so a
     never-promoted/deactivated candidate is still findable for the
     "Suspended"/"candidate failed gate" status branches) rather than
-    guessing a scope nothing was ever trained under."""
-    combined = active_model_version(model_name, exchange_scope="combined")
+    guessing a scope nothing was ever trained under.
+
+    Combined is only considered a candidate when every exchange is
+    enabled — same "combined_is_safe_to_serve" rule as the actual
+    serving path (ml_model.load_model / close_learn.load_next_close_model).
+    On a DSE-only deployment a stale "combined" row from before CSE was
+    disabled is never deactivated (serving just bypasses it), so without
+    this check the report keeps describing that stale row's age/metrics
+    forever instead of the fresh per-exchange model actually being served.
+    """
+    exchanges = enabled_exchanges()
+    combined_is_safe_to_serve = set(exchanges) >= {Exchange.DSE, Exchange.CSE}
+    combined = active_model_version(model_name, exchange_scope="combined") if combined_is_safe_to_serve else None
     if combined is not None:
         return "combined", combined
-    exchanges = enabled_exchanges()
     for ex in exchanges:
         m = active_model_version(model_name, exchange_scope=ex)
         if m is not None:
