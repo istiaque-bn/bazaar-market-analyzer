@@ -30,17 +30,48 @@ def _redact(text: str, token: str) -> str:
     return text.replace(token, "[REDACTED]") if token else text
 
 
+VPS_REPORT_PREFIX = "VPS Report"
+
+
+def _is_production() -> bool:
+    """True only for the actual VPS deployment (config.settings.production),
+    never local dev/test — SETTINGS_MODULE is a Django-managed attribute
+    (django.conf.LazySettings._setup), not something this project sets
+    itself, so it can't drift out of sync with which settings module is
+    genuinely active."""
+    return getattr(settings, "SETTINGS_MODULE", "") == "config.settings.production"
+
+
 def _post_telegram_message(token: str, chat_id: str, text: str) -> dict:
     """Single low-level Telegram Bot API sendMessage call — every
     Telegram send in this project goes through this one function, so
     there is exactly one place that owns HTTPS, timeouts, and token
     redaction. Raises TelegramTransientError/TelegramPermanentError on
-    failure; callers decide whether/how to retry."""
+    failure; callers decide whether/how to retry.
+
+    Messages sent from the production VPS are prefixed with a bold "VPS
+    Report" line — local dev/test also has real Telegram credentials
+    configured (see project memory on the Aug 2026 celery-duplication
+    incident), so without this, alerts from a developer's laptop are
+    indistinguishable from the real production ones in the same chat.
+    Bold is applied via the `entities` API (a byte-range formatting
+    instruction on the raw text) rather than parse_mode + markdown/HTML
+    syntax, so arbitrary report text containing *, _, <, or & can't
+    break Telegram's entity parsing and silently drop the message."""
+    request_payload: dict = {}
+    if _is_production():
+        prefix = f"{VPS_REPORT_PREFIX}\n"
+        text = f"{prefix}{text}"[:4096]
+        request_payload["entities"] = [{"type": "bold", "offset": 0, "length": len(VPS_REPORT_PREFIX)}]
+    else:
+        text = text[:4096]
+    request_payload["chat_id"] = chat_id
+    request_payload["text"] = text
     url = f"{TELEGRAM_API_BASE}/bot{token}/sendMessage"
     try:
         resp = requests.post(
             url,
-            json={"chat_id": chat_id, "text": text[:4096]},
+            json=request_payload,
             timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
         )
     except requests.exceptions.RequestException as exc:
