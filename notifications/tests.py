@@ -665,6 +665,7 @@ class MlDailyReportComparisonTests(TestCase):
         self._store_previous(yesterday, _ctx(live_n=150, live_precision=0.6))
         result = _compare_with_previous(today, _ctx(live_n=150, live_precision=0.6, trained_today=False))
         self.assertEqual(result["message"], "No new evidence since the previous report.")
+        self.assertEqual(result["trend"], "no_new_evidence")
 
     def test_tiny_change_described_as_stable(self):
         yesterday = timezone.localdate() - __import__("datetime").timedelta(days=1)
@@ -674,6 +675,7 @@ class MlDailyReportComparisonTests(TestCase):
         # under COMPARISON_TOLERANCE_PCT.
         result = _compare_with_previous(today, _ctx(live_n=151, live_precision=0.61))
         self.assertEqual(result["message"], "Performance is stable compared with the previous report.")
+        self.assertEqual(result["trend"], "stable")
 
     def test_material_improvement_reported(self):
         yesterday = timezone.localdate() - __import__("datetime").timedelta(days=1)
@@ -681,6 +683,7 @@ class MlDailyReportComparisonTests(TestCase):
         self._store_previous(yesterday, _ctx(live_n=150, live_precision=0.55))
         result = _compare_with_previous(today, _ctx(live_n=200, live_precision=0.75))
         self.assertEqual(result["message"], "Performance improved slightly compared with the previous report.")
+        self.assertEqual(result["trend"], "improving")
 
     def test_material_decline_reported(self):
         yesterday = timezone.localdate() - __import__("datetime").timedelta(days=1)
@@ -688,6 +691,7 @@ class MlDailyReportComparisonTests(TestCase):
         self._store_previous(yesterday, _ctx(live_n=150, live_precision=0.75))
         result = _compare_with_previous(today, _ctx(live_n=200, live_precision=0.40))
         self.assertEqual(result["message"], "Performance declined compared with the previous report.")
+        self.assertEqual(result["trend"], "declining")
 
     def test_model_version_change_disclosed_not_compared_numerically(self):
         yesterday = timezone.localdate() - __import__("datetime").timedelta(days=1)

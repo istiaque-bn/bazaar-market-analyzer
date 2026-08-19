@@ -59,6 +59,23 @@ EVIDENCE_BANDS = (
 
 DISCLAIMER = "Historical and live results do not guarantee future returns."
 
+# Display text for notifications.tasks._compare_with_previous's "trend"
+# key — an unmissable Improving/Declining line up top, not just prose
+# buried under "What changed?". None covers both "no previous report
+# exists yet" (comparison itself is None) and any trend value this
+# module doesn't recognize, so a future new trend value fails safe to
+# the honest "can't tell yet" line instead of raising or going blank.
+_TREND_LABELS = {
+    "improving": "\U0001f4c8 Trend: Improving — it's doing better than it was before.",
+    "declining": "\U0001f4c9 Trend: Declining — it's doing worse than it was before.",
+    "stable": "➡️ Trend: Holding steady — about the same as before.",
+    "no_new_evidence": "➡️ Trend: No new evidence since the last report — nothing has changed yet.",
+    "insufficient_history": "\U0001f195 Trend: New evidence just arrived — not enough history yet to call it improving or declining.",
+    "version_changed": "\U0001f504 Trend: A new model version was introduced — not comparable with before.",
+    "window_changed": "\U0001f504 Trend: The evaluation window changed — not comparable with before.",
+    None: "\U0001f195 Trend: This is the first report on record — not enough history yet to tell.",
+}
+
 _ACTION_BY_STATUS = {
     "Stable": "Keep the current model active.",
     "Promising": "Keep the current model active, but do not increase confidence yet.",
@@ -344,6 +361,9 @@ def render_report_sections(context: dict, comparison: dict | None = None) -> lis
     cutting mid-sentence."""
     as_of = context["as_of"]
     sections = [f"\U0001f4ca Bazaar ML Daily Report\nDate: {as_of.strftime('%-d %B %Y')}"]
+
+    trend = comparison.get("trend") if comparison else None
+    sections.append(_TREND_LABELS.get(trend, _TREND_LABELS[None]))
 
     if context["closure_reason"]:
         sections.append(f"Today is a non-trading day ({context['closure_reason']}) — a shorter check-in report follows.")

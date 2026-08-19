@@ -22,9 +22,9 @@ from notifications.services import TelegramPermanentError, TelegramTransientErro
 @shared_task(name="notifications.tasks.send_shadow_model_report")
 @record_task_run("notifications.tasks.send_shadow_model_report")
 def send_shadow_model_report():
-    from market.services.shadow_model import shadow_report
+    from market.services.shadow_model import render_shadow_report_text, shadow_report
     r=shadow_report()
-    text=f"Shadow ML daily report\nSettled: {r['n']}\nModel MAE: {r.get('mae','—')} · naive MAE: {r.get('naive_mae','—')}\nSkill vs naive: {r.get('skill','—')}\nDirection hit: {r.get('direction','—')}\nCandidate is isolated and cannot change production forecasts."
+    text=render_shadow_report_text(r)
     if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_ADMIN_CHAT_ID: send_telegram_message(settings.TELEGRAM_ADMIN_CHAT_ID,text)
     return {"ok":True,**r}
 
@@ -305,7 +305,13 @@ def _compare_with_previous(report_date: date, context: dict) -> dict | None:
     model-version or evaluation-window change without saying so; a
     zero-movement day (no new settled predictions, no new training,
     same version) is reported as "no new evidence", not as an error or
-    a fabricated "stable" verdict."""
+    a fabricated "stable" verdict.
+
+    "trend" is a machine-readable companion to "message", added so
+    render_report_sections can put an unmissable Improving/Declining
+    line at the top of the report instead of the verdict only showing
+    up prose-buried under "What changed?" — see market.services.
+    ml_daily_report._TREND_LABELS for the display text per value."""
     previous = (
         MlDailyReportDelivery.objects.filter(report_date__lt=report_date, status=MlDailyReportStatus.SENT)
         .order_by("-report_date")
@@ -318,24 +324,24 @@ def _compare_with_previous(report_date: date, context: dict) -> dict | None:
         return None
 
     if prev.get("model_version_tag") != context["model_version_tag"]:
-        return {"message": "A new model version was introduced, so today's result is not directly comparable with yesterday's."}
+        return {"message": "A new model version was introduced, so today's result is not directly comparable with yesterday's.", "trend": "version_changed"}
     if prev.get("window_label") != context["window_label"]:
-        return {"message": "The evaluation window changed, so today's result is not directly comparable with yesterday's."}
+        return {"message": "The evaluation window changed, so today's result is not directly comparable with yesterday's.", "trend": "window_changed"}
 
     cur_live_n = context["live"]["n"]
     if cur_live_n == prev.get("live_n") and not context["trained_today"]:
-        return {"message": "No new evidence since the previous report."}
+        return {"message": "No new evidence since the previous report.", "trend": "no_new_evidence"}
 
     prev_precision, cur_precision = prev.get("live_precision"), context["live"]["precision"]
     if prev_precision is None or cur_precision is None:
-        return {"message": "New live evidence arrived; not enough history yet to say whether it improved or declined."}
+        return {"message": "New live evidence arrived; not enough history yet to say whether it improved or declined.", "trend": "insufficient_history"}
 
     diff_pct = (cur_precision - prev_precision) * 100
     if abs(diff_pct) < COMPARISON_TOLERANCE_PCT:
-        return {"message": "Performance is stable compared with the previous report."}
+        return {"message": "Performance is stable compared with the previous report.", "trend": "stable"}
     if diff_pct > 0:
-        return {"message": "Performance improved slightly compared with the previous report."}
-    return {"message": "Performance declined compared with the previous report."}
+        return {"message": "Performance improved slightly compared with the previous report.", "trend": "improving"}
+    return {"message": "Performance declined compared with the previous report.", "trend": "declining"}
 
 
 @shared_task(

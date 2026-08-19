@@ -245,6 +245,36 @@ class RecommendationCountTests(MLDailyReportTestCase):
         self.assertEqual(recs, ["No specific concerns detected — continue routine monitoring."])
 
 
+class TrendLineTests(MLDailyReportTestCase):
+    """The Improving/Declining verdict must be unmissable — its own line
+    right after the header, not only buried in "What changed?" prose."""
+
+    def setUp(self):
+        self.model = make_model_version(hist_n=150)
+        make_assessment(model_version=self.model, status=ReliabilityAssessment.Status.HEALTHY, sample_count=150)
+        self.ctx = build_report_context()
+
+    def test_no_comparison_yet_says_first_report(self):
+        sections = render_report_sections(self.ctx, comparison=None)
+        self.assertIn("first report on record", sections[1])
+
+    def test_improving_trend_is_labeled(self):
+        sections = render_report_sections(self.ctx, comparison={"message": "x", "trend": "improving"})
+        self.assertIn("Trend: Improving", sections[1])
+
+    def test_declining_trend_is_labeled(self):
+        sections = render_report_sections(self.ctx, comparison={"message": "x", "trend": "declining"})
+        self.assertIn("Trend: Declining", sections[1])
+
+    def test_stable_trend_is_labeled(self):
+        sections = render_report_sections(self.ctx, comparison={"message": "x", "trend": "stable"})
+        self.assertIn("Trend: Holding steady", sections[1])
+
+    def test_unrecognized_trend_value_falls_back_safely(self):
+        sections = render_report_sections(self.ctx, comparison={"message": "x", "trend": "some_future_value"})
+        self.assertIn("not enough history yet", sections[1])
+
+
 class PlainLanguageTests(MLDailyReportTestCase):
     """No unexplained technical jargon leaks into the Telegram text."""
 
