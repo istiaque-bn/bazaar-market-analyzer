@@ -173,6 +173,11 @@ app.conf.beat_schedule = {
     "sync-dse-events-0800": {"task": "market.tasks.sync_dse_events", "schedule": crontab(hour=8, minute=0)},
     "sync-dse-events-1730": {"task": "market.tasks.sync_dse_events", "schedule": crontab(hour=17, minute=30)},
     "sync-dse-events-2200": {"task": "market.tasks.sync_dse_events", "schedule": crontab(hour=22, minute=0)},
+    # DSE's sector directory (market.services.dse_sector_sync) barely
+    # changes week to week (companies rarely switch sector or get
+    # renamed), so a weekly refresh is plenty -- Sunday 03:00, off-hours
+    # and clear of every other scheduled task above.
+    "sync-dse-sectors-weekly": {"task": "market.tasks.sync_dse_sectors", "schedule": crontab(hour=3, minute=0, day_of_week="0")},
 }
 
 # Standalone forward-return model retrain — daily, at a fixed off-hours

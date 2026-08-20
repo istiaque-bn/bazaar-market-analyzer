@@ -263,6 +263,7 @@ CELERY_TASK_ROUTES = {
     "market.tasks.run_intraday_analysis": {"queue": QUEUE_MARKET_ANALYSIS},
     "market.tasks.append_daily_bars": {"queue": QUEUE_MARKET_ANALYSIS},
     "market.tasks.sync_holiday_calendar": {"queue": QUEUE_MARKET_ANALYSIS},
+    "market.tasks.sync_dse_sectors": {"queue": QUEUE_MARKET_ANALYSIS},
     "market.tasks.fetch_all_market_data": {"queue": QUEUE_MARKET_HEAVY},
     "market.tasks.run_full_analysis": {"queue": QUEUE_MARKET_HEAVY},
     "market.tasks.run_end_of_day_pipeline": {"queue": QUEUE_MARKET_HEAVY},

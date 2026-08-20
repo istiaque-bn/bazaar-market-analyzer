@@ -332,6 +332,31 @@ def sync_dse_events():
 
 
 @shared_task(
+    name="market.tasks.sync_dse_sectors",
+    autoretry_for=_TRANSIENT_ERRORS,
+    retry_backoff=True,
+    retry_backoff_max=120,
+    retry_jitter=True,
+    max_retries=2,
+    time_limit=180,
+    soft_time_limit=150,
+)
+@record_task_run("market.tasks.sync_dse_sectors")
+def sync_dse_sectors():
+    """Weekly Stock.sector/company_name refresh from DSE's sector
+    directory (see market.services.dse_sector_sync) — sector membership
+    barely changes day to day, unlike the intraday-scoped tasks above, so
+    a weekly cadence is plenty; this exists to unblock
+    next_close_research.sector_data_is_usable()'s >=90%-coverage gate,
+    which real (non-demo) stock data never populates on its own."""
+    from market.services.autosync import exclusive_db_write
+    from market.services.dse_sector_sync import sync_dse_sector_classification
+
+    with exclusive_db_write(blocking=True, timeout=120):
+        return sync_dse_sector_classification()
+
+
+@shared_task(
     name="market.tasks.train_ml_model",
     autoretry_for=_TRANSIENT_ERRORS,
     retry_backoff=True,
