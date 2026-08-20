@@ -22,11 +22,11 @@ from notifications.services import TelegramPermanentError, TelegramTransientErro
 @shared_task(name="notifications.tasks.send_shadow_model_report")
 @record_task_run("notifications.tasks.send_shadow_model_report")
 def send_shadow_model_report():
-    from market.services.shadow_model import render_shadow_report_text, shadow_report
-    r=shadow_report()
-    text=render_shadow_report_text(r)
+    from market.services.shadow_model import NAME, REGRESSION_NAME, render_shadow_comparison_text, shadow_report
+    reports = {NAME: shadow_report(NAME), REGRESSION_NAME: shadow_report(REGRESSION_NAME)}
+    text=render_shadow_comparison_text(reports)
     if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_ADMIN_CHAT_ID: send_telegram_message(settings.TELEGRAM_ADMIN_CHAT_ID,text)
-    return {"ok":True,**r}
+    return {"ok":True,"reports":reports}
 
 
 @shared_task(name="notifications.tasks.deliver_admin_reminders")

@@ -1,9 +1,21 @@
 from datetime import date, timedelta
+from unittest.mock import patch
 
+import numpy as np
+import pandas as pd
 from django.test import TestCase
 
-from market.models import Exchange, ShadowForecast, Stock
-from market.services.shadow_model import NAME, render_shadow_report_text, shadow_report
+from market.models import Exchange, PriceHistory, ShadowForecast, Stock
+from market.services.close_learn import FEATURE_COLS, MIN_FOLD_TRAIN_ROWS
+from market.services.shadow_model import (
+    NAME,
+    REGRESSION_NAME,
+    _train_shadow_regression,
+    render_shadow_comparison_text,
+    render_shadow_report_text,
+    run_shadow_cycle,
+    shadow_report,
+)
 
 
 def _mk_row(stock, *, target_date, last_close, predicted_close, actual_close):
@@ -80,7 +92,7 @@ class ShadowReportTextTests(TestCase):
     def test_no_data_is_plain_language_not_a_bare_number(self):
         text = render_shadow_report_text({"n": 0, "trend": None})
         self.assertIn("No completed price checks yet", text)
-        self.assertIn("never affects real forecasts", text)
+        self.assertIn("never changes real forecasts", text)
         # Never a bare-numbers dump: no raw metric labels leak into the text.
         self.assertNotIn("MAE", text)
         self.assertNotIn("Skill vs naive", text)
@@ -101,3 +113,105 @@ class ShadowReportTextTests(TestCase):
     def test_unknown_trend_falls_back_gracefully(self):
         text = render_shadow_report_text({"n": 10, "mae": 1.0, "naive_mae": 1.0, "skill": 0.0, "direction": None, "trend": None})
         self.assertIn("Not enough history yet", text)
+
+
+class ShadowComparisonTextTests(TestCase):
+    def test_both_candidates_appear_with_labels_and_shared_disclaimer(self):
+        reports = {
+            NAME: {"n": 50, "mae": 1.0, "naive_mae": 1.0, "skill": 0.1, "direction": 0.5, "trend": "stable"},
+            REGRESSION_NAME: {"n": 60, "mae": 1.0, "naive_mae": 1.0, "skill": -0.02, "direction": 0.4, "trend": "improving"},
+        }
+        text = render_shadow_comparison_text(reports)
+        self.assertIn("Analogue + ML blend", text)
+        self.assertIn("Direct regression", text)
+        self.assertIn("Trend: Holding steady", text)
+        self.assertIn("Trend: Improving", text)
+        self.assertIn("never changes real forecasts", text)
+
+
+def _synthetic_panel(n: int) -> pd.DataFrame:
+    """Enough rows/columns to exercise _train_shadow_regression's real
+    fit path (median imputer + _fit_zero_inflated_next_close, both
+    already covered for correctness in test_ml_training.py) without
+    needing real price history — this only checks the new orchestration
+    wiring, not the modeling math itself."""
+    rng = np.random.default_rng(42)
+    data = {c: rng.normal(size=n) for c in FEATURE_COLS}
+    data["fwd_ret_1"] = rng.normal(scale=0.02, size=n)
+    return pd.DataFrame(data)
+
+
+class TrainShadowRegressionTests(TestCase):
+    @patch("market.services.shadow_model._build_next_close_panel")
+    def test_returns_none_on_empty_panel(self, mock_panel):
+        mock_panel.return_value = pd.DataFrame()
+        self.assertIsNone(_train_shadow_regression())
+
+    @patch("market.services.shadow_model._build_next_close_panel")
+    def test_returns_none_when_panel_too_small(self, mock_panel):
+        mock_panel.return_value = _synthetic_panel(MIN_FOLD_TRAIN_ROWS - 1)
+        self.assertIsNone(_train_shadow_regression())
+
+    @patch("market.services.shadow_model._build_next_close_panel")
+    def test_fits_end_to_end_on_a_large_enough_panel(self, mock_panel):
+        mock_panel.return_value = _synthetic_panel(MIN_FOLD_TRAIN_ROWS + 50)
+        result = _train_shadow_regression()
+        self.assertIsNotNone(result)
+        imputer, classifier, regressor = result
+        self.assertTrue(hasattr(classifier, "predict_proba"))
+        self.assertTrue(hasattr(regressor, "predict"))
+
+
+class RunShadowCycleRegressionTests(TestCase):
+    def setUp(self):
+        self.stock = Stock.objects.create(exchange=Exchange.DSE, trading_code="SHDR", company_name="Shadow Regression Co")
+        end = date.today()
+        for i in range(60):
+            day = end - timedelta(days=60 - i)
+            close = 100 + i * 0.1
+            PriceHistory.objects.create(stock=self.stock, date=day, open=close, high=close + 1, low=close - 1, close=close, volume=1000)
+
+    @patch("market.services.shadow_model.apply_imputer", side_effect=lambda imputer, X: X)
+    @patch("market.services.shadow_model.liquid_stock_ids")
+    @patch("market.services.shadow_model._predict_zero_inflated")
+    @patch("market.services.shadow_model._feature_row")
+    @patch("market.services.shadow_model._train_shadow_regression")
+    def test_creates_regression_forecast_when_training_succeeds(self, mock_train, mock_feature_row, mock_predict, mock_liquid, mock_impute):
+        mock_train.return_value = ("imputer", "classifier", "regressor")
+        mock_feature_row.return_value = {c: 0.0 for c in FEATURE_COLS}
+        mock_predict.return_value = np.array([0.02])
+        mock_liquid.return_value = {self.stock.id}
+
+        result = run_shadow_cycle(as_of=date.today())
+
+        self.assertEqual(result["created_regression"], 1)
+        fc = ShadowForecast.objects.get(candidate_name=REGRESSION_NAME)
+        self.assertAlmostEqual(fc.predicted_return, 0.02)
+        self.assertAlmostEqual(fc.predicted_close, fc.last_close * 1.02, places=2)
+
+    @patch("market.services.shadow_model.liquid_stock_ids")
+    @patch("market.services.shadow_model._train_shadow_regression")
+    def test_skips_regression_candidate_when_training_returns_none(self, mock_train, mock_liquid):
+        mock_train.return_value = None
+        mock_liquid.return_value = {self.stock.id}
+
+        result = run_shadow_cycle(as_of=date.today())
+
+        self.assertEqual(result["created_regression"], 0)
+        self.assertFalse(ShadowForecast.objects.filter(candidate_name=REGRESSION_NAME).exists())
+
+    @patch("market.services.shadow_model.apply_imputer", side_effect=lambda imputer, X: X)
+    @patch("market.services.shadow_model.liquid_stock_ids")
+    @patch("market.services.shadow_model._predict_zero_inflated")
+    @patch("market.services.shadow_model._feature_row")
+    @patch("market.services.shadow_model._train_shadow_regression")
+    def test_never_duplicates_an_existing_regression_forecast(self, mock_train, mock_feature_row, mock_predict, mock_liquid, mock_impute):
+        mock_train.return_value = ("imputer", "classifier", "regressor")
+        mock_feature_row.return_value = {c: 0.0 for c in FEATURE_COLS}
+        mock_predict.return_value = np.array([0.02])
+        mock_liquid.return_value = {self.stock.id}
+
+        run_shadow_cycle(as_of=date.today())
+        run_shadow_cycle(as_of=date.today())
+
+        self.assertEqual(ShadowForecast.objects.filter(candidate_name=REGRESSION_NAME).count(), 1)
