@@ -506,7 +506,11 @@ class MarketEvent(models.Model):
     event_date = models.DateField(db_index=True)
     stock = models.ForeignKey(Stock, null=True, blank=True, on_delete=models.SET_NULL, related_name="market_events")
     venue = models.CharField(max_length=255, blank=True)
-    event_time = models.CharField(max_length=64, blank=True)
+    # DSE occasionally puts a long free-text placeholder here ("Will
+    # notify later upon obtaining the approval/order from the Hon'ble
+    # High Court Division", 89 chars) instead of an actual time — sized
+    # the same as venue rather than a short field width to hold that.
+    event_time = models.CharField(max_length=255, blank=True)
     details = models.TextField(blank=True)
     source_url = models.URLField(blank=True)
     is_public = models.BooleanField(default=True)
