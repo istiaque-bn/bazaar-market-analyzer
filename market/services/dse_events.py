@@ -120,26 +120,23 @@ def _event_type_for_purpose(purpose: str):
 _VENUE_LABEL_PREFIX_RE = re.compile(r"^(venue\s*/\s*(mode|platform)|venue|mode of agm|mode)\s*:\s*", re.IGNORECASE)
 
 
-def _details_text(*, purpose: str = "", venue: str, time_: str) -> str:
+def _clean_venue(venue: str) -> str:
+    """The source venue cell often already starts with its own "Venue:" /
+    "Venue/Mode:" / "Mode of AGM:" label (DSE's free text, not ours), which
+    would read as redundant once shown under this page's own "Venue/Mode"
+    column header (true for the majority of rows, not an edge case)."""
+    return _VENUE_LABEL_PREFIX_RE.sub("", venue) if venue else venue
+
+
+def _details_text(*, purpose: str = "") -> str:
     """`purpose` is only passed for Record Date events — AGM/EGM events
     already carry it as their title, and repeating it in details as well
     read as redundant on the page. year_end is deliberately omitted here
     (low-value noise for a reader deciding whether to act on this event)
     even though it's still available in the parsed row if a future
-    consumer wants it.
-
-    The source venue cell often already starts with its own "Venue:" /
-    "Venue/Mode:" / "Mode of AGM:" label (DSE's free text, not ours) —
-    strip that before prepending our own, or the page reads "Venue/Mode:
-    Venue/Mode: ..." (true for the majority of rows, not an edge case)."""
-    parts = []
-    if purpose:
-        parts.append(f"Purpose: {purpose}")
-    if venue:
-        parts.append(f"Venue/Mode: {_VENUE_LABEL_PREFIX_RE.sub('', venue)}")
-    if time_:
-        parts.append(f"Time: {time_}")
-    return " · ".join(parts)
+    consumer wants it. Venue/time have their own MarketEvent fields now
+    (rendered as their own table columns) rather than living here."""
+    return f"Purpose: {purpose}" if purpose else ""
 
 
 def sync_dse_agm_egm_events() -> dict:
@@ -180,7 +177,7 @@ def sync_dse_agm_egm_events() -> dict:
     for row in rows:
         company = row["company"]
         purpose = row["purpose"]
-        venue, time_ = row["venue"], row["time"]
+        venue, time_ = _clean_venue(row["venue"]), row["time"]
 
         if row["agm_egm_date"] is not None:
             event_type = _event_type_for_purpose(purpose)
@@ -190,7 +187,9 @@ def sync_dse_agm_egm_events() -> dict:
                 title=title,
                 event_type=event_type,
                 event_date=row["agm_egm_date"],
-                details=_details_text(venue=venue, time_=time_),
+                details=_details_text(),
+                venue=venue,
+                event_time=time_,
             )
         else:
             skipped_no_date += 1
@@ -208,7 +207,9 @@ def sync_dse_agm_egm_events() -> dict:
                 title=title,
                 event_type=MarketEvent.EventType.RECORD_DATE,
                 event_date=row["record_date"],
-                details=_details_text(purpose=purpose, venue=venue, time_=time_),
+                details=_details_text(purpose=purpose),
+                venue=venue,
+                event_time=time_,
             )
             if outcome == "created":
                 created += 1
@@ -229,7 +230,7 @@ def sync_dse_agm_egm_events() -> dict:
     }
 
 
-def _upsert_event(*, title: str, event_type, event_date: date, details: str) -> str:
+def _upsert_event(*, title: str, event_type, event_date: date, details: str, venue: str = "", event_time: str = "") -> str:
     """Returns "created" / "updated" / "unchanged"."""
     from market.models import MarketEvent
 
@@ -240,15 +241,25 @@ def _upsert_event(*, title: str, event_type, event_date: date, details: str) -> 
             event_type=event_type,
             event_date=event_date,
             details=details,
+            venue=venue,
+            event_time=event_time,
             source_url=DSE_AGM_EGM_PDF_URL,
             is_public=True,
         )
         return "created"
-    changed = existing.details != details or existing.source_url != DSE_AGM_EGM_PDF_URL or not existing.is_public
+    changed = (
+        existing.details != details
+        or existing.venue != venue
+        or existing.event_time != event_time
+        or existing.source_url != DSE_AGM_EGM_PDF_URL
+        or not existing.is_public
+    )
     if changed:
         existing.details = details
+        existing.venue = venue
+        existing.event_time = event_time
         existing.source_url = DSE_AGM_EGM_PDF_URL
         existing.is_public = True
-        existing.save(update_fields=["details", "source_url", "is_public", "updated_at"])
+        existing.save(update_fields=["details", "venue", "event_time", "source_url", "is_public", "updated_at"])
         return "updated"
     return "unchanged"

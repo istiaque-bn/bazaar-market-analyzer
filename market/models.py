@@ -505,6 +505,8 @@ class MarketEvent(models.Model):
     title = models.CharField(max_length=240)
     event_date = models.DateField(db_index=True)
     stock = models.ForeignKey(Stock, null=True, blank=True, on_delete=models.SET_NULL, related_name="market_events")
+    venue = models.CharField(max_length=255, blank=True)
+    event_time = models.CharField(max_length=64, blank=True)
     details = models.TextField(blank=True)
     source_url = models.URLField(blank=True)
     is_public = models.BooleanField(default=True)

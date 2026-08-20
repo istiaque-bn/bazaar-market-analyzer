@@ -16,6 +16,7 @@ from market.models import MarketEvent
 from market.services.dse_events import (
     AGMPageParseError,
     _clean,
+    _clean_venue,
     _details_text,
     _event_type_for_purpose,
     _parse_notice_date,
@@ -55,18 +56,15 @@ class EventTypeHeuristicTests(TestCase):
 
 
 class DetailsTextTests(TestCase):
-    def test_omits_empty_parts(self):
-        text = _details_text(purpose="10% Cash Dividend", venue="", time_="")
+    def test_omits_empty_purpose(self):
+        self.assertEqual(_details_text(), "")
+
+    def test_wraps_purpose_when_present(self):
+        text = _details_text(purpose="10% Cash Dividend")
         self.assertEqual(text, "Purpose: 10% Cash Dividend")
 
-    def test_joins_present_parts(self):
-        text = _details_text(purpose="No Dividend", venue="Hybrid", time_="10:00 AM")
-        self.assertEqual(text, "Purpose: No Dividend · Venue/Mode: Hybrid · Time: 10:00 AM")
 
-    def test_purpose_omitted_by_default_for_agm_egm_events(self):
-        text = _details_text(venue="Hybrid", time_="10:00 AM")
-        self.assertEqual(text, "Venue/Mode: Hybrid · Time: 10:00 AM")
-
+class CleanVenueTests(TestCase):
     def test_strips_source_own_venue_label_to_avoid_double_labeling(self):
         for raw in (
             "Venue/Mode: Digital Platform",
@@ -75,12 +73,13 @@ class DetailsTextTests(TestCase):
             "Mode: Digital Platform",
             "Venue/Platform: Digital Platform",
         ):
-            text = _details_text(venue=raw, time_="")
-            self.assertEqual(text, "Venue/Mode: Digital Platform", msg=raw)
+            self.assertEqual(_clean_venue(raw), "Digital Platform", msg=raw)
 
     def test_venue_without_a_label_prefix_is_untouched(self):
-        text = _details_text(venue="Uttara Club Limited", time_="")
-        self.assertEqual(text, "Venue/Mode: Uttara Club Limited")
+        self.assertEqual(_clean_venue("Uttara Club Limited"), "Uttara Club Limited")
+
+    def test_empty_venue_stays_empty(self):
+        self.assertEqual(_clean_venue(""), "")
 
 
 def _fake_pdf(pages_tables: list[list[list]]):
@@ -164,8 +163,11 @@ class SyncDseAgmEgmEventsTests(TestCase):
         self.assertEqual(agm.event_date, date(2026, 9, 14))
         self.assertTrue(agm.is_public)
         self.assertIn("Al-Haj Textile Mills Limited", agm.title)
+        self.assertEqual(agm.venue, "Hybrid Platform.")
+        self.assertEqual(agm.event_time, "11.00 AM")
         record = MarketEvent.objects.get(event_type=MarketEvent.EventType.RECORD_DATE)
         self.assertEqual(record.event_date, date(2026, 8, 16))
+        self.assertEqual(record.details, "Purpose: 3% Cash Dividend")
 
     def test_placeholder_dates_are_skipped_not_errored(self):
         row = self._row(agm_egm_date=None, record_date=None)
@@ -217,7 +219,7 @@ class SyncDseAgmEgmEventsTests(TestCase):
         self.assertEqual(result["updated"], 2)
         self.assertEqual(MarketEvent.objects.count(), 2)
         agm = MarketEvent.objects.get(event_type=MarketEvent.EventType.AGM)
-        self.assertIn("New Venue Hall", agm.details)
+        self.assertEqual(agm.venue, "New Venue Hall")
 
     def test_two_events_same_company_same_date_stay_distinct(self):
         """Real-world case: an EGM (Articles amendment) and an AGM
