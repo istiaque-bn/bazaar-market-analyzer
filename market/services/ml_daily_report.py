@@ -209,6 +209,36 @@ def determine_status(
     return label, sentence
 
 
+# The only two status labels backed by a genuinely HEALTHY live
+# ReliabilityAssessment (see determine_status above) — "Experimental"
+# deliberately does not count: a freshly (re)activated candidate has no
+# live evidence yet, so calling that "recovered" would be premature
+# reassurance about a model nobody has actually watched perform yet.
+RECOVERED_STATUS_LABELS = {"Stable", "Promising"}
+
+
+def recovery_alert_text(previous_status_label: str | None, context: dict) -> str | None:
+    """One-off alert text for the specific moment the direction model's
+    status crosses from not-yet-trustworthy back into live-proven
+    territory — e.g. after market.services.live_model_gate auto-suspends
+    a critical model and a later retrain earns back a healthy live
+    assessment. Returns None on every day that isn't that exact
+    transition (including the very first report ever, when there is no
+    previous status to compare against), so callers can send this
+    in addition to, not instead of, the regular daily report."""
+    if previous_status_label is None or previous_status_label in RECOVERED_STATUS_LABELS:
+        return None
+    if context["status_label"] not in RECOVERED_STATUS_LABELS:
+        return None
+    return (
+        "✅ Direction model recovered\n"
+        f'Status moved from "{previous_status_label}" to "{context["status_label"]}" — '
+        "live evidence now shows this model performing well again.\n\n"
+        f"{context['status_sentence']}\n\n"
+        "See today's full ML report below for details."
+    )
+
+
 def generate_recommendations(
     *,
     assessment: ReliabilityAssessment | None,

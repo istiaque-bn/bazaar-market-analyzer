@@ -14,6 +14,7 @@ from notifications.models import AdminReminder, Alert, AlertChannel, MlDailyRepo
 from notifications.services import TelegramPermanentError, TelegramTransientError, send_telegram_message, send_telegram_message_tracked
 from notifications.tasks import (
     _compare_with_previous,
+    _previous_snapshot,
     _digest_text,
     _personal_watchlist_digest_text,
     _idempotency_key,
@@ -656,14 +657,14 @@ class MlDailyReportComparisonTests(TestCase):
 
     def test_no_previous_report_returns_none(self):
         today = timezone.localdate()
-        result = _compare_with_previous(today, _ctx(live_n=150, live_precision=0.6))
+        result = _compare_with_previous(today, _ctx(live_n=150, live_precision=0.6), _previous_snapshot(today))
         self.assertIsNone(result)
 
     def test_no_new_evidence_when_nothing_changed(self):
         yesterday = timezone.localdate() - __import__("datetime").timedelta(days=1)
         today = timezone.localdate()
         self._store_previous(yesterday, _ctx(live_n=150, live_precision=0.6))
-        result = _compare_with_previous(today, _ctx(live_n=150, live_precision=0.6, trained_today=False))
+        result = _compare_with_previous(today, _ctx(live_n=150, live_precision=0.6, trained_today=False), _previous_snapshot(today))
         self.assertEqual(result["message"], "No new evidence since the previous report.")
         self.assertEqual(result["trend"], "no_new_evidence")
 
@@ -673,7 +674,7 @@ class MlDailyReportComparisonTests(TestCase):
         self._store_previous(yesterday, _ctx(live_n=150, live_precision=0.60))
         # +1 new settled prediction and a 1-point precision wobble — well
         # under COMPARISON_TOLERANCE_PCT.
-        result = _compare_with_previous(today, _ctx(live_n=151, live_precision=0.61))
+        result = _compare_with_previous(today, _ctx(live_n=151, live_precision=0.61), _previous_snapshot(today))
         self.assertEqual(result["message"], "Performance is stable compared with the previous report.")
         self.assertEqual(result["trend"], "stable")
 
@@ -681,7 +682,7 @@ class MlDailyReportComparisonTests(TestCase):
         yesterday = timezone.localdate() - __import__("datetime").timedelta(days=1)
         today = timezone.localdate()
         self._store_previous(yesterday, _ctx(live_n=150, live_precision=0.55))
-        result = _compare_with_previous(today, _ctx(live_n=200, live_precision=0.75))
+        result = _compare_with_previous(today, _ctx(live_n=200, live_precision=0.75), _previous_snapshot(today))
         self.assertEqual(result["message"], "Performance improved slightly compared with the previous report.")
         self.assertEqual(result["trend"], "improving")
 
@@ -689,7 +690,7 @@ class MlDailyReportComparisonTests(TestCase):
         yesterday = timezone.localdate() - __import__("datetime").timedelta(days=1)
         today = timezone.localdate()
         self._store_previous(yesterday, _ctx(live_n=150, live_precision=0.75))
-        result = _compare_with_previous(today, _ctx(live_n=200, live_precision=0.40))
+        result = _compare_with_previous(today, _ctx(live_n=200, live_precision=0.40), _previous_snapshot(today))
         self.assertEqual(result["message"], "Performance declined compared with the previous report.")
         self.assertEqual(result["trend"], "declining")
 
@@ -697,7 +698,7 @@ class MlDailyReportComparisonTests(TestCase):
         yesterday = timezone.localdate() - __import__("datetime").timedelta(days=1)
         today = timezone.localdate()
         self._store_previous(yesterday, _ctx(model_version_tag="v1", live_n=150, live_precision=0.30))
-        result = _compare_with_previous(today, _ctx(model_version_tag="v2", live_n=10, live_precision=0.90))
+        result = _compare_with_previous(today, _ctx(model_version_tag="v2", live_n=10, live_precision=0.90), _previous_snapshot(today))
         self.assertIn("new model version", result["message"])
         self.assertIn("not directly comparable", result["message"])
 
@@ -705,8 +706,90 @@ class MlDailyReportComparisonTests(TestCase):
         yesterday = timezone.localdate() - __import__("datetime").timedelta(days=1)
         today = timezone.localdate()
         self._store_previous(yesterday, _ctx(window_label="365", live_n=150, live_precision=0.30))
-        result = _compare_with_previous(today, _ctx(window_label="90", live_n=90, live_precision=0.90))
+        result = _compare_with_previous(today, _ctx(window_label="90", live_n=90, live_precision=0.90), _previous_snapshot(today))
         self.assertIn("not directly comparable", result["message"])
+
+
+# ---------------------------------------------------------------------------
+# Telegram ML daily report — recovery alert (end-to-end through the task)
+# ---------------------------------------------------------------------------
+
+
+@override_settings(TELEGRAM_BOT_TOKEN="tok-abc", TELEGRAM_ADMIN_CHAT_ID="999888777", ENABLE_DSE=True, ENABLE_CSE=True)
+class RecoveryAlertDeliveryTests(TestCase):
+    """recovery_alert_text's own logic is unit-tested in
+    market.tests.test_ml_daily_report.RecoveryAlertTextTests; these
+    exercise it wired into the real send task, prepended onto the actual
+    Telegram-bound sections. Dates are pinned to FIXED_NOW_AFTER's local
+    calendar date (2026-08-05, "18:00 Asia/Dhaka") rather than
+    timezone.localdate() at test-run time, since the task itself computes
+    report_date from the mocked `now` — a real-clock "yesterday" would
+    silently never match what _previous_snapshot looks up."""
+
+    TODAY = date(2026, 8, 5)
+    YESTERDAY = date(2026, 8, 4)
+
+    def _store_suspended_yesterday(self):
+        MlDailyReportDelivery.objects.create(
+            report_date=self.YESTERDAY,
+            recipient_masked="99***77",
+            idempotency_key=f"telegram_ml_daily_report:test:{self.YESTERDAY.isoformat()}",
+            status=MlDailyReportStatus.SENT,
+            detail={"snapshot": {
+                "model_version_tag": None,
+                "window_label": "365",
+                "live_n": 0,
+                "live_precision": None,
+                "status_label": "Suspended",
+            }},
+        )
+
+    def test_suspended_to_stable_transition_is_prepended_and_sent(self):
+        from market.tests.test_ml_daily_report import make_assessment, make_model_version
+        from market.models import ReliabilityAssessment
+
+        self._store_suspended_yesterday()
+        model = make_model_version(hist_n=200, hist_precision=0.6, hist_pos_rate=0.5, trained_days_ago=0)
+        make_assessment(model_version=model, status=ReliabilityAssessment.Status.HEALTHY, sample_count=150, precision=0.58, accuracy=0.58, positive_rate_pred=0.55)
+
+        with mock.patch("notifications.tasks.timezone.now", return_value=FIXED_NOW_AFTER), \
+                mock.patch("notifications.tasks.send_telegram_message_tracked", return_value={"message_id": 1}) as mock_send:
+            result = send_ml_daily_report(manual=True)
+
+        self.assertTrue(result.get("sent"))
+        delivery = MlDailyReportDelivery.objects.get(report_date=self.TODAY)
+        self.assertIn("Direction model recovered", delivery.report_text)
+        self.assertIn("Suspended", delivery.report_text)
+        self.assertIn("Stable", delivery.report_text)
+        first_chunk_sent = mock_send.call_args_list[0].args[1]
+        self.assertIn("recovered", first_chunk_sent.lower())
+
+    def test_no_previous_report_never_fires_recovery_alert(self):
+        """First report ever (no previous status to compare) must never
+        claim a "recovery" -- there's nothing to have recovered from."""
+        from market.tests.test_ml_daily_report import make_assessment, make_model_version
+        from market.models import ReliabilityAssessment
+
+        model = make_model_version(hist_n=200, hist_precision=0.6, hist_pos_rate=0.5, trained_days_ago=0)
+        make_assessment(model_version=model, status=ReliabilityAssessment.Status.HEALTHY, sample_count=150, precision=0.58, accuracy=0.58, positive_rate_pred=0.55)
+
+        with mock.patch("notifications.tasks.timezone.now", return_value=FIXED_NOW_AFTER), \
+                mock.patch("notifications.tasks.send_telegram_message_tracked", return_value={"message_id": 1}):
+            send_ml_daily_report(manual=True)
+
+        delivery = MlDailyReportDelivery.objects.get(report_date=self.TODAY)
+        self.assertTrue(delivery.report_text)
+        self.assertNotIn("recovered", delivery.report_text.lower())
+
+    def test_staying_suspended_does_not_fire_recovery_alert(self):
+        self._store_suspended_yesterday()  # yesterday: Suspended, no model today either -> still Suspended/No evidence
+        with mock.patch("notifications.tasks.timezone.now", return_value=FIXED_NOW_AFTER), \
+                mock.patch("notifications.tasks.send_telegram_message_tracked", return_value={"message_id": 1}):
+            send_ml_daily_report(manual=True)
+
+        delivery = MlDailyReportDelivery.objects.get(report_date=self.TODAY)
+        self.assertTrue(delivery.report_text)
+        self.assertNotIn("recovered", delivery.report_text.lower())
 
 
 # ---------------------------------------------------------------------------

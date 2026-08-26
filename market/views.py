@@ -890,14 +890,18 @@ def telegram_report_preview(request):
     the request). Uses the exact same rendering + "what changed" logic
     the real send uses, so the preview always matches what would
     actually go out."""
-    from notifications.tasks import _compare_with_previous, _report_date_in_configured_tz
+    from notifications.tasks import _compare_with_previous, _previous_snapshot, _report_date_in_configured_tz
 
-    from market.services.ml_daily_report import build_report_context, render_report_sections
+    from market.services.ml_daily_report import build_report_context, recovery_alert_text, render_report_sections
 
     report_date = _report_date_in_configured_tz()
     context = build_report_context(as_of=report_date)
-    comparison = _compare_with_previous(report_date, context)
+    prev = _previous_snapshot(report_date)
+    comparison = _compare_with_previous(report_date, context, prev)
     sections = render_report_sections(context, comparison=comparison)
+    recovery_text = recovery_alert_text((prev or {}).get("status_label"), context)
+    if recovery_text:
+        sections = [recovery_text] + sections
     return render(request, "market/telegram_report_preview.html", {"sections": sections, "report_date": report_date})
 
 

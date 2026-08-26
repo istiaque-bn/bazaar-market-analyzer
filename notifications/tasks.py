@@ -10,7 +10,13 @@ from django.core.mail import send_mail
 from django.db.utils import OperationalError
 from django.utils import timezone
 
-from market.services.ml_daily_report import COMPARISON_TOLERANCE_PCT, build_report_context, render_report_sections, split_for_telegram
+from market.services.ml_daily_report import (
+    COMPARISON_TOLERANCE_PCT,
+    build_report_context,
+    recovery_alert_text,
+    render_report_sections,
+    split_for_telegram,
+)
 from market.services.predictor import RESEARCH_DISCLAIMER
 from market.models import AnalysisResult, Watchlist
 from market.services.screener import potential_shares, safe_buys, screen_summary, sell_candidates
@@ -299,7 +305,23 @@ def _snapshot_for_comparison(context: dict) -> dict:
     }
 
 
-def _compare_with_previous(report_date: date, context: dict) -> dict | None:
+def _previous_snapshot(report_date: date) -> dict | None:
+    """The most recent successfully SENT report's stored snapshot (see
+    _snapshot_for_comparison), or None if there isn't one yet. Shared by
+    _compare_with_previous (precision trend) and the recovery-alert check
+    (status-label transition) so there's one query and one definition of
+    "the previous report", not two that could drift apart."""
+    previous = (
+        MlDailyReportDelivery.objects.filter(report_date__lt=report_date, status=MlDailyReportStatus.SENT)
+        .order_by("-report_date")
+        .first()
+    )
+    if previous is None:
+        return None
+    return (previous.detail or {}).get("snapshot") or None
+
+
+def _compare_with_previous(report_date: date, context: dict, prev: dict | None) -> dict | None:
     """"What changed?" — compares today's context against the most recent
     successfully SENT report's stored snapshot. Never compares across a
     model-version or evaluation-window change without saying so; a
@@ -312,14 +334,6 @@ def _compare_with_previous(report_date: date, context: dict) -> dict | None:
     line at the top of the report instead of the verdict only showing
     up prose-buried under "What changed?" — see market.services.
     ml_daily_report._TREND_LABELS for the display text per value."""
-    previous = (
-        MlDailyReportDelivery.objects.filter(report_date__lt=report_date, status=MlDailyReportStatus.SENT)
-        .order_by("-report_date")
-        .first()
-    )
-    if previous is None:
-        return None
-    prev = (previous.detail or {}).get("snapshot") or {}
     if not prev:
         return None
 
@@ -398,8 +412,15 @@ def send_ml_daily_report(self, force: bool = False, manual: bool = False):
                 return {"ok": True, "skipped": "already_sent"}
 
             context = build_report_context(as_of=report_date)
-            comparison = _compare_with_previous(report_date, context)
+            prev = _previous_snapshot(report_date)
+            comparison = _compare_with_previous(report_date, context, prev)
             sections = render_report_sections(context, comparison=comparison)
+            # Prepended (not a separate send) so it rides the same
+            # chunking/idempotency/retry machinery as the rest of the
+            # report below it, rather than needing its own tracked state.
+            recovery_text = recovery_alert_text((prev or {}).get("status_label"), context)
+            if recovery_text:
+                sections = [recovery_text] + sections
             chunks = split_for_telegram(sections)
             full_text = "\n\n".join(sections)
 

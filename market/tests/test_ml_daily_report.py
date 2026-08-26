@@ -13,6 +13,7 @@ from market.services.ml_daily_report import (
     build_report_context,
     evidence_label,
     generate_recommendations,
+    recovery_alert_text,
     render_report_sections,
     split_for_telegram,
 )
@@ -333,3 +334,40 @@ class TrainedTodayTests(MLDailyReportTestCase):
         make_model_version(trained_days_ago=3)
         ctx = build_report_context()
         self.assertFalse(ctx["trained_today"])
+
+
+class RecoveryAlertTextTests(TestCase):
+    """Pure function — no DB fixtures needed, just the two context keys
+    recovery_alert_text actually reads."""
+
+    def _ctx(self, status_label, status_sentence="Performance is stable, with a reasonable amount of live evidence behind it."):
+        return {"status_label": status_label, "status_sentence": status_sentence}
+
+    def test_no_previous_status_returns_none(self):
+        self.assertIsNone(recovery_alert_text(None, self._ctx("Stable")))
+
+    def test_suspended_to_stable_fires(self):
+        text = recovery_alert_text("Suspended", self._ctx("Stable"))
+        self.assertIsNotNone(text)
+        self.assertIn("recovered", text.lower())
+        self.assertIn("Suspended", text)
+        self.assertIn("Stable", text)
+
+    def test_declining_to_promising_fires(self):
+        text = recovery_alert_text("Declining", self._ctx("Promising"))
+        self.assertIsNotNone(text)
+
+    def test_already_healthy_yesterday_does_not_fire_again(self):
+        """Was already Stable/Promising yesterday -> today's Stable/
+        Promising is not a "recovery", just a continuation."""
+        self.assertIsNone(recovery_alert_text("Stable", self._ctx("Stable")))
+        self.assertIsNone(recovery_alert_text("Promising", self._ctx("Stable")))
+
+    def test_still_not_healed_does_not_fire(self):
+        self.assertIsNone(recovery_alert_text("Suspended", self._ctx("Weak")))
+        self.assertIsNone(recovery_alert_text("Declining", self._ctx("Declining")))
+
+    def test_reactivated_but_unproven_candidate_does_not_count_as_recovered(self):
+        """A freshly (re)activated model with no live evidence yet is
+        "Experimental", not "recovered" -- there's nothing proven yet."""
+        self.assertIsNone(recovery_alert_text("Suspended", self._ctx("Experimental")))
