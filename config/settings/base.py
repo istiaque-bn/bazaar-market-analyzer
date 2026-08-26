@@ -271,6 +271,7 @@ CELERY_TASK_ROUTES = {
     "market.tasks.train_ml_model": {"queue": QUEUE_MARKET_HEAVY},
     "market.tasks.close_learn_settlement": {"queue": QUEUE_MARKET_HEAVY},
     "market.tasks.assess_ml_reliability": {"queue": QUEUE_MARKET_HEAVY},
+    "market.tasks.scan_price_quality": {"queue": QUEUE_MARKET_HEAVY},
     "market.tasks.analyze_and_notify": {"queue": QUEUE_MARKET_HEAVY},
     "notifications.tasks.send_daily_digest": {"queue": QUEUE_NOTIFICATIONS},
     "notifications.tasks.send_ml_daily_report": {"queue": QUEUE_NOTIFICATIONS},

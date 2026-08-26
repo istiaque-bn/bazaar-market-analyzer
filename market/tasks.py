@@ -357,6 +357,36 @@ def sync_dse_sectors():
 
 
 @shared_task(
+    name="market.tasks.scan_price_quality",
+    autoretry_for=_TRANSIENT_ERRORS,
+    retry_backoff=True,
+    retry_backoff_max=120,
+    max_retries=2,
+    time_limit=1800,
+    soft_time_limit=1680,
+)
+@record_task_run("market.tasks.scan_price_quality")
+def scan_price_quality():
+    """Weekly re-scan of every enabled exchange's full PriceHistory (see
+    market.services.data_quality.run_quality_scan) so newly fetched rows
+    get checked for impossible OHLC, abnormal single-day jumps, stale
+    quote runs and gaps -- not just whatever was in the DB the last time
+    someone ran `manage.py data_quality_scan` by hand. Training
+    (_build_next_close_panel) filters on these flags at read time, so a
+    row that's never been (re-)scanned is silently treated as clean.
+    This is a genuinely heavy, full-history-per-stock scan (not
+    incremental), hence the long time limit and weekly-not-daily
+    cadence -- see docs/RUNBOOKS.md before shortening it."""
+    from market.services.autosync import exclusive_db_write
+    from market.services.data_quality import run_quality_scan
+    from market.services.exchange_config import enabled_exchanges
+
+    with exclusive_db_write(blocking=True, timeout=1700):
+        results = {ex: run_quality_scan(exchange=ex) for ex in enabled_exchanges()}
+    return {"ok": all(r.get("ok") for r in results.values()), "by_exchange": results}
+
+
+@shared_task(
     name="market.tasks.train_ml_model",
     autoretry_for=_TRANSIENT_ERRORS,
     retry_backoff=True,
