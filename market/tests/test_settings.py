@@ -88,7 +88,11 @@ class DevelopmentSettingsTests(SimpleTestCase):
     def test_imports_cleanly_and_has_documented_local_http_exceptions(self):
         result = _run(
             "config.settings.development",
-            {"SECRET_KEY": "dev-key", "DEBUG": "True", "ALLOWED_HOSTS": "localhost"},
+            # DEV_POSTGRES_URL is explicitly cleared here so this test's
+            # sqlite assertion holds regardless of a developer's own local
+            # .env (load_dotenv() only fills in vars not already set, so an
+            # explicit empty override always wins over a real dev secret).
+            {"SECRET_KEY": "dev-key", "DEV_DEBUG": "True", "ALLOWED_HOSTS": "localhost", "DEV_POSTGRES_URL": ""},
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)
@@ -103,7 +107,7 @@ class DevelopmentSettingsTests(SimpleTestCase):
         self.assertEqual(data["DB_ENGINE"], "django.db.backends.sqlite3")
 
     def test_debug_follows_env_var(self):
-        result = _run("config.settings.development", {"DEBUG": "False"})
+        result = _run("config.settings.development", {"DEV_DEBUG": "False"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(json.loads(result.stdout)["DEBUG"])
 

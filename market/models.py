@@ -737,6 +737,16 @@ class PredictionSnapshot(models.Model):
         MLModelVersion, null=True, blank=True, on_delete=models.SET_NULL, related_name="prediction_snapshots"
     )
     model_version_tag = models.CharField(max_length=32, help_text="Immutable copy of MLModelVersion.version at capture time")
+    candidate_model_version_tag = models.CharField(
+        max_length=32,
+        blank=True,
+        help_text="Next-close candidate version considered at forecast time, even if a safer method was served.",
+    )
+    served_method = models.CharField(
+        max_length=32,
+        default="unknown",
+        help_text="Immutable method actually delivered: ml_blended / analogue / naive_fallback / unknown.",
+    )
     feature_schema_version = models.CharField(max_length=32, blank=True, help_text="Hash of the feature-column list used at capture time")
 
     exchange = models.CharField(max_length=3, choices=Exchange.choices, db_index=True)

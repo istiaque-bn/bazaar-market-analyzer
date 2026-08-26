@@ -108,6 +108,89 @@ def _data_quality(stock: Stock, analysis: AnalysisResult | None) -> tuple[str, d
     return "ok", {"freshness": fresh, "liquidity": liq}
 
 
+def next_close_regime_context(features: dict | None) -> dict:
+    """Small, stable regime label recorded with a next-close snapshot.
+
+    The labels are deliberately coarse: they are useful for detecting where
+    a candidate fails, while avoiding an untrustworthy collection of tiny
+    post-hoc slices.  They are stored with the snapshot so future dashboards
+    do not reconstruct a prediction-time regime from corrected price data.
+    """
+    features = features or {}
+    volatility = features.get("volatility_20")
+    index_return = features.get("index_ret_1d")
+    try:
+        volatility = float(volatility)
+    except (TypeError, ValueError):
+        volatility = None
+    try:
+        index_return = float(index_return)
+    except (TypeError, ValueError):
+        index_return = None
+
+    if volatility is None:
+        volatility_label = "Unknown volatility"
+    elif volatility < 0.25:
+        volatility_label = "Low volatility"
+    elif volatility < 0.45:
+        volatility_label = "Normal volatility"
+    else:
+        volatility_label = "High volatility"
+
+    if index_return is None:
+        trend_label = "Unknown market trend"
+    elif index_return > 0.002:
+        trend_label = "Market up"
+    elif index_return < -0.002:
+        trend_label = "Market down"
+    else:
+        trend_label = "Market flat"
+    return {"volatility": volatility_label, "market_trend": trend_label}
+
+
+def next_close_serving_context(forecast: NextDayCloseForecast, version: MLModelVersion | None) -> dict:
+    """Separate the candidate that was available from what users received.
+
+    A next-close model can remain under shadow evaluation while the serving
+    gate returns an unchanged-close forecast.  Recording the candidate as the
+    served model would make the candidate appear to tie its baseline, hiding
+    the exact failure that caused the fallback.  This mapping reads the
+    already-persisted forecast method; it never re-runs inference.
+    """
+    raw_method = (forecast.method or "").lower()
+    candidate_tag = version.version if version is not None else ""
+    if raw_method.endswith("+naive_gate"):
+        return {
+            "model_version": None,
+            "model_version_tag": "next-close-naive-fallback-v1",
+            "candidate_model_version_tag": candidate_tag,
+            "served_method": "naive_fallback",
+        }
+    if "+ml" in raw_method:
+        return {
+            "model_version": version,
+            "model_version_tag": candidate_tag or "next-close-ml-unknown-v1",
+            "candidate_model_version_tag": candidate_tag,
+            "served_method": "ml_blended",
+        }
+    if "analogue" in raw_method:
+        return {
+            "model_version": None,
+            # Keep the established baseline tag when there was no candidate
+            # at all.  Candidate-present analogue forecasts get their own
+            # attribution tag below the separate candidate field.
+            "model_version_tag": "next-close-analogue-v1" if candidate_tag else "next-close-baseline-v1",
+            "candidate_model_version_tag": candidate_tag,
+            "served_method": "analogue",
+        }
+    return {
+        "model_version": None,
+        "model_version_tag": "next-close-unknown-v1",
+        "candidate_model_version_tag": candidate_tag,
+        "served_method": "unknown",
+    }
+
+
 def _persistence_return(stock: Stock, as_of: date) -> float | None:
     """Prior session's 1-day return as of `as_of` — the same 'persistence'
     baseline concept ml_training.persistence_baseline formalizes for
@@ -187,23 +270,25 @@ def capture_next_close_snapshots(as_of: date | None = None) -> dict:
             skipped += 1
             continue
         version = _resolve_active_version(NEXT_CLOSE_MODEL_NAME, stock.exchange)
-        # The analogue/bias learner may legitimately be served while its ML
-        # challenger is experimental. Capture it too, using a stable baseline
-        # tag, so a missing active model can never erase point-in-time evidence.
-        version_tag = version.version if version is not None else "next-close-baseline-v1"
+        serving = next_close_serving_context(fc, version)
 
         analysis = AnalysisResult.objects.filter(stock=stock, as_of=as_of).first()
         dq_status, dq_notes = _data_quality(stock, analysis)
+        # Immutable prediction-time context for later regime diagnostics.
+        # ``fc.features`` was written by forecast_next_close before settlement.
+        dq_notes = {**dq_notes, "regime": next_close_regime_context(fc.features)}
 
         _, was_created = PredictionSnapshot.objects.get_or_create(
             model_family=PredictionSnapshot.ModelFamily.NEXT_CLOSE_RF,
-            model_version_tag=version_tag,
+            model_version_tag=serving["model_version_tag"],
             stock_trading_code=stock.trading_code,
             exchange=stock.exchange,
             data_cutoff_date=as_of,
             horizon_trading_days=1,
             defaults={
-                "model_version": version,
+                "model_version": serving["model_version"],
+                "candidate_model_version_tag": serving["candidate_model_version_tag"],
+                "served_method": serving["served_method"],
                 "feature_schema_version": feature_schema_version(version.feature_schema if version else NEXT_CLOSE_FEATURE_COLS),
                 "stock": stock,
                 "target_date": fc.target_date,

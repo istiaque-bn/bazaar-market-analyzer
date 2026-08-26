@@ -252,6 +252,12 @@ def run_reliability_assessment(
         }
         for p in payloads
     ]
+    # A critical live result for the served 10-day classifier must fail
+    # closed.  The gate only suspends an active model; promotion remains the
+    # responsibility of the existing chronological training gate.
+    from market.services.live_model_gate import suspend_critical_forward_models
+
+    result["live_gate"] = suspend_critical_forward_models(payloads, dry_run=dry_run)
     result["cross_exchange_flags"] = cross_flags
     return result
 

@@ -476,8 +476,9 @@ def sync_holiday_calendar_task():
 @record_task_run("market.tasks.assess_ml_reliability")
 def assess_ml_reliability():
     """Capture today's predictions, settle due outcomes, and assess both
-    model families against rolling windows. Never activates/deactivates a
-    model itself — see market.services.reliability_recommend."""
+    model families against rolling windows. A critical, adequately-sampled
+    live result fail-closes the served forward classifier; this task never
+    promotes or reactivates a model."""
     from market.services.autosync import exclusive_db_write
     from market.services.reliability_report import run_reliability_assessment
 

@@ -201,6 +201,19 @@ class NextCloseCaptureTests(TestCase):
         self.assertEqual(snap.model_version, None)
         self.assertEqual(snap.model_version_tag, "next-close-baseline-v1")
 
+    def test_records_naive_fallback_separately_from_available_candidate(self):
+        forecast = NextDayCloseForecast.objects.get(stock=self.stock, as_of=self.as_of)
+        forecast.method = "analogue+ml+ctx+bias+naive_gate"
+        forecast.save(update_fields=["method"])
+
+        capture_next_close_snapshots(as_of=self.as_of)
+
+        snap = PredictionSnapshot.objects.get(model_family=PredictionSnapshot.ModelFamily.NEXT_CLOSE_RF)
+        self.assertEqual(snap.served_method, "naive_fallback")
+        self.assertEqual(snap.model_version, None)
+        self.assertEqual(snap.model_version_tag, "next-close-naive-fallback-v1")
+        self.assertEqual(snap.candidate_model_version_tag, self.version.version)
+
 
 class CapturePredictionsCombinesBothFamiliesTests(TestCase):
     def test_capture_predictions_runs_both_families(self):

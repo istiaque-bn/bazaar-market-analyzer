@@ -8,11 +8,15 @@ Every relaxed/insecure choice below is intentional and scoped to local
 HTTP development; production.py does the opposite of each one.
 """
 import os
+from urllib.parse import unquote, urlparse
 
 from .base import *  # noqa: F401,F403
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-insecure-bazaar-change-me")
-DEBUG = os.getenv("DEBUG", "True").lower() in ("1", "true", "yes")
+# Keep development isolated from a shell-level production/release DEBUG flag.
+# Use DEV_DEBUG=False only when deliberately testing a production-like local
+# response; normal `manage.py runserver` must serve static assets.
+DEBUG = os.getenv("DEV_DEBUG", "True").lower() in ("1", "true", "yes")
 ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()]
 
 # Local exception: the dev server runs over plain HTTP, so secure-only
@@ -37,3 +41,22 @@ CORS_ALLOW_ALL_ORIGINS = True
 # DSE-only mode locally.
 ENABLE_DSE = os.getenv("ENABLE_DSE", "True").strip().lower() in ("1", "true", "yes")
 ENABLE_CSE = os.getenv("ENABLE_CSE", "True").strip().lower() in ("1", "true", "yes")
+
+# Opt-in local PostgreSQL snapshot support.  This keeps ordinary development
+# on SQLite, while allowing a separately launched server to inspect a restored
+# production backup without editing .env or replacing db.sqlite3.
+_dev_postgres_url = os.getenv("DEV_POSTGRES_URL", "").strip()
+if _dev_postgres_url:
+    _parsed_dev_db = urlparse(_dev_postgres_url)
+    if _parsed_dev_db.scheme not in {"postgres", "postgresql"} or not _parsed_dev_db.path:
+        raise ValueError("DEV_POSTGRES_URL must be a PostgreSQL URL with a database name.")
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": unquote(_parsed_dev_db.path.lstrip("/")),
+            "USER": unquote(_parsed_dev_db.username or ""),
+            "PASSWORD": unquote(_parsed_dev_db.password or ""),
+            "HOST": _parsed_dev_db.hostname or "127.0.0.1",
+            "PORT": str(_parsed_dev_db.port or 5432),
+        }
+    }
