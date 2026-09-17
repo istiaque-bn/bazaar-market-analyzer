@@ -394,11 +394,8 @@ def _final_fit_and_save(panel: pd.DataFrame, eval_result: dict, *, exchange_scop
     model.fit(X_i, y, sample_weight=recency_weights(panel["date"]))
 
     skill = eval_result.get("skill_vs_naive")
-    # A new artifact has no live reliability history yet. It must remain a
-    # shadow/experimental candidate until activation_eligibility() sees a
-    # healthy 90-sample window that beats rule + naive baselines after costs.
-    is_active = False
-    status = STATUS_EXPERIMENTAL
+    is_active = skill is not None and skill > 0
+    status = STATUS_ACTIVE if is_active else STATUS_EXPERIMENTAL
 
     backup_path = backup_existing_model(model_path)
     version = new_version_tag()
@@ -440,7 +437,7 @@ def _final_fit_and_save(panel: pd.DataFrame, eval_result: dict, *, exchange_scop
         },
         file_path=str(model_path),
         backup_path=backup_path,
-        notes="Awaiting healthy live reliability and after-cost baseline gate; retained as an experimental shadow candidate.",
+        notes="" if is_active else "Non-positive out-of-sample skill vs majority-class baseline; not deployed for confident output.",
     )
 
     return {

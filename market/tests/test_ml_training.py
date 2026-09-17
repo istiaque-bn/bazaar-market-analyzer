@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
+import joblib
 import pandas as pd
 from django.test import SimpleTestCase, TestCase, override_settings
 
@@ -168,9 +169,7 @@ class BuildTrainingPanelExcludesUnknownFutureTests(TestCase):
 
 
 class DeploymentGateTests(TestCase):
-    """Isolated tests of the gate logic: _final_fit_and_save() decides
-    active/experimental purely from the skill_vs_naive it's handed, and
-    ml_probability() must refuse to use anything not verified active."""
+    """Fresh training is shadow-only; inference requires later activation."""
 
     def _empty_eval(self, skill):
         return {"skill_vs_naive": skill, "folds": [], "model_metrics": {"n": 0}, "baseline_metrics": {}, "skill_vs_baseline": {}}
@@ -195,14 +194,14 @@ class DeploymentGateTests(TestCase):
             )
         self.assertFalse(result["is_active"])
 
-    def test_positive_skill_is_saved_active(self):
+    def test_positive_training_skill_still_awaits_live_gate(self):
         panel = _synthetic_labeled_panel(seed=3)
         with tempfile.TemporaryDirectory() as td:
             result = ml_model._final_fit_and_save(
                 panel, self._empty_eval(0.05), exchange_scope="combined", model_path=Path(td) / "m.pkl"
             )
-        self.assertEqual(result["status"], "active")
-        self.assertTrue(result["is_active"])
+        self.assertEqual(result["status"], "experimental")
+        self.assertFalse(result["is_active"])
 
     def test_experimental_model_is_never_served_by_ml_probability(self):
         panel = _synthetic_labeled_panel(seed=4)
@@ -216,20 +215,28 @@ class DeploymentGateTests(TestCase):
         panel = _synthetic_labeled_panel(seed=5)
         with tempfile.TemporaryDirectory() as td:
             model_path = Path(td) / "combined.pkl"
-            ml_model._final_fit_and_save(panel, self._empty_eval(0.1), exchange_scope="combined", model_path=model_path)
+            result = ml_model._final_fit_and_save(panel, self._empty_eval(0.1), exchange_scope="combined", model_path=model_path)
+            bundle = joblib.load(model_path)
+            bundle["status"] = "active"
+            joblib.dump(bundle, model_path)
+            MLModelVersion.objects.filter(model_name=ml_model.MODEL_NAME, version=result["version"]).update(is_active=True, status="active")
             with mock.patch.object(ml_model, "MODEL_PATH", model_path):
                 prob = ml_model.ml_probability(_price_df(n=120))
         self.assertIsNotNone(prob)
         self.assertTrue(0.0 <= prob <= 1.0)
 
     def test_db_downgrade_after_train_time_active_stops_inference_without_retrain(self):
-        """A model can be marked active at train time and later downgraded
-        (e.g. by live-skill monitoring) without the pickle file changing —
+        """A model can be activated after evidence and later downgraded
+        without the pickle file changing —
         the DB row, not the file, is the live source of truth."""
         panel = _synthetic_labeled_panel(seed=6)
         with tempfile.TemporaryDirectory() as td:
             model_path = Path(td) / "combined.pkl"
             result = ml_model._final_fit_and_save(panel, self._empty_eval(0.1), exchange_scope="combined", model_path=model_path)
+            bundle = joblib.load(model_path)
+            bundle["status"] = "active"
+            joblib.dump(bundle, model_path)
+            MLModelVersion.objects.filter(model_name=ml_model.MODEL_NAME, version=result["version"]).update(is_active=True, status="active")
             with mock.patch.object(ml_model, "MODEL_PATH", model_path):
                 self.assertIsNotNone(ml_model.ml_probability(_price_df(n=120)))
                 MLModelVersion.objects.filter(model_name=ml_model.MODEL_NAME, version=result["version"]).update(is_active=False)

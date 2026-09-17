@@ -270,7 +270,6 @@ CELERY_TASK_ROUTES = {
     "market.tasks.seed_demo_and_analyze": {"queue": QUEUE_MARKET_HEAVY},
     "market.tasks.train_ml_model": {"queue": QUEUE_MARKET_HEAVY},
     "market.tasks.close_learn_settlement": {"queue": QUEUE_MARKET_HEAVY},
-    "market.tasks.train_next_close_model": {"queue": QUEUE_MARKET_HEAVY},
     "market.tasks.assess_ml_reliability": {"queue": QUEUE_MARKET_HEAVY},
     "market.tasks.scan_price_quality": {"queue": QUEUE_MARKET_HEAVY},
     "market.tasks.analyze_and_notify": {"queue": QUEUE_MARKET_HEAVY},
@@ -410,7 +409,7 @@ AUTO_ML_TRAINING_TIME = os.getenv("AUTO_ML_TRAINING_TIME", "00:30").strip()
 # capture, settlement, reliability assessment, and shadow experiments continue
 # while False; ML outputs are simply prevented from changing user-facing
 # recommendations or next-close forecasts.
-ML_LIVE_SERVING_ENABLED = _bool_env("ML_LIVE_SERVING_ENABLED", "False")
+ML_LIVE_SERVING_ENABLED = _bool_env("ML_LIVE_SERVING_ENABLED", "True")
 
 try:
     _ml_hour, _ml_minute = (int(p) for p in AUTO_ML_TRAINING_TIME.split(":", 1))

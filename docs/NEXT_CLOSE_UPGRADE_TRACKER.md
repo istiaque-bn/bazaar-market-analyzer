@@ -10,9 +10,9 @@ remain unchanged unless separately evaluated.
 | 3. Target comparison | Not started | Compare raw close, return, log-return, direction only after baseline. |
 | 4. Features / ablation | Not started | Must use final holdout. |
 | 5. Regime features | Not started | Research only. |
-| 6. Algorithm benchmark | Not started | Identical chronological periods required. |
+| 6. Algorithm benchmark | In progress | Selective absolute-error HGB benchmarked on identical chronological periods; failed locked holdout. |
 | 7. Global/sector/stock architecture | Not started | Sector path blocked by missing DSE sectors. |
-| 8. Walk-forward + holdout | Foundation complete | 90-day final-holdout helper exists; challenger use pending. |
+| 8. Walk-forward + holdout | Complete for HGB v1 | Three research folds passed weakly, but the locked 90-day holdout rejected the candidate. |
 | 9. Safety / leakage | Core complete | Append-only forecasts, immutable snapshots, as-of liquidity, no future-trained backfill model. |
 | 10. Confidence system | Collecting | Immutable confidence diagnostics deployed; needs settled forecasts. |
 | 11. Flat / no-signal zone | Not started | Tune only on research data. |
@@ -21,7 +21,7 @@ remain unchanged unless separately evaluated.
 | 14. Sector diagnostics | Blocked | All active DSE sector values were blank at audit. |
 | 15. Hyperparameter tuning | Not started | Time-series validation only. |
 | 16. Feature ablation | Not started | Must preserve final holdout. |
-| 17. Challenger scorecard | Not started | No challenger may be promoted automatically. |
+| 17. Challenger scorecard | HGB v1 rejected | Research skill +0.15%; locked-holdout skill -0.21%. Direction 58.42%, but MAE gate failed. |
 | 18. Promotion rules | Defined | Must beat naive baseline consistently. |
 | 19. Shadow mode | Not started | Best accepted research challenger only. |
 | 20. Staged promotion | Not started | Research → Shadow → secondary signal; rollback required. |
@@ -40,5 +40,10 @@ remain unchanged unless separately evaluated.
 
 ## Next action
 
-Let clean forecasts settle. Start challenger research only after sufficient
-immutable evidence exists (at least 30 early observations; preferably 60+).
+Keep collecting clean shadow outcomes. The selective HGB v1 research
+challenger (`evaluate_next_close_challenger`) must not enter shadow mode: on
+the VPS dataset its pre-holdout research skill was only +0.15% and its locked
+90-day holdout skill was -0.21%, despite 58.42% directional accuracy. The
+next challenger must be specified under a new name and clear both the 2%
+research MAE-skill gate and the 2% locked-holdout gate before live shadow
+collection begins.

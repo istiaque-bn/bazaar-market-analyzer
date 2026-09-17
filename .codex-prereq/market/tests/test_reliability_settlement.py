@@ -75,6 +75,7 @@ class SettlementCorrectnessTests(TestCase):
         PriceHistory.objects.create(stock=self.stock, date=cutoff, open=100, high=101, low=99, close=100, volume=1000)
         PriceHistory.objects.create(stock=self.stock, date=target, open=5, high=6, low=4, close=5, volume=1000)
         snap = _snapshot(self.stock, data_cutoff=cutoff, target_date=target, reference_close=100.0)
+
         settle_predictions(through_date=target)
         snap.refresh_from_db()
         self.assertEqual(snap.settlement_status, PredictionSnapshot.SettlementStatus.EXCLUDED)
@@ -84,9 +85,16 @@ class SettlementCorrectnessTests(TestCase):
     def test_adjusted_and_raw_price_pair_is_excluded(self):
         cutoff = date(2026, 2, 4)
         target = date(2026, 2, 5)
-        PriceHistory.objects.create(stock=self.stock, date=cutoff, open=100, high=101, low=99, close=100, volume=1000, adjustment_status=AdjustmentStatus.RAW)
-        PriceHistory.objects.create(stock=self.stock, date=target, open=101, high=102, low=100, close=101, volume=1000, adjustment_status=AdjustmentStatus.ADJUSTED)
+        PriceHistory.objects.create(
+            stock=self.stock, date=cutoff, open=100, high=101, low=99, close=100, volume=1000,
+            adjustment_status=AdjustmentStatus.RAW,
+        )
+        PriceHistory.objects.create(
+            stock=self.stock, date=target, open=101, high=102, low=100, close=101, volume=1000,
+            adjustment_status=AdjustmentStatus.ADJUSTED,
+        )
         snap = _snapshot(self.stock, data_cutoff=cutoff, target_date=target, reference_close=100.0)
+
         settle_predictions(through_date=target)
         snap.refresh_from_db()
         self.assertEqual(snap.settlement_status, PredictionSnapshot.SettlementStatus.EXCLUDED)

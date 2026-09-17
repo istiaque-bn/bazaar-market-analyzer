@@ -51,8 +51,8 @@ services:
       DJANGO_LOG_LEVEL: INFO
       AUTO_ML_TRAINING: ${AUTO_ML_TRAINING:-True}
       AUTO_ML_TRAINING_TIME: ${AUTO_ML_TRAINING_TIME:-00:30}
-      # Keep ML training/evaluation operational while preventing an
-      # unpromoted model from affecting user-facing outputs.
+      # Keep model training/evaluation running, but do not let model outputs
+      # alter live recommendations until production reliability is repaired.
       ML_LIVE_SERVING_ENABLED: ${ML_LIVE_SERVING_ENABLED:-False}
       # DSE per-symbol history fetch concurrency (market/services/concurrent_fetch.py)
       # — benchmarked ~2x faster than sequential with zero completeness/error
@@ -112,7 +112,6 @@ services:
       [
         "celery", "-A", "config", "worker", "--loglevel=info", "--hostname=light@%h",
         "-Q", "market-fast,market-analysis,notifications,celery",
-        "--max-tasks-per-child=100",
       ]
     environment:
       <<: *django_env
@@ -134,7 +133,6 @@ services:
       [
         "celery", "-A", "config", "worker", "--loglevel=info", "--hostname=heavy@%h",
         "-Q", "market-heavy",
-        "--max-tasks-per-child=10",
       ]
     environment:
       <<: *django_env
@@ -177,7 +175,7 @@ services:
         condition: service_healthy
 
   cloudflared:
-    image: cloudflare/cloudflared:2026.7.3
+    image: cloudflare/cloudflared:latest
     restart: unless-stopped
     # Production uses a named tunnel with a stable hostname configured in
     # Cloudflare Zero Trust. The token is supplied only at runtime and the

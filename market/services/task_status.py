@@ -21,6 +21,7 @@ TASK_HARD_LIMIT_SECONDS = {
     "market.tasks.append_daily_bars": 600,
     "market.tasks.train_ml_model": 600,
     "market.tasks.close_learn_settlement": 600,
+    "market.tasks.train_next_close_model": 1800,
     "market.tasks.assess_ml_reliability": 600,
     "market.tasks.run_end_of_day_pipeline": 1800,
 }

@@ -1,0 +1,9 @@
+[Unit]
+Description=Verify latest Bazaar backup by restoring to a temporary database
+After=docker.service bazaar-backup.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bazaar-restore-test
+TimeoutStartSec=1h

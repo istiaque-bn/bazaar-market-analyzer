@@ -168,8 +168,13 @@ class EconomicDiagnosticsTests(SimpleTestCase):
 
     def test_same_date_cross_section_is_compounded_once(self):
         rows = [
-            {"predicted_class": True, "predicted_return": -0.01, "outcome_return": -0.01,
-             "data_cutoff_date": date(2026, 1, 1), "target_date": date(2026, 1, 2)}
+            {
+                "predicted_class": True,
+                "predicted_return": -0.01,
+                "outcome_return": -0.01,
+                "data_cutoff_date": date(2026, 1, 1),
+                "target_date": date(2026, 1, 2),
+            }
             for _ in range(100)
         ]
         result = compute_economic_diagnostics(rows, PredictionSnapshot.ModelFamily.FORWARD_RETURN_RF)

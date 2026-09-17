@@ -23,7 +23,11 @@ from django.utils import timezone
 from market.models import AdjustmentStatus, PredictionSnapshot, PriceHistory
 
 MAX_PENDING_CALENDAR_DAYS = 30  # generous headroom over any realistic settlement delay
-INVALID_SETTLEMENT_FLAGS = {"non_positive_close", "close_out_of_range", "abnormal_jump"}
+INVALID_SETTLEMENT_FLAGS = {
+    "non_positive_close",
+    "close_out_of_range",
+    "abnormal_jump",
+}
 MAX_ABS_RETURN_BY_HORIZON = {1: 0.50, 10: 2.00}
 
 

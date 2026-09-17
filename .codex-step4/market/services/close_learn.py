@@ -779,7 +779,10 @@ def generate_forecasts_for_as_of(as_of: date | None = None, limit: int | None = 
     _clear_context_cache()
 
     state = get_learn_state()
-    naive_fallback_active = bool((state.extras or {}).get("serve_naive_fallback", False))
+    naive_fallback_active = (
+        not getattr(settings, "ML_LIVE_SERVING_ENABLED", True)
+        or bool((state.extras or {}).get("serve_naive_fallback", False))
+    )
 
     qs = Stock.objects.filter(is_active=True, exchange__in=enabled_exchanges()).order_by("trading_code")
     if limit:
@@ -1264,10 +1267,12 @@ def _final_fit_and_save_next_close(panel: pd.DataFrame, eval_result: dict, *, ex
 
     skill = eval_result.get("skill_vs_naive")
     model_metrics = eval_result.get("model_metrics", {})
-    # Fresh candidates have no settled live evidence and therefore cannot
-    # pass the production activation gate at train time.
-    is_active = False
-    status = STATUS_EXPERIMENTAL
+    is_active = bool(
+        skill is not None and skill > 0
+        and eval_result.get("recent_fold_skill", 0) > 0
+        and (model_metrics.get("high_confidence_precision") or 0) > (model_metrics.get("accuracy") or 0)
+    )
+    status = STATUS_ACTIVE if is_active else STATUS_EXPERIMENTAL
 
     backup_path = backup_existing_model(model_path)
     version = new_version_tag()
@@ -1314,7 +1319,7 @@ def _final_fit_and_save_next_close(panel: pd.DataFrame, eval_result: dict, *, ex
         },
         file_path=str(model_path),
         backup_path=backup_path,
-        notes="Awaiting healthy live reliability and after-cost baseline gate; retained as an experimental shadow candidate.",
+        notes="" if is_active else "Three-class candidate failed positive overall/recent skill or high-confidence precision gate; not deployed.",
     )
 
     # Was gated to exchange_scope == "combined" only, so on a DSE-only
@@ -1431,7 +1436,10 @@ def learn_status() -> dict:
         "liquid_universe": len(liquid_stock_ids()),
         "skill": skill,
         "skill_all_time": skill_all_time,
-        "naive_fallback_active": bool((state.extras or {}).get("serve_naive_fallback", False)),
+        "naive_fallback_active": (
+            not getattr(settings, "ML_LIVE_SERVING_ENABLED", True)
+            or bool((state.extras or {}).get("serve_naive_fallback", False))
+        ),
         "candidate_skill": (state.extras or {}).get("candidate_skill"),
         "extras": state.extras or {},
         "latest_settled": (

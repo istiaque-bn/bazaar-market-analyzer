@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Restore the latest backup into an isolated temporary database and verify it.
+set -euo pipefail
+
+cd /opt/bazaar
+backup_dir="$(find data/backups -mindepth 1 -maxdepth 1 -type d -print | sort | tail -n 1)"
+test -n "$backup_dir"
+backup_name="$(basename "$backup_dir")"
+restore_db="bazaar_restore_test_$(date +%Y%m%d_%H%M%S)_$$"
+
+cleanup() {
+  docker compose --env-file .env.docker exec -T db dropdb --if-exists -U "$POSTGRES_USER" "$restore_db" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT INT TERM
+
+# Load database credentials without printing them.
+set -a
+# shellcheck disable=SC1091
+source .env.docker
+set +a
+
+docker compose --env-file .env.docker exec -T web python manage.py verify_backup "/app/$backup_dir"
+docker compose --env-file .env.docker exec -T db createdb -U "$POSTGRES_USER" "$restore_db"
+docker compose --env-file .env.docker exec -T db pg_restore \
+  -U "$POSTGRES_USER" -d "$restore_db" --exit-on-error --no-owner --no-privileges \
+  < "$backup_dir/db.dump"
+
+expected_stocks="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["row_counts"]["Stock"])' "$backup_dir/manifest.json")"
+expected_prices="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["row_counts"]["PriceHistory"])' "$backup_dir/manifest.json")"
+expected_analyses="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["row_counts"]["AnalysisResult"])' "$backup_dir/manifest.json")"
+actual_stocks="$(docker compose --env-file .env.docker exec -T db psql -U "$POSTGRES_USER" -d "$restore_db" -Atqc 'select count(*) from market_stock')"
+actual_prices="$(docker compose --env-file .env.docker exec -T db psql -U "$POSTGRES_USER" -d "$restore_db" -Atqc 'select count(*) from market_pricehistory')"
+actual_analyses="$(docker compose --env-file .env.docker exec -T db psql -U "$POSTGRES_USER" -d "$restore_db" -Atqc 'select count(*) from market_analysisresult')"
+
+test "$actual_stocks" = "$expected_stocks"
+test "$actual_prices" = "$expected_prices"
+test "$actual_analyses" = "$expected_analyses"
+logger --tag bazaar-restore-test "restored and verified $backup_name (stocks=$actual_stocks prices=$actual_prices analyses=$actual_analyses)"
+printf 'Restore verified: %s (stocks=%s prices=%s analyses=%s)\n' "$backup_name" "$actual_stocks" "$actual_prices" "$actual_analyses"

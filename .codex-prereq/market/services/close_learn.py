@@ -779,7 +779,10 @@ def generate_forecasts_for_as_of(as_of: date | None = None, limit: int | None = 
     _clear_context_cache()
 
     state = get_learn_state()
-    naive_fallback_active = bool((state.extras or {}).get("serve_naive_fallback", False))
+    naive_fallback_active = (
+        not getattr(settings, "ML_LIVE_SERVING_ENABLED", True)
+        or bool((state.extras or {}).get("serve_naive_fallback", False))
+    )
 
     qs = Stock.objects.filter(is_active=True, exchange__in=enabled_exchanges()).order_by("trading_code")
     if limit:
@@ -1431,7 +1434,10 @@ def learn_status() -> dict:
         "liquid_universe": len(liquid_stock_ids()),
         "skill": skill,
         "skill_all_time": skill_all_time,
-        "naive_fallback_active": bool((state.extras or {}).get("serve_naive_fallback", False)),
+        "naive_fallback_active": (
+            not getattr(settings, "ML_LIVE_SERVING_ENABLED", True)
+            or bool((state.extras or {}).get("serve_naive_fallback", False))
+        ),
         "candidate_skill": (state.extras or {}).get("candidate_skill"),
         "extras": state.extras or {},
         "latest_settled": (

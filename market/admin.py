@@ -234,10 +234,18 @@ def reactivate_model_versions(modeladmin, request, queryset):
     section). Does not touch other versions of the same model/scope —
     ml_model.load_model()'s own precedence logic (see that module) still
     applies if more than one ends up is_active=True."""
+    from market.services.live_model_gate import activation_eligibility
+
     changed = 0
+    rejected = []
     for version in queryset.filter(is_active=False):
+        eligible, reasons = activation_eligibility(version)
+        if not eligible:
+            rejected.append(f"{version.model_name}/{version.version}: {'; '.join(reasons)}")
+            continue
         version.is_active = True
-        version.save(update_fields=["is_active"])
+        version.status = "active"
+        version.save(update_fields=["is_active", "status"])
         record_admin_action(
             request,
             AdminAuditAction.MODEL_ACTIVATED,
@@ -245,6 +253,8 @@ def reactivate_model_versions(modeladmin, request, queryset):
         )
         changed += 1
     modeladmin.message_user(request, f"Reactivated {changed} model version(s).")
+    if rejected:
+        modeladmin.message_user(request, "Activation blocked: " + " | ".join(rejected), level="WARNING")
 
 
 @admin.register(MLModelVersion)

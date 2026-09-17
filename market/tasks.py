@@ -440,8 +440,12 @@ def train_ml_model():
 )
 @record_task_run("market.tasks.close_learn_settlement")
 def close_learn_settlement():
-    """Settle due next-day-close forecasts, retrain the close-learn model
-    if anything settled, and generate the next round of forecasts."""
+    """Settle forecasts and generate the next round promptly.
+
+    Model fitting is deliberately queued as a separate task: settlement must
+    not fail merely because a CPU-heavy training subprocess reaches its time
+    limit.
+    """
     from django.conf import settings
     from django.utils import timezone
 
@@ -452,7 +456,43 @@ def close_learn_settlement():
         return {"ok": True, "skipped": "disabled"}
 
     with exclusive_db_write(blocking=True, timeout=300):
-        return run_close_learn_cycle(as_of=timezone.localdate(), train=True)
+        result = run_close_learn_cycle(as_of=timezone.localdate(), train=False)
+
+    if result.get("settle", {}).get("settled", 0) > 0:
+        train_next_close_model_task.delay()
+        result["training_queued"] = True
+    else:
+        result["training_queued"] = False
+    return result
+
+
+@shared_task(
+    name="market.tasks.train_next_close_model",
+    autoretry_for=_TRANSIENT_ERRORS,
+    retry_backoff=True,
+    retry_backoff_max=120,
+    max_retries=2,
+    time_limit=1800,
+    soft_time_limit=1680,
+)
+@record_task_run("market.tasks.train_next_close_model")
+def train_next_close_model_task():
+    """Train next-close models independently from forecast settlement."""
+    from django.conf import settings
+
+    from market.services.autosync import exclusive_db_write
+    from market.services.close_learn import train_next_close_model
+    from market.services.locking import LockBusy, distributed_lock
+
+    if not getattr(settings, "AUTO_CLOSE_LEARN", True):
+        return {"ok": True, "skipped": "disabled"}
+
+    try:
+        with distributed_lock("next-close-training", timeout=1800, blocking_timeout=0):
+            with exclusive_db_write(blocking=True, timeout=300):
+                return train_next_close_model()
+    except LockBusy:
+        return {"ok": True, "skipped": "already_running"}
 
 
 @shared_task(name="market.tasks.run_shadow_model", time_limit=600, soft_time_limit=540)

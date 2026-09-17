@@ -1,10 +1,48 @@
 """Automatic fail-closed gate for live ML reliability evidence."""
 from __future__ import annotations
 
-from market.models import MLModelStatus, MLModelVersion, PredictionSnapshot
+from market.models import MLModelStatus, MLModelVersion, PredictionSnapshot, ReliabilityAssessment
 
 FORWARD_GATE_WINDOW = "90"
 MIN_GATE_SAMPLES = 60
+
+
+def activation_eligibility(version: MLModelVersion) -> tuple[bool, list[str]]:
+    """Require healthy live evidence, both baselines, and after-cost edge."""
+    assessments = ReliabilityAssessment.objects.filter(
+        model_version=version,
+        window_label=FORWARD_GATE_WINDOW,
+    ).order_by("exchange", "-run_at")
+    latest_by_exchange = {}
+    for assessment in assessments:
+        latest_by_exchange.setdefault(assessment.exchange, assessment)
+    required_exchanges = {version.exchange_scope} if version.exchange_scope != "combined" else {"DSE", "CSE"}
+    reasons = []
+    for exchange in sorted(required_exchanges):
+        assessment = latest_by_exchange.get(exchange)
+        if assessment is None:
+            reasons.append(f"{exchange}: no 90-sample live reliability assessment for this version")
+            continue
+        if assessment.sample_count < MIN_GATE_SAMPLES or assessment.status != ReliabilityAssessment.Status.HEALTHY:
+            reasons.append(f"{exchange}: live reliability is {assessment.status} at n={assessment.sample_count}")
+            continue
+        metric_group = "classification" if version.model_name == "forward_return_rf" else "regression"
+        skill = ((assessment.metrics or {}).get(metric_group) or {}).get("skill_vs_baseline") or {}
+        required_keys = (
+            ("rule_based", "naive_majority_class")
+            if metric_group == "classification"
+            else ("rule_based_persistence", "naive_zero_return")
+        )
+        for key in required_keys:
+            if (skill.get(key) or 0) <= 0:
+                reasons.append(f"{exchange}: non-positive skill vs {key}")
+        economic = ((assessment.metrics or {}).get("economic") or {})
+        after_cost = (economic.get("at_1x_cost") or {}).get("net_total_return_pct")
+        if after_cost is None or after_cost <= 0:
+            reasons.append(f"{exchange}: after-cost return is not positive")
+        if (economic.get("benchmark_relative_return_pct") or 0) <= 0:
+            reasons.append(f"{exchange}: does not beat the buy-and-hold benchmark after costs")
+    return not reasons, reasons
 
 
 def suspend_critical_forward_models(assessments: list[dict], *, dry_run: bool) -> list[dict]:

@@ -211,6 +211,10 @@ def compute_economic_diagnostics(rows: list[dict], family: str) -> dict:
 
     turnover = float(is_long.mean())
 
+    # A snapshot row is one stock inside a same-date cross-section, not a
+    # new all-in portfolio period.  Compound equal-weight cohort returns
+    # once per target date; row-by-row compounding creates impossible
+    # 100%+ gains/losses merely by adding more stocks to the same day.
     cohort_keys = [r.get("target_date") or r.get("data_cutoff_date") for r in ordered]
     unique_keys = list(dict.fromkeys(cohort_keys))
 

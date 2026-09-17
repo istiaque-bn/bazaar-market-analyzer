@@ -256,6 +256,19 @@ class AutomationToggleTests(TestCase):
             result = close_learn_settlement()
         self.assertEqual(result, {"ok": True, "skipped": "disabled"})
 
+    @mock.patch("market.tasks.train_next_close_model_task.delay")
+    @mock.patch("market.services.close_learn.run_close_learn_cycle")
+    @mock.patch("market.services.autosync.exclusive_db_write")
+    def test_close_learn_queues_training_after_settlement(self, mock_write, mock_cycle, mock_delay):
+        from market.tasks import close_learn_settlement
+
+        mock_cycle.return_value = {"settle": {"settled": 3}, "forecasts": {}}
+        result = close_learn_settlement()
+
+        mock_cycle.assert_called_once_with(as_of=mock.ANY, train=False)
+        mock_delay.assert_called_once_with()
+        self.assertTrue(result["training_queued"])
+
     @override_settings(ENABLE_DSE=True, ENABLE_CSE=False)
     def test_ml_training_excludes_cse_when_disabled(self):
         """market.services.ml_model.train_model already restricts panels

@@ -4,6 +4,7 @@ services:
   db:
     image: postgres:16
     restart: unless-stopped
+    mem_limit: 1536m
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-bazaar}
       POSTGRES_USER: ${POSTGRES_USER:-bazaar}
@@ -15,10 +16,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 20s
 
   redis:
     image: redis:7
     restart: unless-stopped
+    mem_limit: 512m
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     volumes:
       - redis_data:/data
@@ -27,10 +30,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 10s
 
   web:
     build: .
     restart: unless-stopped
+    mem_limit: 1536m
     environment: &django_env
       SERVICE_ROLE: web
       DJANGO_SETTINGS_MODULE: config.settings.production
@@ -51,8 +56,8 @@ services:
       DJANGO_LOG_LEVEL: INFO
       AUTO_ML_TRAINING: ${AUTO_ML_TRAINING:-True}
       AUTO_ML_TRAINING_TIME: ${AUTO_ML_TRAINING_TIME:-00:30}
-      # Keep ML training/evaluation operational while preventing an
-      # unpromoted model from affecting user-facing outputs.
+      # Keep model training/evaluation running, but do not let model outputs
+      # alter live recommendations until production reliability is repaired.
       ML_LIVE_SERVING_ENABLED: ${ML_LIVE_SERVING_ENABLED:-False}
       # DSE per-symbol history fetch concurrency (market/services/concurrent_fetch.py)
       # — benchmarked ~2x faster than sequential with zero completeness/error
@@ -95,6 +100,16 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl --fail --silent --show-error -H 'Host: stock-bazaar.online' -H 'X-Forwarded-Proto: https' http://127.0.0.1:8000/ >/dev/null",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
 
   # Two worker processes instead of one, for real resource isolation
   # (see README's "Queues, locking, and concurrency" — this is the split
@@ -108,11 +123,11 @@ services:
   celery-worker-light:
     build: .
     restart: unless-stopped
+    mem_limit: 1024m
     command:
       [
         "celery", "-A", "config", "worker", "--loglevel=info", "--hostname=light@%h",
         "-Q", "market-fast,market-analysis,notifications,celery",
-        "--max-tasks-per-child=100",
       ]
     environment:
       <<: *django_env
@@ -126,15 +141,25 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A config inspect ping --destination light@$$HOSTNAME --timeout 10 | grep -q pong",
+        ]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 45s
 
   celery-worker-heavy:
     build: .
     restart: unless-stopped
+    mem_limit: 3072m
     command:
       [
         "celery", "-A", "config", "worker", "--loglevel=info", "--hostname=heavy@%h",
         "-Q", "market-heavy",
-        "--max-tasks-per-child=10",
       ]
     environment:
       <<: *django_env
@@ -148,10 +173,21 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A config inspect ping --destination heavy@$$HOSTNAME --timeout 10 | grep -q pong",
+        ]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 45s
 
   celery-beat:
     build: .
     restart: unless-stopped
+    mem_limit: 512m
     # --schedule points at a volume-backed path so beat's own "have I
     # already fired this tick" state survives a container restart —
     # combined with docker-compose only ever running one celery-beat
@@ -175,10 +211,21 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "test -s /app/beat/celerybeat-schedule && kill -0 1",
+        ]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   cloudflared:
-    image: cloudflare/cloudflared:2026.7.3
+    image: cloudflare/cloudflared:latest
     restart: unless-stopped
+    mem_limit: 256m
     # Production uses a named tunnel with a stable hostname configured in
     # Cloudflare Zero Trust. The token is supplied only at runtime and the
     # required-variable expression makes a missing token fail immediately.
@@ -187,6 +234,12 @@ services:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?CLOUDFLARE_TUNNEL_TOKEN must be set in the Compose environment file}
     depends_on:
       - web
+    healthcheck:
+      test: ["CMD", "cloudflared", "--version"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
 volumes:
   postgres_data:

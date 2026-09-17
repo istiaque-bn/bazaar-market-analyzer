@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly Bazaar backup restoration test
+
+[Timer]
+OnCalendar=Sun *-*-* 03:30:00 Asia/Dhaka
+Persistent=true
+RandomizedDelaySec=10m
+Unit=bazaar-restore-test.service
+
+[Install]
+WantedBy=timers.target
