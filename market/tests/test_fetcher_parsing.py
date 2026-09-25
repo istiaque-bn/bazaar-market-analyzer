@@ -20,7 +20,7 @@ def _read(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
 
 
-def _resp(text=None, content=None, status_code=200, headers=None):
+def _resp(text=None, content=None, status_code=200, headers=None, json_data=None):
     resp = mock.Mock()
     resp.status_code = status_code
     if text is not None:
@@ -29,13 +29,42 @@ def _resp(text=None, content=None, status_code=200, headers=None):
         resp.content = content
     resp.headers = headers or {}
     resp.raise_for_status = mock.Mock()
+    if json_data is not None:
+        resp.json.return_value = json_data
     return resp
 
 
 class DseLiveScrapeParsingTests(SimpleTestCase):
+    def test_parses_current_live_api(self):
+        payload = {
+            "cols": [
+                "code", "ltp", "ycp", "open", "high", "low", "close",
+                "volume", "value", "trades", "percent", "category",
+                "board", "sector", "assetType",
+            ],
+            "rows": [
+                ["GP", 285.3, 283.0, 284.0, 288.0, 282.1, 285.3,
+                 53210, 15.2, 450, 0.8127, "A", "PUBLIC", "Telecom", "EQ"],
+            ],
+        }
+        with mock.patch(
+            "market.services.dse_fetcher._get",
+            return_value=_resp(json_data=payload),
+        ) as get:
+            df = dse_fetcher.fetch_dse_live_via_scrape()
+        get.assert_called_once_with(dse_fetcher.DSE_LIVE_API, timeout=30)
+        self.assertEqual(len(df), 1)
+        row = df.iloc[0]
+        self.assertEqual(row["trading_code"], "GP")
+        self.assertEqual(row["ltp"], 285.3)
+        self.assertEqual(row["change"], 0.8127)
+        self.assertEqual(row["volume"], 53210)
+
     def test_parses_representative_scroll_table(self):
         html = _read("dse_latest_sample.html")
-        with mock.patch("market.services.dse_fetcher._get", return_value=_resp(text=html)):
+        api_resp = _resp(json_data={"cols": [], "rows": []})
+        legacy_resp = _resp(text=html)
+        with mock.patch("market.services.dse_fetcher._get", side_effect=[api_resp, legacy_resp]):
             df = dse_fetcher.fetch_dse_live_via_scrape()
         self.assertIsNotNone(df)
         self.assertEqual(len(df), 3)
@@ -48,7 +77,9 @@ class DseLiveScrapeParsingTests(SimpleTestCase):
         self.assertEqual(gp["volume"], 53210)
 
     def test_no_table_found_returns_none(self):
-        with mock.patch("market.services.dse_fetcher._get", return_value=_resp(text="<html><body>no data</body></html>")):
+        api_resp = _resp(json_data={"cols": [], "rows": []})
+        legacy_resp = _resp(text="<html><body>no data</body></html>")
+        with mock.patch("market.services.dse_fetcher._get", side_effect=[api_resp, legacy_resp]):
             df = dse_fetcher.fetch_dse_live_via_scrape()
         self.assertIsNone(df)
 

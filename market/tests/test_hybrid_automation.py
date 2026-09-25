@@ -249,6 +249,20 @@ class AutomationToggleTests(TestCase):
             result = run_scheduled_append()
         self.assertEqual(result, {"ok": True, "skipped": "disabled"})
 
+    @mock.patch("market.tasks.run_full_analysis_task.delay")
+    @mock.patch("market.services.daily_append.append_today_bars_unlocked")
+    @mock.patch("market.services.daily_append.exclusive_db_write")
+    def test_daily_append_queues_analysis_without_inline_training(self, mock_write, mock_live, mock_delay):
+        from market.services.daily_append import run_scheduled_append
+
+        mock_live.return_value = {"ok": True, "count": 3}
+        mock_delay.return_value.id = "analysis-task-id"
+
+        result = run_scheduled_append()
+
+        mock_delay.assert_called_once_with(train_ml=False)
+        self.assertEqual(result["analysis"], {"queued": True, "task_id": "analysis-task-id"})
+
     def test_close_learn_disabled_flag_short_circuits_task(self):
         from market.tasks import close_learn_settlement
 

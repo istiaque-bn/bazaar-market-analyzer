@@ -155,6 +155,36 @@ class ModelVersionIsolationTests(TestCase):
         self.assertEqual(assessment["sample_count"], MIN_SAMPLES_WATCH)
         self.assertEqual(assessment["status"], ReliabilityAssessment.Status.CRITICAL)
 
+    def test_latest_experimental_version_uses_same_schema_history_when_none_is_active(self):
+        exchange = Exchange.DSE
+        _make_settled_snapshots(
+            exchange=exchange,
+            model_version_tag="prior-v",
+            family=PredictionSnapshot.ModelFamily.FORWARD_RETURN_RF,
+            n=MIN_SAMPLES_WATCH,
+            skill_positive=True,
+        )
+        latest = MLModelVersion.objects.create(
+            model_name="forward_return_rf",
+            version="candidate-v",
+            exchange_scope=exchange,
+            status="experimental",
+            is_active=False,
+            data_cutoff=date(2026, 6, 1),
+            train_rows=100,
+            feature_schema=FEATURE_COLS,
+        )
+
+        result = run_reliability_assessment(
+            families=[PredictionSnapshot.ModelFamily.FORWARD_RETURN_RF],
+            exchanges=[exchange],
+            windows=[MIN_SAMPLES_WATCH],
+        )
+
+        assessment = result["assessments"][0]
+        self.assertEqual(assessment["model_version_tag"], latest.version)
+        self.assertEqual(assessment["sample_count"], MIN_SAMPLES_WATCH)
+
 
 class ExchangeIsolationTests(TestCase):
     def test_dse_snapshots_do_not_leak_into_cse_assessment(self):

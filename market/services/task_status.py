@@ -45,6 +45,16 @@ def _status_for_result(result) -> str:
             return TaskStatus.SKIPPED
         if result.get("partial"):
             return TaskStatus.PARTIAL
+        # Fetch services report expected upstream failures as structured
+        # results instead of exceptions.  Treat both a top-level failure and
+        # an orchestration result containing one (for example
+        # append_daily_bars -> live -> ok=False) as a failed TaskRun.
+        if result.get("ok") is False and not result.get("skipped"):
+            return TaskStatus.FAILURE
+        for key in ("live", "dse", "cse", "analysis"):
+            child = result.get(key)
+            if isinstance(child, dict) and child.get("ok") is False and not child.get("skipped"):
+                return TaskStatus.FAILURE
     return TaskStatus.SUCCESS
 
 

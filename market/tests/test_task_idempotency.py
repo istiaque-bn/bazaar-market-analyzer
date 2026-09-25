@@ -157,6 +157,25 @@ class TaskStatusRecordingTests(TestCase):
         self.assertEqual(run.status, TaskStatus.FAILURE)
         self.assertIn("kaboom", run.error)
 
+    def test_structured_failure_records_failure_without_exception(self):
+        @record_task_run("test.structured_failure_task")
+        def failed_fetch():
+            return {"ok": False, "error": "upstream unavailable"}
+
+        failed_fetch()
+        run = TaskRun.objects.get(task_name="test.structured_failure_task")
+        self.assertEqual(run.status, TaskStatus.FAILURE)
+        self.assertEqual(run.detail["error"], "upstream unavailable")
+
+    def test_nested_live_failure_records_failure(self):
+        @record_task_run("test.nested_failure_task")
+        def failed_append():
+            return {"live": {"ok": False, "error": "no prices"}, "analysis": None}
+
+        failed_append()
+        run = TaskRun.objects.get(task_name="test.nested_failure_task")
+        self.assertEqual(run.status, TaskStatus.FAILURE)
+
     def test_each_call_creates_a_separate_run_row(self):
         @record_task_run("test.repeated_task")
         def noop():

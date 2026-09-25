@@ -29,6 +29,7 @@ from market.services.data_quality import (
 
 logger = logging.getLogger(__name__)
 
+DSE_LIVE_API = "https://dsebd.org/api/live/prices"
 DSE_LATEST = "https://www.dsebd.org/latest_share_price_scroll_l.php"
 DSE_HIST = "https://www.dsebd.org/day_end_archive.php"
 DSE_LATEST_PE = "https://www.dsebd.org/latest_PE.php"
@@ -115,7 +116,46 @@ def fetch_dse_live_via_bdshare() -> pd.DataFrame | None:
         return None
 
 
+def _parse_dse_live_api(payload: Any) -> pd.DataFrame | None:
+    """Convert DSE's compact ``cols``/``rows`` live response to our schema."""
+    if not isinstance(payload, dict):
+        return None
+    cols = payload.get("cols")
+    rows = payload.get("rows")
+    if not isinstance(cols, list) or not isinstance(rows, list) or not cols or not rows:
+        return None
+    if "code" not in cols:
+        return None
+    try:
+        raw = pd.DataFrame(rows, columns=cols)
+    except (TypeError, ValueError):
+        return None
+    rename = {
+        "code": "trading_code",
+        "percent": "change",
+    }
+    return raw.rename(columns=rename)
+
+
 def fetch_dse_live_via_scrape() -> pd.DataFrame | None:
+    """Fetch live DSE quotes from the current JSON API, then legacy HTML.
+
+    DSE replaced the old ``latest_share_price_scroll_l.php`` page with a
+    Next.js market site in September 2026.  Its public live endpoint is the
+    primary source; the HTML parser remains as a fallback for older mirrors.
+    """
+    try:
+        resp = _get(DSE_LIVE_API, timeout=30)
+        resp.raise_for_status()
+        try:
+            parsed = _parse_dse_live_api(resp.json())
+        except (TypeError, ValueError):
+            parsed = None
+        if parsed is not None:
+            return parsed
+    except Exception as exc:
+        logger.warning("DSE live API fetch failed: %s", exc)
+
     try:
         resp = _get(DSE_LATEST, timeout=30)
         resp.raise_for_status()
@@ -752,11 +792,13 @@ def sync_dse_live() -> dict:
         return {"ok": True, "skipped": "exchange_disabled", "source": None, "count": 0}
 
     batch = create_import_batch(DataSource.DSE_LIVE, exchange=Exchange.DSE)
-    df = fetch_dse_live_via_bdshare()
-    sub_source = "bdshare"
+    # Prefer DSE's current first-party JSON endpoint.  bdshare still targets
+    # the retired PHP URL, so it is now only a compatibility fallback.
+    df = fetch_dse_live_via_scrape()
+    sub_source = "dse_api"
     if df is None:
-        df = fetch_dse_live_via_scrape()
-        sub_source = "scrape"
+        df = fetch_dse_live_via_bdshare()
+        sub_source = "bdshare"
     if df is None:
         finish_import_batch(batch, error="No live DSE data available", notes=f"tried={sub_source}")
         return {"ok": False, "source": None, "count": 0, "error": "No live DSE data available"}

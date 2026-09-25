@@ -13,7 +13,6 @@ import logging
 
 from django.conf import settings
 from django.db import close_old_connections
-from django.utils import timezone
 
 from market.services.autosync import exclusive_db_write
 
@@ -27,20 +26,22 @@ def append_today_bars_unlocked() -> dict:
 
 
 def run_scheduled_append() -> dict:
-    """Append today's live bars, then refresh analysis."""
+    """Append today's live bars, then queue a separate analysis pass."""
     if not getattr(settings, "AUTO_DAILY_APPEND", True):
         return {"ok": True, "skipped": "disabled"}
     close_old_connections()
     try:
         with exclusive_db_write(blocking=True, timeout=300):
             live = append_today_bars_unlocked()
-            analyze_info = None
-            if live.get("ok") and getattr(settings, "AUTO_ANALYZE_AFTER_APPEND", True):
-                from market.services.analyzer import run_full_analysis
+        analysis_info = None
+        if live.get("ok") and getattr(settings, "AUTO_ANALYZE_AFTER_APPEND", True):
+            # Analysis across the full DSE universe can outlive this ingestion
+            # task's 10-minute limit. Give it its own 15-minute Celery task and
+            # durable TaskRun; model training remains on its separate 00:30 job.
+            from market.tasks import run_full_analysis_task
 
-                now = timezone.localtime()
-                train = now.hour >= 14
-                analyze_info = run_full_analysis(train_ml=train)
-            return {"live": live, "analysis": analyze_info}
+            queued = run_full_analysis_task.delay(train_ml=False)
+            analysis_info = {"queued": True, "task_id": str(queued.id)}
+        return {"live": live, "analysis": analysis_info}
     finally:
         close_old_connections()

@@ -376,9 +376,13 @@ def _attach_market_features(
     # that previously didn't exist at all.
     out["stock_sector_rel_1d"] = out["stock_ret_1d"].fillna(0.0) - out["sector_ret_1d"]
     out["sector_index_rel_1d"] = out["sector_ret_1d"] - out["index_ret_1d"]
-    # Market-wide trend regime: is the equal-weight index up over the
-    # trailing month? A simple, leak-safe bull/sideways-vs-down flag.
-    out["trend_regime"] = (out["index_ret_20d"] > 0).astype(float)
+    # Three-state, leak-safe market regime.  A small move around zero is
+    # neutral rather than being treated as a full bullish/bearish regime.
+    out["trend_regime"] = np.select(
+        [out["index_ret_20d"] < -0.02, out["index_ret_20d"] > 0.02],
+        [-1.0, 1.0],
+        default=0.0,
+    )
     return out
 
 

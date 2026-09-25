@@ -58,7 +58,26 @@ def _resolve_version_for_assessment(model_name: str, exchange: str, version_tag:
         from market.models import MLModelVersion
 
         return MLModelVersion.objects.filter(model_name=model_name, version=version_tag).first()
-    return _resolve_active_version(model_name, exchange)
+    active = _resolve_active_version(model_name, exchange)
+    if active is not None:
+        return active
+
+    # Candidates deliberately remain experimental until live reliability
+    # clears the activation gate.  Looking up only active versions creates a
+    # deadlock: there is no version to assess, so the report filters for a
+    # sentinel tag and always returns n=0, which means the candidate can
+    # never gather the evidence required for activation.  Associate the
+    # schema-level rolling assessment with the newest applicable candidate
+    # when no model is active.  Active inference has an explicit combined
+    # precedence, but inactive artifacts are not serving anything; choosing
+    # an old combined artifact here would hide a newer exchange candidate.
+    from market.models import MLModelVersion
+
+    return (
+        MLModelVersion.objects.filter(model_name=model_name, exchange_scope__in=("combined", exchange))
+        .order_by("-trained_at")
+        .first()
+    )
 
 
 def _row_dict(snap: PredictionSnapshot) -> dict:
